@@ -192,10 +192,13 @@ class LayoutEngineClass {
       // Use zoomExtents to show all data initially (this was working before)
       this.zoomExtents();
       
-      // Delayed zoomExtents to ensure rendering completes
+      // Delayed zoomExtents + jumpToLive to ensure rendering completes and show recent data
       setTimeout(() => {
         this.zoomExtents();
         console.log('[LayoutEngine] Delayed zoomExtents applied');
+        // Jump to live to show last 60 seconds where all series should have data
+        this.jumpToLive();
+        console.log('[LayoutEngine] Auto-jumped to live data');
       }, 500);
       
       // Third delayed check for full rendering
@@ -834,13 +837,50 @@ class LayoutEngineClass {
     }
   }
   
-  // Zoom extents on all panes - manually calculate from data
+  // Zoom extents on all panes - calculate unified X range then per-pane Y ranges
   zoomExtents(): void {
+    // PHASE 1: Calculate unified X range (intersection of all panes' data)
+    let globalMinX = -Infinity;  // We want the MAXIMUM of all minimums (intersection start)
+    let globalMaxX = Infinity;   // We want the MINIMUM of all maximums (intersection end)
+    let hasAnyData = false;
+    
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
       
-      // Calculate X and Y ranges from all data series
-      let minX = Infinity, maxX = -Infinity;
+      let paneMinX = Infinity, paneMaxX = -Infinity;
+      let paneHasData = false;
+      
+      for (const dataSeries of pane.dataSeries.values()) {
+        const count = dataSeries.count();
+        if (count === 0) continue;
+        paneHasData = true;
+        
+        const xRange = dataSeries.getXRange();
+        if (xRange.min < paneMinX) paneMinX = xRange.min;
+        if (xRange.max > paneMaxX) paneMaxX = xRange.max;
+      }
+      
+      if (paneHasData) {
+        hasAnyData = true;
+        // For intersection, take max of mins and min of maxs
+        if (paneMinX > globalMinX) globalMinX = paneMinX;
+        if (paneMaxX < globalMaxX) globalMaxX = paneMaxX;
+      }
+    }
+    
+    // If intersection is invalid (no overlap), fall back to union
+    if (globalMinX >= globalMaxX) {
+      console.log('[LayoutEngine] No X range intersection, using recent 60 seconds');
+      this.jumpToLive();
+      return;
+    }
+    
+    console.log(`[LayoutEngine] Unified X range: ${globalMinX.toFixed(0)} - ${globalMaxX.toFixed(0)}`);
+    
+    // PHASE 2: For each pane, calculate Y range within unified X range
+    for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
       let minY = Infinity, maxY = -Infinity;
       let hasData = false;
       
@@ -849,47 +889,50 @@ class LayoutEngineClass {
         if (count === 0) continue;
         hasData = true;
         
-        // Get X range
-        const xRange = dataSeries.getXRange();
-        if (xRange.min < minX) minX = xRange.min;
-        if (xRange.max > maxX) maxX = xRange.max;
-        
-        // Get Y range - handle OHLC vs XY differently
+        // Get Y range only for data within the unified X range
         if ('highValues' in dataSeries) {
-          // OHLC series - use high/low
+          // OHLC series
           const ohlc = dataSeries as OhlcDataSeries;
+          const xVals = ohlc.getNativeXValues();
           const hVals = ohlc.getNativeHighValues();
           const lVals = ohlc.getNativeLowValues();
           for (let i = 0; i < count; i++) {
-            const h = hVals.get(i);
-            const l = lVals.get(i);
-            if (l < minY) minY = l;
-            if (h > maxY) maxY = h;
+            const x = xVals.get(i);
+            if (x >= globalMinX && x <= globalMaxX) {
+              const h = hVals.get(i);
+              const l = lVals.get(i);
+              if (l < minY) minY = l;
+              if (h > maxY) maxY = h;
+            }
           }
         } else {
           // XY series
           const xy = dataSeries as XyDataSeries;
+          const xVals = xy.getNativeXValues();
           const yVals = xy.getNativeYValues();
           for (let i = 0; i < count; i++) {
-            const y = yVals.get(i);
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+            const x = xVals.get(i);
+            if (x >= globalMinX && x <= globalMaxX) {
+              const y = yVals.get(i);
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
           }
         }
       }
       
-      if (hasData && minX !== Infinity && minY !== Infinity) {
+      if (hasData && minY !== Infinity) {
         // Apply 5% padding to Y range
-        const yPadding = (maxY - minY) * 0.05;
+        const yPadding = Math.max((maxY - minY) * 0.05, 0.01);
         minY -= yPadding;
         maxY += yPadding;
         
-        // Set axis ranges
-        pane.xAxis.visibleRange = new NumberRange(minX, maxX);
+        // Set axis ranges - use unified X range for all
+        pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
         pane.yAxis.visibleRange = new NumberRange(minY, maxY);
         pane.yAxis.autoRange = EAutoRange.Always;
         
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${minX.toFixed(0)}-${maxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
       }
     }
   }
