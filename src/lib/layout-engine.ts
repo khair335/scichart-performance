@@ -189,26 +189,14 @@ class LayoutEngineClass {
         }
       }
       
-      // Force zoom extents on all panes to show all data
-      // Do it twice - once immediately and once after a delay to ensure rendering completes
-      this.zoomExtents();
+      // Jump to live data immediately - this ensures we see the latest data
+      // FIFO data series can have stale X range values with getXRange()
+      this.jumpToLive();
+      
+      // Delayed jump to live again to ensure data is fully populated
       setTimeout(() => {
-        this.zoomExtents();
-        // Also call native SciChart zoomExtents on each surface
-        for (const pane of this.state.panes.values()) {
-          if (!pane.isDeleted && pane.surface) {
-            pane.surface.zoomExtents();
-            
-            // Debug: Check if surface is actually rendering
-            const canvas = this.containerRefs.get(pane.id)?.querySelector('canvas');
-            const gl = canvas?.getContext('webgl2') || canvas?.getContext('webgl');
-            console.log(`[LayoutEngine] ${pane.id}: zoomExtents called, canvas=${!!canvas}, webgl=${!!gl}, series=${pane.surface.renderableSeries.size()}`);
-            
-            // Force Y-axis to recalculate its range
-            pane.yAxis.autoRange = EAutoRange.Always;
-          }
-        }
-        console.log('[LayoutEngine] Delayed zoomExtents applied');
+        this.jumpToLive();
+        console.log('[LayoutEngine] Delayed jumpToLive applied');
       }, 500);
       
       // Third delayed check for full rendering
@@ -915,7 +903,10 @@ class LayoutEngineClass {
       }
     }
     
-    if (maxTimeMs === 0) return;
+    if (maxTimeMs === 0) {
+      console.log('[LayoutEngine] jumpToLive: no data yet');
+      return;
+    }
     
     // Convert to seconds for DateTimeNumericAxis
     const maxTimeSec = maxTimeMs / 1000;
@@ -924,13 +915,75 @@ class LayoutEngineClass {
     const windowSec = 60; // 60 seconds
     const minTimeSec = maxTimeSec - windowSec;
     
+    console.log(`[LayoutEngine] jumpToLive: X range ${minTimeSec.toFixed(0)} to ${maxTimeSec.toFixed(0)}`);
+    
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
         pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
-        // Keep Y-axis in auto-range mode so it adjusts to visible data
-        pane.yAxis.autoRange = EAutoRange.Always;
+        
+        // Manually calculate Y range from data in visible X window
+        this.updateYAxisForVisibleRange(pane, minTimeSec, maxTimeSec);
+        
         pane.surface.invalidateElement();
       }
+    }
+  }
+  
+  // Calculate and set Y-axis range based on data within visible X window
+  private updateYAxisForVisibleRange(pane: PaneSurface, minX: number, maxX: number): void {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    
+    for (const dataSeries of pane.dataSeries.values()) {
+      const count = dataSeries.count();
+      if (count === 0) continue;
+      
+      // Get X range to check if any data is in visible window
+      const xRange = dataSeries.getXRange();
+      if (xRange.max < minX || xRange.min > maxX) continue;
+      
+      // Check if it's OHLC or XY series
+      if ('highValues' in dataSeries) {
+        const ohlc = dataSeries as OhlcDataSeries;
+        const xVals = ohlc.getNativeXValues();
+        const hVals = ohlc.getNativeHighValues();
+        const lVals = ohlc.getNativeLowValues();
+        for (let i = 0; i < count; i++) {
+          const x = xVals.get(i);
+          if (x >= minX && x <= maxX) {
+            const h = hVals.get(i);
+            const l = lVals.get(i);
+            if (l < minY) minY = l;
+            if (h > maxY) maxY = h;
+          }
+        }
+      } else {
+        const xy = dataSeries as XyDataSeries;
+        const xVals = xy.getNativeXValues();
+        const yVals = xy.getNativeYValues();
+        for (let i = 0; i < count; i++) {
+          const x = xVals.get(i);
+          if (x >= minX && x <= maxX) {
+            const y = yVals.get(i);
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+    }
+    
+    // Set Y range with 5% padding
+    if (minY < Infinity && maxY > -Infinity) {
+      const padding = (maxY - minY) * 0.05;
+      // Ensure we have some minimum range to avoid divide by zero
+      const effectivePadding = padding > 0 ? padding : Math.abs(maxY) * 0.05 || 1;
+      pane.yAxis.visibleRange = new NumberRange(minY - effectivePadding, maxY + effectivePadding);
+      pane.yAxis.autoRange = EAutoRange.Never; // Disable auto-range after setting manually
+      console.log(`[LayoutEngine] ${pane.id} Y range set: ${minY.toFixed(2)} to ${maxY.toFixed(2)}`);
+    } else {
+      // Fallback to auto-range
+      pane.yAxis.autoRange = EAutoRange.Always;
+      console.log(`[LayoutEngine] ${pane.id} Y range: no visible data, using autoRange`);
     }
   }
   
