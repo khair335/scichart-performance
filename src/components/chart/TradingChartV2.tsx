@@ -4,10 +4,11 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, RefreshCw, RotateCcw } from 'lucide-react';
+import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, RefreshCw, RotateCcw, Map as MapIcon, Command as CommandIcon } from 'lucide-react';
 import { HUD } from './HUD';
 import { SeriesBrowser } from './SeriesBrowser';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
+import { CommandPalette } from './CommandPalette';
 import { useIngestPipeline } from '@/hooks/useIngestPipeline';
 import { useLayoutManager } from '@/hooks/useLayoutManager';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
@@ -32,6 +33,8 @@ export function TradingChartV2({
   const [fps, setFps] = useState(0);
   const [dataClockMs, setDataClockMs] = useState(0);
   const [seriesBrowserOpen, setSeriesBrowserOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [minimapEnabled, setMinimapEnabled] = useState(false);
   const [visibleSeries, setVisibleSeries] = useState<Set<string>>(new Set());
   const [demoMode, setDemoMode] = useState(false);
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
@@ -157,40 +160,9 @@ export function TradingChartV2({
     return unsubscribe;
   }, []);
   
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      
-      switch (e.key.toLowerCase()) {
-        case 'j':
-          handleJumpToLive();
-          break;
-        case 'z':
-          handleZoomExtents();
-          break;
-        case 't':
-          handleToggleTheme();
-          break;
-        case 'f':
-          document.documentElement.requestFullscreen?.();
-          break;
-        case ' ':
-          e.preventDefault();
-          handleToggleLive();
-          break;
-      }
-      
-      // Ctrl/Cmd + K for command palette (future)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        // TODO: Open command palette
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+  // Toggle minimap
+  const handleToggleMinimap = useCallback(() => {
+    setMinimapEnabled(prev => !prev);
   }, []);
   
   // Use appropriate registry
@@ -256,6 +228,56 @@ export function TradingChartV2({
   const handleSelectNoneSeries = useCallback(() => {
     setVisibleSeries(new Set());
   }, []);
+
+  // Keyboard shortcuts (after handler definitions)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + K for command palette - check first before input check
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+      
+      // Ignore if typing in input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      switch (e.key.toLowerCase()) {
+        case 'j':
+          handleJumpToLive();
+          break;
+        case 'z':
+          handleZoomExtents();
+          break;
+        case 't':
+          handleToggleTheme();
+          break;
+        case 'm':
+          handleToggleMinimap();
+          break;
+        case 'f':
+          document.documentElement.requestFullscreen?.();
+          break;
+        case ' ':
+          e.preventDefault();
+          handleToggleLive();
+          break;
+        case 's':
+          setSeriesBrowserOpen(true);
+          break;
+        case 'l':
+          handleLoadLayout();
+          break;
+        case 'escape':
+          setCommandPaletteOpen(false);
+          setSeriesBrowserOpen(false);
+          break;
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleJumpToLive, handleZoomExtents, handleToggleTheme, handleToggleMinimap, handleToggleLive, handleLoadLayout]);
   
   const showConnectionOverlay = !isConnected && stage !== 'connecting' && !demoMode;
   const showConnectingOverlay = stage === 'connecting' && !demoMode;
@@ -356,6 +378,28 @@ export function TradingChartV2({
           title="Series Browser"
         >
           <List className="w-4 h-4" />
+        </Button>
+        
+        {/* Minimap Toggle */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleToggleMinimap}
+          className={cn('h-8 px-2', minimapEnabled && 'text-primary')}
+          title="Toggle Minimap (M)"
+        >
+          <MapIcon className="w-4 h-4" />
+        </Button>
+        
+        {/* Command Palette */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setCommandPaletteOpen(true)}
+          className="h-8 px-2"
+          title="Command Palette (Ctrl+K)"
+        >
+          <CommandIcon className="w-4 h-4" />
         </Button>
         
         {/* Theme Toggle */}
@@ -460,6 +504,22 @@ export function TradingChartV2({
         onToggleSeries={handleToggleSeries}
         onSelectAll={handleSelectAllSeries}
         onSelectNone={handleSelectNoneSeries}
+      />
+      
+      {/* Command Palette */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onJumpToLive={handleJumpToLive}
+        onToggleLive={handleToggleLive}
+        onZoomExtents={handleZoomExtents}
+        onToggleMinimap={handleToggleMinimap}
+        onToggleTheme={handleToggleTheme}
+        onLoadLayout={handleLoadLayout}
+        onOpenSeriesBrowser={() => setSeriesBrowserOpen(true)}
+        isLive={isLive}
+        minimapEnabled={minimapEnabled}
+        theme={theme}
       />
     </div>
   );
