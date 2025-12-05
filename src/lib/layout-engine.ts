@@ -166,7 +166,7 @@ class LayoutEngineClass {
             console.log(`[LayoutEngine] Final container size for ${pane.id}: ${rect.width}x${rect.height}`);
           }
           
-          // Force explicit invalidation of each surface
+          // Force explicit invalidation and render of each surface
           pane.surface.invalidateElement();
           
           // Log the renderable series count and data count for debugging
@@ -175,6 +175,10 @@ class LayoutEngineClass {
             const count = ds.count();
             console.log(`[LayoutEngine] DataSeries ${seriesId} has ${count} points`);
           });
+          
+          // Check Y axis visible range
+          const yRange = pane.yAxis.visibleRange;
+          console.log(`[LayoutEngine] Surface ${pane.id} Y axis range: ${yRange?.min} to ${yRange?.max}`);
         }
       }
       
@@ -187,11 +191,32 @@ class LayoutEngineClass {
         for (const pane of this.state.panes.values()) {
           if (!pane.isDeleted && pane.surface) {
             pane.surface.zoomExtents();
-            console.log(`[LayoutEngine] Called native zoomExtents on ${pane.id}`);
+            
+            // Debug: Check if surface is actually rendering
+            const canvas = this.containerRefs.get(pane.id)?.querySelector('canvas');
+            const gl = canvas?.getContext('webgl2') || canvas?.getContext('webgl');
+            console.log(`[LayoutEngine] ${pane.id}: zoomExtents called, canvas=${!!canvas}, webgl=${!!gl}, series=${pane.surface.renderableSeries.size()}`);
+            
+            // Force Y-axis to recalculate its range
+            pane.yAxis.autoRange = EAutoRange.Always;
           }
         }
         console.log('[LayoutEngine] Delayed zoomExtents applied');
       }, 500);
+      
+      // Third delayed check for full rendering
+      setTimeout(() => {
+        for (const pane of this.state.panes.values()) {
+          if (!pane.isDeleted && pane.surface) {
+            pane.dataSeries.forEach((ds, seriesId) => {
+              const count = ds.count();
+              const xRange = count > 0 ? ds.getXRange() : null;
+              const yRange = count > 0 && 'getYRange' in ds ? (ds as any).getYRange() : null;
+              console.log(`[LayoutEngine] FINAL CHECK ${seriesId}: ${count} pts, X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, Y=${yRange?.min?.toFixed(2)}-${yRange?.max?.toFixed(2)}`);
+            });
+          }
+        }
+      }, 1000);
       
       // Start drain loop
       this.startDrainLoop();
