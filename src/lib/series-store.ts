@@ -125,7 +125,8 @@ class SeriesStoreClass {
     
     // Circular buffer write
     const idx = buffer.head;
-    buffer.xValues[idx] = sample.t_ms;
+    // SciChart DateTimeNumericAxis expects Unix timestamp in SECONDS, not milliseconds
+    buffer.xValues[idx] = sample.t_ms / 1000;
     
     // Handle different payload types
     if (buffer.openValues && 'o' in payload) {
