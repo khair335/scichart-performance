@@ -25,12 +25,33 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
   const [paneStates, setPaneStates] = useState<Map<string, PaneState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [layoutErrors, setLayoutErrors] = useState<string[]>([]);
+  const layoutIdRef = useRef<string | null>(null);
+  const isMountedRef = useRef(true);
+  
+  // Track mount state
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Reset loading state on unmount
+      LayoutEngine.resetLoadingState();
+    };
+  }, []);
   
   // Initialize layout when it changes
   useEffect(() => {
     if (!layout) {
       // Dispose existing surfaces when layout is cleared
       LayoutEngine.disposeAllSurfaces();
+      layoutIdRef.current = null;
+      return;
+    }
+    
+    // Generate a unique ID for this layout load
+    const layoutId = `${layout.meta?.name || 'unnamed'}_${Date.now()}`;
+    
+    // Skip if same layout is already loading/loaded
+    if (layoutIdRef.current === layout.meta?.name) {
       return;
     }
     
@@ -44,11 +65,14 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
     
     setLayoutErrors([]);
     setIsLoading(true);
+    layoutIdRef.current = layout.meta?.name || layoutId;
     
     // Wait for containers to be rendered
     const initLayout = async () => {
       // Small delay to ensure DOM is ready
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      if (!isMountedRef.current) return;
       
       // Collect container refs
       const containers = new Map<string, HTMLDivElement>();
@@ -61,6 +85,8 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
       
       // Load layout into engine
       const success = await LayoutEngine.loadLayout(layout, containers);
+      
+      if (!isMountedRef.current) return;
       
       setIsLoading(false);
       
@@ -88,7 +114,7 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
     return () => {
       // Cleanup when layout changes
     };
-  }, [layout, onLayoutLoaded, onError]);
+  }, [layout?.meta?.name]); // Only re-run when layout name changes
   
   // Set container ref
   const setContainerRef = useCallback((paneId: string) => (el: HTMLDivElement | null) => {
@@ -208,19 +234,6 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-card/90 z-20">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
-        </div>
-      )}
-      
-      {/* Waiting for data overlay */}
-      {!isLoading && state && !state.hasData && seriesForPane.length > 0 && (
-        <div className="absolute inset-0 flex items-center justify-center bg-card/80 z-10">
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 border-muted-foreground/30 border-t-primary rounded-full animate-spin mx-auto mb-2" />
-            <p className="text-xs text-muted-foreground">Waiting for data...</p>
-            <p className="text-xs text-muted-foreground/60 mt-1">
-              {seriesForPane.map(s => s.series_id).join(', ')}
-            </p>
-          </div>
         </div>
       )}
       

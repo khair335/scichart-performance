@@ -2,7 +2,6 @@
 // This is the bridge between layout JSON and SciChart surfaces
 
 import type { PlotLayoutJSON, PaneConfig, SeriesConfig, HLineOverlay, VLineOverlay } from '@/types/layout';
-import type { SeriesStoreEntry } from './series-store';
 import { SeriesStore } from './series-store';
 import {
   SciChartSurface,
@@ -40,6 +39,7 @@ export interface PaneSurface {
   dataSeries: Map<string, XyDataSeries | OhlcDataSeries>;
   annotations: Map<string, HorizontalLineAnnotation | VerticalLineAnnotation>;
   config: PaneConfig;
+  isDeleted: boolean;
 }
 
 export interface LayoutEngineState {
@@ -50,6 +50,9 @@ export interface LayoutEngineState {
 }
 
 type LayoutChangeListener = (state: LayoutEngineState) => void;
+
+// Safe FIFO capacity - smaller to avoid WASM memory issues
+const SAFE_FIFO_CAPACITY = 10000;
 
 class LayoutEngineClass {
   private state: LayoutEngineState = {
@@ -63,6 +66,8 @@ class LayoutEngineClass {
   private containerRefs: Map<string, HTMLElement> = new Map();
   private drainLoopId: number | null = null;
   private lastDrainTime: number = 0;
+  private isLoading: boolean = false; // Lock to prevent double loads
+  private wasmInitialized: boolean = false;
   
   // Get current state
   getState(): LayoutEngineState {
@@ -76,6 +81,13 @@ class LayoutEngineClass {
   
   // Load a layout JSON
   async loadLayout(layout: PlotLayoutJSON, containersMap: Map<string, HTMLDivElement>): Promise<boolean> {
+    // Prevent double loads (React StrictMode)
+    if (this.isLoading) {
+      console.log('[LayoutEngine] Already loading, skipping...');
+      return false;
+    }
+    
+    this.isLoading = true;
     console.log('[LayoutEngine] Loading layout:', layout.meta?.name || 'unnamed');
     
     // Store container refs
@@ -89,11 +101,17 @@ class LayoutEngineClass {
     this.state.errors = [];
     
     try {
-      // Initialize SciChart
-      SciChartSurface.useWasmFromCDN();
-      DpiHelper.IsDpiScaleEnabled = false;
-      SciChartDefaults.useNativeText = true;
-      SciChartDefaults.useSharedCache = true;
+      // Initialize SciChart WASM only once
+      if (!this.wasmInitialized) {
+        SciChartSurface.useWasmFromCDN();
+        DpiHelper.IsDpiScaleEnabled = false;
+        SciChartDefaults.useNativeText = true;
+        SciChartDefaults.useSharedCache = true;
+        this.wasmInitialized = true;
+        
+        // Wait for WASM to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       
       // Create surfaces for each pane
       for (const paneConfig of layout.panes) {
@@ -125,6 +143,7 @@ class LayoutEngineClass {
       this.startDrainLoop();
       
       this.state.isInitialized = true;
+      this.isLoading = false;
       this.notifyListeners();
       
       console.log('[LayoutEngine] Layout loaded successfully');
@@ -133,6 +152,7 @@ class LayoutEngineClass {
       const error = e instanceof Error ? e.message : String(e);
       this.state.errors.push(error);
       console.error('[LayoutEngine] Failed to load layout:', e);
+      this.isLoading = false;
       this.notifyListeners();
       return false;
     }
@@ -192,6 +212,7 @@ class LayoutEngineClass {
       dataSeries: new Map(),
       annotations: new Map(),
       config,
+      isDeleted: false,
     };
     
     this.state.panes.set(config.id, paneSurface);
@@ -206,7 +227,6 @@ class LayoutEngineClass {
     }
     
     const { wasmContext, surface } = pane;
-    const capacity = SeriesStore.getStats().maxPoints / 10; // Use 10% of max as default capacity
     
     let dataSeries: XyDataSeries | OhlcDataSeries;
     let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
@@ -215,7 +235,7 @@ class LayoutEngineClass {
       case 'FastCandlestickRenderableSeries':
         dataSeries = new OhlcDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: 100000,
+          fifoCapacity: SAFE_FIFO_CAPACITY,
         });
         renderableSeries = new FastCandlestickRenderableSeries(wasmContext, {
           dataSeries: dataSeries as OhlcDataSeries,
@@ -229,7 +249,7 @@ class LayoutEngineClass {
       case 'FastMountainRenderableSeries':
         dataSeries = new XyDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: 100000,
+          fifoCapacity: SAFE_FIFO_CAPACITY,
         });
         renderableSeries = new FastMountainRenderableSeries(wasmContext, {
           dataSeries: dataSeries as XyDataSeries,
@@ -243,7 +263,7 @@ class LayoutEngineClass {
       default:
         dataSeries = new XyDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: 100000,
+          fifoCapacity: SAFE_FIFO_CAPACITY,
         });
         renderableSeries = new FastLineRenderableSeries(wasmContext, {
           dataSeries: dataSeries as XyDataSeries,
@@ -260,18 +280,24 @@ class LayoutEngineClass {
     // If data already exists in store, populate immediately
     const existingData = SeriesStore.getLinearizedData(config.series_id);
     if (existingData && existingData.x.length > 0) {
+      const dataToAppend = Math.min(existingData.x.length, SAFE_FIFO_CAPACITY - 100);
+      const startIdx = Math.max(0, existingData.x.length - dataToAppend);
+      
       if (config.type === 'FastCandlestickRenderableSeries' && existingData.o) {
         (dataSeries as OhlcDataSeries).appendRange(
-          existingData.x,
-          existingData.o,
-          existingData.h!,
-          existingData.l!,
-          existingData.c!
+          existingData.x.slice(startIdx),
+          existingData.o.slice(startIdx),
+          existingData.h!.slice(startIdx),
+          existingData.l!.slice(startIdx),
+          existingData.c!.slice(startIdx)
         );
       } else {
-        (dataSeries as XyDataSeries).appendRange(existingData.x, existingData.y);
+        (dataSeries as XyDataSeries).appendRange(
+          existingData.x.slice(startIdx),
+          existingData.y.slice(startIdx)
+        );
       }
-      console.log(`[LayoutEngine] Populated ${config.series_id} with ${existingData.x.length} existing points`);
+      console.log(`[LayoutEngine] Populated ${config.series_id} with ${dataToAppend} existing points`);
     }
     
     console.log(`[LayoutEngine] Bound series ${config.series_id} to pane ${config.pane}`);
@@ -374,6 +400,8 @@ class LayoutEngineClass {
   private drainSeries(seriesId: string): void {
     // Find which pane has this series
     for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
       const dataSeries = pane.dataSeries.get(seriesId);
       if (!dataSeries) continue;
       
@@ -386,10 +414,12 @@ class LayoutEngineClass {
       
       if (newCount <= currentCount) continue;
       
-      // Append only new data
+      // Append only new data (limited to avoid overflow)
       const startIdx = currentCount;
-      const appendCount = newCount - currentCount;
+      const maxAppend = SAFE_FIFO_CAPACITY - currentCount - 100;
+      if (maxAppend <= 0) continue;
       
+      const appendCount = Math.min(newCount - currentCount, maxAppend);
       if (appendCount <= 0) continue;
       
       try {
@@ -399,18 +429,18 @@ class LayoutEngineClass {
           // OHLC
           const ohlcDs = dataSeries as OhlcDataSeries;
           ohlcDs.appendRange(
-            data.x.slice(startIdx),
-            data.o.slice(startIdx),
-            data.h!.slice(startIdx),
-            data.l!.slice(startIdx),
-            data.c!.slice(startIdx)
+            data.x.slice(startIdx, startIdx + appendCount),
+            data.o.slice(startIdx, startIdx + appendCount),
+            data.h!.slice(startIdx, startIdx + appendCount),
+            data.l!.slice(startIdx, startIdx + appendCount),
+            data.c!.slice(startIdx, startIdx + appendCount)
           );
         } else {
           // XY
           const xyDs = dataSeries as XyDataSeries;
           xyDs.appendRange(
-            data.x.slice(startIdx),
-            data.y.slice(startIdx)
+            data.x.slice(startIdx, startIdx + appendCount),
+            data.y.slice(startIdx, startIdx + appendCount)
           );
         }
         
@@ -433,10 +463,13 @@ class LayoutEngineClass {
     this.stopDrainLoop();
     
     for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
       try {
+        pane.isDeleted = true;
         pane.surface.delete();
       } catch (e) {
-        console.warn(`[LayoutEngine] Error disposing pane ${pane.id}:`, e);
+        // Ignore - surface may already be deleted
       }
     }
     
@@ -474,7 +507,9 @@ class LayoutEngineClass {
   // Zoom extents on all panes
   zoomExtents(): void {
     for (const pane of this.state.panes.values()) {
-      pane.surface.zoomExtents();
+      if (!pane.isDeleted) {
+        pane.surface.zoomExtents();
+      }
     }
   }
   
@@ -496,8 +531,15 @@ class LayoutEngineClass {
     const minTime = Math.max(0, maxTime - windowMs);
     
     for (const pane of this.state.panes.values()) {
-      pane.xAxis.visibleRange = new NumberRange(minTime, maxTime);
+      if (!pane.isDeleted) {
+        pane.xAxis.visibleRange = new NumberRange(minTime, maxTime);
+      }
     }
+  }
+  
+  // Reset loading state (for cleanup)
+  resetLoadingState(): void {
+    this.isLoading = false;
   }
 }
 
