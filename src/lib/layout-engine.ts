@@ -904,7 +904,6 @@ class LayoutEngineClass {
     }
     
     if (maxTimeMs === 0) {
-      console.log('[LayoutEngine] jumpToLive: no data yet');
       return;
     }
     
@@ -914,8 +913,6 @@ class LayoutEngineClass {
     // Set visible range to show last 60 seconds of data (more responsive)
     const windowSec = 60; // 60 seconds
     const minTimeSec = maxTimeSec - windowSec;
-    
-    console.log(`[LayoutEngine] jumpToLive: X range ${minTimeSec.toFixed(0)} to ${maxTimeSec.toFixed(0)}`);
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
@@ -979,11 +976,9 @@ class LayoutEngineClass {
       const effectivePadding = padding > 0 ? padding : Math.abs(maxY) * 0.05 || 1;
       pane.yAxis.visibleRange = new NumberRange(minY - effectivePadding, maxY + effectivePadding);
       pane.yAxis.autoRange = EAutoRange.Never; // Disable auto-range after setting manually
-      console.log(`[LayoutEngine] ${pane.id} Y range set: ${minY.toFixed(2)} to ${maxY.toFixed(2)}`);
     } else {
       // Fallback to auto-range
       pane.yAxis.autoRange = EAutoRange.Always;
-      console.log(`[LayoutEngine] ${pane.id} Y range: no visible data, using autoRange`);
     }
   }
   
