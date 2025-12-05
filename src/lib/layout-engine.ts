@@ -154,6 +154,9 @@ class LayoutEngineClass {
       // Link X axes
       this.linkXAxes();
       
+      // Force zoom extents on all panes to show all data
+      this.zoomExtents();
+      
       // Start drain loop
       this.startDrainLoop();
       
@@ -612,23 +615,26 @@ class LayoutEngineClass {
   // Jump to live (scroll to latest data)
   jumpToLive(): void {
     const allEntries = SeriesStore.getAllEntries();
-    let maxTime = 0;
+    let maxTimeMs = 0;
     
     for (const entry of allEntries.values()) {
-      if (entry.metadata.lastMs > maxTime) {
-        maxTime = entry.metadata.lastMs;
+      if (entry.metadata.lastMs > maxTimeMs) {
+        maxTimeMs = entry.metadata.lastMs;
       }
     }
     
-    if (maxTime === 0) return;
+    if (maxTimeMs === 0) return;
+    
+    // Convert to seconds for DateTimeNumericAxis
+    const maxTimeSec = maxTimeMs / 1000;
     
     // Set visible range to show last 5 minutes of data
-    const windowMs = 5 * 60 * 1000;
-    const minTime = Math.max(0, maxTime - windowMs);
+    const windowSec = 5 * 60; // 5 minutes in seconds
+    const minTimeSec = maxTimeSec - windowSec;
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
-        pane.xAxis.visibleRange = new NumberRange(minTime, maxTime);
+        pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
       }
     }
   }
