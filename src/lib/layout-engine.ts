@@ -541,6 +541,23 @@ class LayoutEngineClass {
     console.log(`[LayoutEngine] Linked X axes across ${panes.length} panes`);
   }
   
+  // Live mode state for auto-scrolling
+  private liveMode: boolean = true;
+  private lastAutoScrollTime: number = 0;
+  
+  // Set live mode
+  setLiveMode(live: boolean): void {
+    this.liveMode = live;
+    console.log(`[LayoutEngine] Live mode: ${live}`);
+    if (live) {
+      this.jumpToLive();
+    }
+  }
+  
+  getLiveMode(): boolean {
+    return this.liveMode;
+  }
+  
   // Drain loop - transfers data from SeriesStore to chart DataSeries
   private startDrainLoop(): void {
     if (this.drainLoopId !== null) return;
@@ -555,9 +572,21 @@ class LayoutEngineClass {
       
       // Drain dirty series
       const dirtySeries = SeriesStore.getDirtySeries();
+      let dataAppended = false;
+      
       for (const seriesId of dirtySeries) {
-        this.drainSeries(seriesId);
+        const appended = this.drainSeries(seriesId);
+        if (appended) dataAppended = true;
         SeriesStore.markClean(seriesId);
+      }
+      
+      // Auto-scroll if in live mode and new data was appended
+      if (this.liveMode && dataAppended) {
+        const timeSinceLastScroll = now - this.lastAutoScrollTime;
+        if (timeSinceLastScroll > 100) { // Throttle to 10Hz
+          this.jumpToLive();
+          this.lastAutoScrollTime = now;
+        }
       }
       
       this.drainLoopId = requestAnimationFrame(drain);
@@ -567,9 +596,10 @@ class LayoutEngineClass {
     console.log('[LayoutEngine] Started drain loop');
   }
   
-  private drainSeries(seriesId: string): void {
+  private drainSeries(seriesId: string): boolean {
     // Find which pane has this series
     let foundInPane = false;
+    let dataAppended = false;
     
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
@@ -587,21 +617,10 @@ class LayoutEngineClass {
       const currentCount = dataSeries.count();
       const newCount = data.x.length;
       
-      // With FIFO mode, the chart auto-discards old data when full.
-      // We need to track what we've already sent, not what's in the chart.
-      // Since SeriesStore uses a circular buffer that overwrites old data,
-      // we should always try to append the latest data.
-      
-      // For simplicity: if store has more data than chart, append the difference
-      // But cap at what the chart can hold
-      
       if (newCount <= currentCount) continue;
       
       // Calculate how many new points to append
       const newDataCount = newCount - currentCount;
-      
-      // With FIFO, we can always append - the chart will discard old data
-      // But we should batch to avoid overwhelming the chart
       const maxBatchSize = Math.min(10000, CHART_FIFO_CAPACITY);
       const appendCount = Math.min(newDataCount, maxBatchSize);
       
@@ -633,11 +652,25 @@ class LayoutEngineClass {
         }
         
         pane.surface.resumeUpdates();
+        dataAppended = true;
       } catch (e) {
         console.error(`[LayoutEngine] Error draining ${seriesId}:`, e);
       }
     }
+    
+    // Log unmatched series (series in store but not in layout)
+    if (!foundInPane) {
+      // Only log once per series
+      if (!this._loggedUnmatchedSeries.has(seriesId)) {
+        this._loggedUnmatchedSeries.add(seriesId);
+        console.warn(`[LayoutEngine] Series ${seriesId} in store but NOT in layout - check series_id mismatch!`);
+      }
+    }
+    
+    return dataAppended;
   }
+  
+  private _loggedUnmatchedSeries: Set<string> = new Set();
   
   private stopDrainLoop(): void {
     if (this.drainLoopId !== null) {

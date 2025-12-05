@@ -192,12 +192,17 @@ export function TradingChartV2({
   
   // Live/Pause toggle
   const handleToggleLive = useCallback(() => {
-    setIsLive(prev => !prev);
+    setIsLive(prev => {
+      const next = !prev;
+      LayoutEngine.setLiveMode(next);
+      return next;
+    });
   }, []);
   
   // Jump to live
   const handleJumpToLive = useCallback(() => {
     setIsLive(true);
+    LayoutEngine.setLiveMode(true);
     LayoutEngine.jumpToLive();
   }, []);
   
