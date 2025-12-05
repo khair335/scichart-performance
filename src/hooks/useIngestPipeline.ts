@@ -1,9 +1,11 @@
 // useIngestPipeline - Connects WebSocket feed to SeriesStore
 // Implements the data pipeline: WS → Parse → Buffer → Drain
+// Now with reconnection support via useReconnectingWebSocket
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { WsFeedClient, MemoryStorage, FeedStatus, RegistryRow, Sample } from '@/lib/wsfeed-client';
 import { SeriesStore } from '@/lib/series-store';
+import { useReconnectingWebSocket } from './useReconnectingWebSocket';
 import type { UIConfig } from '@/types/layout';
 
 interface UseIngestPipelineOptions {
@@ -30,6 +32,11 @@ interface UseIngestPipelineReturn {
   connect: () => void;
   disconnect: () => void;
   status: FeedStatus | null;
+  reconnectState: {
+    retryCount: number;
+    nextRetryIn: number | null;
+    lastError: string | null;
+  };
 }
 
 export function useIngestPipeline(options: UseIngestPipelineOptions): UseIngestPipelineReturn {
@@ -149,6 +156,57 @@ export function useIngestPipeline(options: UseIngestPipelineOptions): UseIngestP
     onRegistryChange?.(rows);
   }, [onRegistryChange]);
   
+  // Use reconnecting WebSocket for connection management
+  const {
+    isConnected: wsConnected,
+    isConnecting,
+    retryCount,
+    nextRetryIn,
+    lastError,
+    connect: wsConnect,
+    disconnect: wsDisconnect,
+  } = useReconnectingWebSocket({
+    url: wsUrl,
+    autoConnect: false, // We manage connection manually
+    maxRetries: 10,
+    initialDelay: 1000,
+    maxDelay: 30000,
+    backoffMultiplier: 2,
+    onOpen: (ws) => {
+      console.log('[IngestPipeline] WebSocket connected via reconnect hook');
+      // Create the feed client using the established connection
+      if (clientRef.current) {
+        clientRef.current.close();
+      }
+      
+      const client = new WsFeedClient({
+        url: wsUrl,
+        storage: new MemoryStorage(),
+        onSamples: handleSamples,
+        onStatus: handleStatus,
+        onRegistry: handleRegistry,
+        onEvent: (evt) => {
+          if (evt.type === 'error') {
+            console.error('[IngestPipeline] WebSocket error:', evt);
+          }
+        },
+      });
+      
+      clientRef.current = client;
+      client.connect();
+      startDrainLoop();
+    },
+    onClose: (event) => {
+      console.log('[IngestPipeline] WebSocket closed:', event.code, event.reason);
+      if (!event.wasClean) {
+        setStage('reconnecting');
+      }
+    },
+    onError: () => {
+      setStage('error');
+    },
+  });
+  
   // Connect to WebSocket
   const connect = useCallback(() => {
     if (clientRef.current) {
@@ -177,12 +235,13 @@ export function useIngestPipeline(options: UseIngestPipelineOptions): UseIngestP
   
   // Disconnect
   const disconnect = useCallback(() => {
+    wsDisconnect();
     clientRef.current?.close();
     clientRef.current = null;
     stopDrainLoop();
     setStage('idle');
     console.log('[IngestPipeline] Disconnected');
-  }, [stopDrainLoop]);
+  }, [stopDrainLoop, wsDisconnect]);
   
   // Auto-connect on mount
   useEffect(() => {
@@ -205,5 +264,10 @@ export function useIngestPipeline(options: UseIngestPipelineOptions): UseIngestP
     connect,
     disconnect,
     status,
+    reconnectState: {
+      retryCount,
+      nextRetryIn,
+      lastError,
+    },
   };
 }

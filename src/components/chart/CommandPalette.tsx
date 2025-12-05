@@ -18,7 +18,14 @@ import {
   Moon,
   FileJson,
   Layers,
+  Eye,
+  EyeOff,
+  MoveHorizontal,
+  MoveVertical,
+  Square,
+  Maximize,
 } from 'lucide-react';
+import type { ZoomMode } from '@/types/zoom';
 
 interface Command {
   id: string;
@@ -27,6 +34,7 @@ interface Command {
   icon: React.ReactNode;
   action: () => void;
   keywords: string[];
+  shortcut?: string;
 }
 
 interface CommandPaletteProps {
@@ -39,9 +47,13 @@ interface CommandPaletteProps {
   onToggleTheme: () => void;
   onLoadLayout: () => void;
   onOpenSeriesBrowser: () => void;
+  onToggleHud?: () => void;
+  onSetZoomMode?: (mode: ZoomMode) => void;
   isLive: boolean;
   minimapEnabled: boolean;
+  hudVisible?: boolean;
   theme: 'dark' | 'light';
+  zoomMode?: ZoomMode;
 }
 
 export function CommandPalette({
@@ -54,9 +66,13 @@ export function CommandPalette({
   onToggleTheme,
   onLoadLayout,
   onOpenSeriesBrowser,
+  onToggleHud,
+  onSetZoomMode,
   isLive,
   minimapEnabled,
+  hudVisible = true,
   theme,
+  zoomMode = 'xy',
 }: CommandPaletteProps) {
   const [search, setSearch] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -72,6 +88,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['jump', 'live', 'latest', 'now'],
+      shortcut: 'J',
     },
     {
       id: 'toggle-live',
@@ -83,6 +100,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['pause', 'play', 'resume', 'live', 'stop'],
+      shortcut: 'Space',
     },
     {
       id: 'zoom-extents',
@@ -94,6 +112,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['fit', 'zoom', 'extents', 'all', 'view'],
+      shortcut: 'Z',
     },
     {
       id: 'toggle-minimap',
@@ -105,6 +124,19 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['minimap', 'overview', 'navigator'],
+      shortcut: 'M',
+    },
+    {
+      id: 'toggle-hud',
+      label: hudVisible ? 'Hide HUD' : 'Show HUD',
+      description: hudVisible ? 'Hide the heads-up display' : 'Show the heads-up display',
+      icon: hudVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />,
+      action: () => {
+        onToggleHud?.();
+        onOpenChange(false);
+      },
+      keywords: ['hud', 'status', 'display', 'hide', 'show'],
+      shortcut: 'H',
     },
     {
       id: 'toggle-theme',
@@ -116,6 +148,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['theme', 'dark', 'light', 'mode', 'appearance'],
+      shortcut: 'T',
     },
     {
       id: 'load-layout',
@@ -127,6 +160,7 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['layout', 'load', 'json', 'config', 'file'],
+      shortcut: 'L',
     },
     {
       id: 'open-series',
@@ -138,6 +172,70 @@ export function CommandPalette({
         onOpenChange(false);
       },
       keywords: ['series', 'browse', 'discover', 'list'],
+      shortcut: 'S',
+    },
+    {
+      id: 'fullscreen',
+      label: 'Toggle Fullscreen',
+      description: 'Enter or exit fullscreen mode',
+      icon: <Maximize className="w-4 h-4" />,
+      action: () => {
+        document.fullscreenElement
+          ? document.exitFullscreen()
+          : document.documentElement.requestFullscreen();
+        onOpenChange(false);
+      },
+      keywords: ['fullscreen', 'maximize', 'expand'],
+      shortcut: 'F',
+    },
+    // Zoom mode commands
+    {
+      id: 'zoom-xy',
+      label: 'XY Zoom Mode',
+      description: 'Zoom both axes with rubber band',
+      icon: <Maximize2 className="w-4 h-4" />,
+      action: () => {
+        onSetZoomMode?.('xy');
+        onOpenChange(false);
+      },
+      keywords: ['zoom', 'xy', 'both', 'rubber'],
+      shortcut: '1',
+    },
+    {
+      id: 'zoom-x',
+      label: 'X-Only Zoom Mode',
+      description: 'Zoom only horizontal axis',
+      icon: <MoveHorizontal className="w-4 h-4" />,
+      action: () => {
+        onSetZoomMode?.('x');
+        onOpenChange(false);
+      },
+      keywords: ['zoom', 'x', 'horizontal'],
+      shortcut: 'X',
+    },
+    {
+      id: 'zoom-y',
+      label: 'Y-Only Zoom Mode',
+      description: 'Zoom only vertical axis',
+      icon: <MoveVertical className="w-4 h-4" />,
+      action: () => {
+        onSetZoomMode?.('y');
+        onOpenChange(false);
+      },
+      keywords: ['zoom', 'y', 'vertical'],
+      shortcut: 'Y',
+    },
+    {
+      id: 'zoom-box',
+      label: 'Box Zoom Mode',
+      description: 'Zoom to exact selection area',
+      icon: <Square className="w-4 h-4" />,
+      action: () => {
+        onSetZoomMode?.('box');
+        onOpenChange(false);
+      },
+      keywords: ['zoom', 'box', 'selection', 'area'],
+      shortcut: 'B',
     },
   ];
 
@@ -223,6 +321,11 @@ export function CommandPalette({
                       {cmd.description}
                     </div>
                   </div>
+                  {cmd.shortcut && (
+                    <kbd className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground text-xs font-mono">
+                      {cmd.shortcut}
+                    </kbd>
+                  )}
                 </button>
               ))
             )}
@@ -243,4 +346,3 @@ export function CommandPalette({
     </Dialog>
   );
 }
-

@@ -1,10 +1,20 @@
+import { useState } from 'react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type { RegistryRow } from '@/lib/wsfeed-client';
 import { cn } from '@/lib/utils';
 import { getDisplayType, parseSeriesType } from '@/lib/series-namespace';
-import { Activity, BarChart3, TrendingUp, Target, DollarSign } from 'lucide-react';
+import { Activity, BarChart3, TrendingUp, Target, DollarSign, MoveRight } from 'lucide-react';
+import { LayoutEngine } from '@/lib/layout-engine';
 
 interface SeriesBrowserProps {
   open: boolean;
@@ -58,6 +68,13 @@ export function SeriesBrowser({
   onSelectAll,
   onSelectNone,
 }: SeriesBrowserProps) {
+  const [moveSeriesId, setMoveSeriesId] = useState<string | null>(null);
+  const [moveToPaneId, setMoveToPaneId] = useState<string>('');
+  
+  // Get available panes from LayoutEngine
+  const state = LayoutEngine.getState();
+  const availablePanes = Array.from(state.panes.keys());
+  
   // Group series by type using namespace-based detection
   const grouped = registry.reduce((acc, row) => {
     const type = getDisplayType(row.id);
@@ -67,6 +84,26 @@ export function SeriesBrowser({
   }, {} as Record<string, RegistryRow[]>);
 
   const typeOrder = ['Tick', 'Indicator', 'OHLC', 'Signal', 'Marker', 'PnL', 'Other'];
+
+  // Handle move series to different pane
+  const handleMoveSeries = (seriesId: string, targetPaneId: string) => {
+    if (!targetPaneId) return;
+    
+    const success = LayoutEngine.moveSeriesToPane(seriesId, targetPaneId);
+    if (success) {
+      console.log(`[SeriesBrowser] Moved ${seriesId} to pane ${targetPaneId}`);
+      setMoveSeriesId(null);
+      setMoveToPaneId('');
+    } else {
+      console.error(`[SeriesBrowser] Failed to move ${seriesId} to pane ${targetPaneId}`);
+    }
+  };
+
+  // Get current pane for a series
+  const getCurrentPane = (seriesId: string): string | null => {
+    const pane = LayoutEngine.getPaneForSeries(seriesId);
+    return pane?.id ?? null;
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -103,30 +140,84 @@ export function SeriesBrowser({
                     {type} ({items.length})
                   </h4>
                   <div className="space-y-1">
-                    {items.sort((a, b) => a.id.localeCompare(b.id)).map(row => (
-                      <div
-                        key={row.id}
-                        className={cn(
-                          'flex items-center gap-2 p-2 rounded-md transition-colors',
-                          'hover:bg-sidebar-accent'
-                        )}
-                      >
-                        {getSeriesIcon(row.id)}
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-sidebar-foreground truncate">
-                            {row.id.split(':').pop()}
+                    {items.sort((a, b) => a.id.localeCompare(b.id)).map(row => {
+                      const currentPane = getCurrentPane(row.id);
+                      const isMoving = moveSeriesId === row.id;
+                      
+                      return (
+                        <div
+                          key={row.id}
+                          className={cn(
+                            'flex flex-col gap-2 p-2 rounded-md transition-colors',
+                            'hover:bg-sidebar-accent',
+                            isMoving && 'bg-sidebar-accent'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            {getSeriesIcon(row.id)}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-sidebar-foreground truncate">
+                                {row.id.split(':').pop()}
+                              </div>
+                              <div className="text-xs text-muted-foreground mono-data">
+                                {formatCount(row.count)} pts • {formatTime(row.lastMs)}
+                                {currentPane && <span className="ml-1 text-primary/70">• {currentPane}</span>}
+                              </div>
+                            </div>
+                            
+                            {/* Move button */}
+                            {availablePanes.length > 1 && currentPane && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={() => setMoveSeriesId(isMoving ? null : row.id)}
+                                title="Move to another pane"
+                              >
+                                <MoveRight className="w-3 h-3" />
+                              </Button>
+                            )}
+                            
+                            <Switch
+                              checked={visibleSeries.has(row.id)}
+                              onCheckedChange={() => onToggleSeries(row.id)}
+                              className="data-[state=checked]:bg-primary"
+                            />
                           </div>
-                          <div className="text-xs text-muted-foreground mono-data">
-                            {formatCount(row.count)} pts • {formatTime(row.lastMs)}
-                          </div>
+                          
+                          {/* Move pane selector */}
+                          {isMoving && (
+                            <div className="flex items-center gap-2 pl-6">
+                              <Select
+                                value={moveToPaneId}
+                                onValueChange={setMoveToPaneId}
+                              >
+                                <SelectTrigger className="h-7 text-xs flex-1">
+                                  <SelectValue placeholder="Select pane..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {availablePanes
+                                    .filter(id => id !== currentPane)
+                                    .map(paneId => (
+                                      <SelectItem key={paneId} value={paneId}>
+                                        {paneId}
+                                      </SelectItem>
+                                    ))}
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs"
+                                disabled={!moveToPaneId}
+                                onClick={() => handleMoveSeries(row.id, moveToPaneId)}
+                              >
+                                Move
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        <Switch
-                          checked={visibleSeries.has(row.id)}
-                          onCheckedChange={() => onToggleSeries(row.id)}
-                          className="data-[state=checked]:bg-primary"
-                        />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );

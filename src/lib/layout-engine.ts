@@ -504,6 +504,50 @@ class LayoutEngineClass {
     return null;
   }
   
+  // Move a series from one pane to another
+  moveSeriesToPane(seriesId: string, targetPaneId: string): boolean {
+    const sourcePane = this.getPaneForSeries(seriesId);
+    const targetPane = this.state.panes.get(targetPaneId);
+    
+    if (!sourcePane || !targetPane) {
+      console.error(`[LayoutEngine] Cannot move series: source or target pane not found`);
+      return false;
+    }
+    
+    if (sourcePane.id === targetPaneId) {
+      console.warn(`[LayoutEngine] Series ${seriesId} already in pane ${targetPaneId}`);
+      return false;
+    }
+    
+    try {
+      // Get the data series and renderable series from source
+      const dataSeries = sourcePane.dataSeries.get(seriesId);
+      const renderableSeries = sourcePane.renderableSeries.get(seriesId);
+      
+      if (!dataSeries || !renderableSeries) {
+        console.error(`[LayoutEngine] Series ${seriesId} not found in source pane`);
+        return false;
+      }
+      
+      // Remove from source pane
+      sourcePane.surface.renderableSeries.remove(renderableSeries);
+      sourcePane.dataSeries.delete(seriesId);
+      sourcePane.renderableSeries.delete(seriesId);
+      
+      // Add to target pane
+      targetPane.surface.renderableSeries.add(renderableSeries);
+      targetPane.dataSeries.set(seriesId, dataSeries);
+      targetPane.renderableSeries.set(seriesId, renderableSeries);
+      
+      console.log(`[LayoutEngine] Moved series ${seriesId} from ${sourcePane.id} to ${targetPaneId}`);
+      this.notifyListeners();
+      return true;
+    } catch (e) {
+      console.error(`[LayoutEngine] Error moving series:`, e);
+      return false;
+    }
+  }
+  
   // Subscribe to state changes
   subscribe(listener: LayoutChangeListener): () => void {
     this.listeners.add(listener);

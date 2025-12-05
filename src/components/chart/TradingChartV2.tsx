@@ -44,6 +44,7 @@ export function TradingChartV2({
   const [demoMode, setDemoMode] = useState(false);
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
   const [tickCount, setTickCount] = useState(0);
+  const [hudVisible, setHudVisible] = useState(true);
   
   // Tab visibility throttling
   const { isVisible, wasHidden } = useVisibilityThrottle({
@@ -272,6 +273,9 @@ export function TradingChartV2({
         case 'm':
           handleToggleMinimap();
           break;
+        case 'h':
+          setHudVisible(prev => !prev);
+          break;
         case 'f':
           document.documentElement.requestFullscreen?.();
           break;
@@ -289,7 +293,16 @@ export function TradingChartV2({
           setCommandPaletteOpen(false);
           setSeriesBrowserOpen(false);
           break;
-        // Zoom modes: 1-4
+        // Zoom modes: B, X, Y for zoom directions + 1-4 as backup
+        case 'b':
+          handleSetZoomMode('box');
+          break;
+        case 'x':
+          handleSetZoomMode('x');
+          break;
+        case 'y':
+          handleSetZoomMode('y');
+          break;
         case '1':
           handleSetZoomMode('xy');
           break;
@@ -496,20 +509,22 @@ export function TradingChartV2({
       </div>
       
       {/* HUD */}
-      <HUD
-        stage={currentStage}
-        rate={currentRate}
-        fps={fps}
-        heartbeatLag={status?.heartbeatLagMs ?? null}
-        dataClockMs={dataClockMs}
-        isLive={isLive}
-        historyProgress={status?.history?.pct ?? 100}
-        tickCount={currentPoints}
-        cpuUsage={0}
-        memoryUsage={0}
-        gpuDrawCalls={0}
-        className="shrink-0 border-b border-border"
-      />
+      {hudVisible && (
+        <HUD
+          stage={currentStage}
+          rate={currentRate}
+          fps={fps}
+          heartbeatLag={status?.heartbeatLagMs ?? null}
+          dataClockMs={dataClockMs}
+          isLive={isLive}
+          historyProgress={status?.history?.pct ?? 100}
+          tickCount={currentPoints}
+          cpuUsage={0}
+          memoryUsage={0}
+          gpuDrawCalls={0}
+          className="shrink-0 border-b border-border"
+        />
+      )}
       
       {/* Main Chart Area */}
       <div className="flex-1 min-h-0 relative">
@@ -593,9 +608,13 @@ export function TradingChartV2({
         onToggleTheme={handleToggleTheme}
         onLoadLayout={handleLoadLayout}
         onOpenSeriesBrowser={() => setSeriesBrowserOpen(true)}
+        onToggleHud={() => setHudVisible(prev => !prev)}
+        onSetZoomMode={handleSetZoomMode}
         isLive={isLive}
         minimapEnabled={minimapEnabled}
+        hudVisible={hudVisible}
         theme={theme}
+        zoomMode={zoomMode}
       />
     </div>
   );
