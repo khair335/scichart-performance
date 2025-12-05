@@ -264,8 +264,9 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
       style={{
         gridRow: `${pane.row + 1} / span ${pane.height || 1}`,
         gridColumn: `${pane.col + 1} / span ${pane.width || 1}`,
+        position: 'relative',
       }}
-      className="relative bg-card overflow-hidden flex flex-col"
+      className="bg-card flex flex-col"
     >
       {/* Pane title */}
       {pane.title && (
@@ -277,8 +278,12 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
       {/* Chart container - takes all available space */}
       <div 
         ref={setRef}
-        className="flex-1 w-full relative z-0"
-        style={{ minHeight: '100px' }}
+        style={{ 
+          flex: 1,
+          width: '100%',
+          minHeight: '100px',
+          position: 'relative',
+        }}
         data-pane-id={pane.id}
       />
       

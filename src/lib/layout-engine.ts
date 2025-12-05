@@ -336,6 +336,9 @@ class LayoutEngineClass {
     pane.dataSeries.set(config.series_id, dataSeries);
     pane.renderableSeries.set(config.series_id, renderableSeries);
     
+    // Debug: verify series was added
+    console.log(`[LayoutEngine] Surface ${config.pane} now has ${surface.renderableSeries.size()} renderable series`);
+    
     // If data already exists in store, populate immediately
     const existingData = SeriesStore.getLinearizedData(config.series_id);
     if (existingData && existingData.x.length > 0) {
