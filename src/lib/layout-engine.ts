@@ -130,15 +130,22 @@ class LayoutEngineClass {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       
-      // Create surfaces for each pane
-      for (const paneConfig of layout.panes) {
+      // Create surfaces for each pane - with delays to avoid WebGL context race conditions
+      for (let i = 0; i < layout.panes.length; i++) {
+        const paneConfig = layout.panes[i];
         const container = containersMap.get(paneConfig.id);
         if (!container) {
           this.state.errors.push(`Container not found for pane: ${paneConfig.id}`);
           continue;
         }
         
+        console.log(`[LayoutEngine] Creating surface ${i + 1}/${layout.panes.length}: ${paneConfig.id}`);
         await this.createPaneSurface(paneConfig, container);
+        
+        // Add delay between surface creations to avoid WebGL context issues
+        if (i < layout.panes.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       }
       
       // Bind series to panes
@@ -266,6 +273,20 @@ class LayoutEngineClass {
       // Debug: Verify surface was created with canvas
       const canvas = container.querySelector('canvas');
       console.log(`[LayoutEngine] Surface ${config.id} created, canvas present: ${!!canvas}, canvas size: ${canvas?.width}x${canvas?.height}`);
+      
+      // Add WebGL context lost listener
+      if (canvas) {
+        canvas.addEventListener('webglcontextlost', (e) => {
+          console.error(`[LayoutEngine] WebGL context LOST for ${config.id}!`, e);
+        });
+        canvas.addEventListener('webglcontextrestored', (e) => {
+          console.log(`[LayoutEngine] WebGL context restored for ${config.id}`, e);
+        });
+        
+        // Check if WebGL context is valid
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        console.log(`[LayoutEngine] Surface ${config.id} WebGL context: ${gl ? 'valid' : 'NULL'}`);
+      }
       
       // Create X axis (DateTime)
       const xAxis = new DateTimeNumericAxis(wasmContext, {
