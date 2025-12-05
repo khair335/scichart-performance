@@ -306,19 +306,19 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime)
+      // Create X axis (DateTime) - use Once to auto-range initially, we'll set ranges manually later
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
-        autoRange: EAutoRange.Always,
+        autoRange: EAutoRange.Once,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
       });
       
-      // Create Y axis
+      // Create Y axis - use Once to auto-range initially, we'll set ranges manually later
       const yAxis = new NumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Right,
-        autoRange: EAutoRange.Always,
+        autoRange: EAutoRange.Once,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
@@ -927,12 +927,23 @@ class LayoutEngineClass {
         minY -= yPadding;
         maxY += yPadding;
         
+        // IMPORTANT: Set autoRange to Never BEFORE setting manual ranges
+        // EAutoRange.Always would override our manual range settings
+        pane.xAxis.autoRange = EAutoRange.Never;
+        pane.yAxis.autoRange = EAutoRange.Never;
+        
         // Set axis ranges - use unified X range for all
         pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
         pane.yAxis.visibleRange = new NumberRange(minY, maxY);
-        pane.yAxis.autoRange = EAutoRange.Always;
         
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+        // Force redraw
+        pane.surface.invalidateElement();
+        
+        // VERIFY: Read back the actual values to confirm they were set
+        const actualXRange = pane.xAxis.visibleRange;
+        const actualYRange = pane.yAxis.visibleRange;
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: SET X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: ACTUAL X=${actualXRange.min.toFixed(0)}-${actualXRange.max.toFixed(0)}, Y=${actualYRange.min.toFixed(2)}-${actualYRange.max.toFixed(2)}`);
       }
     }
   }
@@ -961,9 +972,15 @@ class LayoutEngineClass {
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
+        // IMPORTANT: Set autoRange to Never BEFORE setting manual ranges
+        pane.xAxis.autoRange = EAutoRange.Never;
         pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
-        // Use SciChart's native autoRange for Y-axis (efficient)
-        pane.yAxis.autoRange = EAutoRange.Always;
+        
+        // Calculate Y range for visible X window
+        this.updateYAxisForVisibleRange(pane, minTimeSec, maxTimeSec);
+        
+        // Force redraw
+        pane.surface.invalidateElement();
         
         // Debug: Log one-time info per pane - check for X range mismatch
         if (!this._debuggedPanes.has(pane.id)) {
