@@ -2,6 +2,8 @@
 // This is the bridge between layout JSON and SciChart surfaces
 
 import type { PlotLayoutJSON, PaneConfig, SeriesConfig, HLineOverlay, VLineOverlay } from '@/types/layout';
+import type { StrategyMarker, MarkerStyle } from '@/types/markers';
+import { DEFAULT_MARKER_STYLES } from '@/types/markers';
 import { SeriesStore } from './series-store';
 import {
   SciChartSurface,
@@ -27,6 +29,10 @@ import {
   ELabelPlacement,
   DpiHelper,
   SciChartDefaults,
+  CustomAnnotation,
+  ECoordinateMode,
+  EHorizontalAnchorPoint,
+  EVerticalAnchorPoint,
 } from 'scichart';
 
 export interface PaneSurface {
@@ -37,7 +43,8 @@ export interface PaneSurface {
   yAxis: NumericAxis;
   renderableSeries: Map<string, FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries>;
   dataSeries: Map<string, XyDataSeries | OhlcDataSeries>;
-  annotations: Map<string, HorizontalLineAnnotation | VerticalLineAnnotation>;
+  annotations: Map<string, HorizontalLineAnnotation | VerticalLineAnnotation | CustomAnnotation>;
+  markers: Map<string, CustomAnnotation>;
   config: PaneConfig;
   isDeleted: boolean;
 }
@@ -47,6 +54,7 @@ export interface LayoutEngineState {
   panes: Map<string, PaneSurface>;
   isInitialized: boolean;
   errors: string[];
+  markers: StrategyMarker[];
 }
 
 type LayoutChangeListener = (state: LayoutEngineState) => void;
@@ -61,7 +69,10 @@ class LayoutEngineClass {
     panes: new Map(),
     isInitialized: false,
     errors: [],
+    markers: [],
   };
+  
+  private markerStyles: MarkerStyle = DEFAULT_MARKER_STYLES;
   
   private listeners: Set<LayoutChangeListener> = new Set();
   private containerRefs: Map<string, HTMLElement> = new Map();
@@ -212,6 +223,7 @@ class LayoutEngineClass {
       renderableSeries: new Map(),
       dataSeries: new Map(),
       annotations: new Map(),
+      markers: new Map(),
       config,
       isDeleted: false,
     };
@@ -541,6 +553,114 @@ class LayoutEngineClass {
   // Reset loading state (for cleanup)
   resetLoadingState(): void {
     this.isLoading = false;
+  }
+  
+  // Add a strategy marker to all applicable panes
+  addMarker(marker: StrategyMarker): void {
+    const layout = this.state.layout;
+    const includePanes = layout?.strategy_markers?.include_panes;
+    const excludePanes = layout?.strategy_markers?.exclude_panes;
+    
+    for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
+      // Skip if not in include list (when specified)
+      if (includePanes && !includePanes.includes(pane.id)) continue;
+      
+      // Skip excluded panes
+      if (excludePanes && excludePanes.includes(pane.id)) continue;
+      
+      // Skip PnL and bar panes by default
+      if (pane.config.isPnL || pane.config.isBar) continue;
+      
+      this.addMarkerToPane(pane, marker);
+    }
+    
+    // Track marker
+    this.state.markers.push(marker);
+  }
+  
+  private addMarkerToPane(pane: PaneSurface, marker: StrategyMarker): void {
+    const style = this.markerStyles[marker.type];
+    const color = marker.color || style.color;
+    const size = marker.size || style.size;
+    
+    // Create SVG for marker
+    const svg = this.createMarkerSvg(marker.type, color, size);
+    
+    const annotation = new CustomAnnotation({
+      x1: marker.timestamp,
+      y1: marker.price,
+      xCoordinateMode: ECoordinateMode.DataValue,
+      yCoordinateMode: ECoordinateMode.DataValue,
+      horizontalAnchorPoint: EHorizontalAnchorPoint.Center,
+      verticalAnchorPoint: marker.type === 'buy' || marker.type === 'entry' 
+        ? EVerticalAnchorPoint.Top 
+        : EVerticalAnchorPoint.Bottom,
+      svgString: svg,
+    });
+    
+    pane.surface.annotations.add(annotation);
+    pane.markers.set(marker.id, annotation);
+  }
+  
+  private createMarkerSvg(type: StrategyMarker['type'], color: string, size: number): string {
+    switch (type) {
+      case 'buy':
+      case 'entry':
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}">
+          <path d="M12 2L2 22h20L12 2z"/>
+        </svg>`;
+      case 'sell':
+      case 'exit':
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}">
+          <path d="M12 22L2 2h20L12 22z"/>
+        </svg>`;
+      case 'stop':
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="3">
+          <line x1="4" y1="4" x2="20" y2="20"/>
+          <line x1="20" y1="4" x2="4" y2="20"/>
+        </svg>`;
+      case 'target':
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="4" fill="white"/>
+        </svg>`;
+      default:
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}">
+          <circle cx="12" cy="12" r="10"/>
+        </svg>`;
+    }
+  }
+  
+  // Remove a marker by ID
+  removeMarker(markerId: string): void {
+    for (const pane of this.state.panes.values()) {
+      const annotation = pane.markers.get(markerId);
+      if (annotation) {
+        pane.surface.annotations.remove(annotation);
+        pane.markers.delete(markerId);
+      }
+    }
+    
+    this.state.markers = this.state.markers.filter(m => m.id !== markerId);
+  }
+  
+  // Clear all markers
+  clearMarkers(): void {
+    for (const pane of this.state.panes.values()) {
+      for (const annotation of pane.markers.values()) {
+        pane.surface.annotations.remove(annotation);
+      }
+      pane.markers.clear();
+    }
+    
+    this.state.markers = [];
+  }
+  
+  // Get all markers
+  getMarkers(): StrategyMarker[] {
+    return [...this.state.markers];
   }
 }
 
