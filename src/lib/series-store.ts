@@ -136,8 +136,14 @@ class SeriesStoreClass {
       buffer.closeValues![idx] = Number(payload.c) || 0;
       buffer.yValues[idx] = Number(payload.c) || 0; // Use close as Y
     } else {
-      // Tick/indicator data
-      buffer.yValues[idx] = Number(payload.y ?? payload.price ?? payload.value ?? 0);
+      // Tick/indicator data - extract y value
+      const yVal = Number(payload.y ?? payload.price ?? payload.value ?? 0);
+      buffer.yValues[idx] = yVal;
+      
+      // Debug: Log first few samples for tick series
+      if (metadata.seriesId.includes(':ticks') && metadata.pointCount < 5) {
+        console.log(`[SeriesStore] Tick sample: series=${metadata.seriesId}, t_ms=${sample.t_ms}, payload=`, payload, `extracted y=${yVal}`);
+      }
     }
     
     // Update head and count

@@ -299,6 +299,18 @@ class LayoutEngineClass {
       const dataToAppend = Math.min(existingData.x.length, CHART_FIFO_CAPACITY - 100);
       const startIdx = Math.max(0, existingData.x.length - dataToAppend);
       
+      // Debug: Log sample values for tick series
+      if (config.series_id.includes(':ticks') || config.series_id.includes(':ohlc')) {
+        console.log(`[LayoutEngine] Initial population for ${config.series_id}:`, {
+          totalPoints: existingData.x.length,
+          appendingPoints: dataToAppend,
+          startIdx,
+          sampleX: existingData.x[startIdx],
+          sampleY: existingData.y[startIdx],
+          hasOHLC: !!existingData.o,
+        });
+      }
+      
       if (config.type === 'FastCandlestickRenderableSeries' && existingData.o) {
         (dataSeries as OhlcDataSeries).appendRange(
           existingData.x.slice(startIdx),
@@ -415,28 +427,46 @@ class LayoutEngineClass {
   
   private drainSeries(seriesId: string): void {
     // Find which pane has this series
+    let foundInPane = false;
+    
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
       
       const dataSeries = pane.dataSeries.get(seriesId);
       if (!dataSeries) continue;
       
+      foundInPane = true;
       const data = SeriesStore.getLinearizedData(seriesId);
-      if (!data || data.x.length === 0) continue;
+      if (!data || data.x.length === 0) {
+        continue;
+      }
       
       // Get current count in chart
       const currentCount = dataSeries.count();
       const newCount = data.x.length;
       
+      // With FIFO mode, the chart auto-discards old data when full.
+      // We need to track what we've already sent, not what's in the chart.
+      // Since SeriesStore uses a circular buffer that overwrites old data,
+      // we should always try to append the latest data.
+      
+      // For simplicity: if store has more data than chart, append the difference
+      // But cap at what the chart can hold
+      
       if (newCount <= currentCount) continue;
       
-      // Append only new data (limited to avoid overflow)
-      const startIdx = currentCount;
-      const maxAppend = CHART_FIFO_CAPACITY - currentCount - 100;
-      if (maxAppend <= 0) continue;
+      // Calculate how many new points to append
+      const newDataCount = newCount - currentCount;
       
-      const appendCount = Math.min(newCount - currentCount, maxAppend);
+      // With FIFO, we can always append - the chart will discard old data
+      // But we should batch to avoid overwhelming the chart
+      const maxBatchSize = Math.min(10000, CHART_FIFO_CAPACITY);
+      const appendCount = Math.min(newDataCount, maxBatchSize);
+      
       if (appendCount <= 0) continue;
+      
+      // Start from the appropriate index
+      const startIdx = newCount - appendCount;
       
       try {
         pane.surface.suspendUpdates();
