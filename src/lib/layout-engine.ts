@@ -306,14 +306,13 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime) - use Never, we control X range manually for linked scrolling
+      // Create X axis (DateTime) - use Always initially to let SciChart auto-fit
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
-        autoRange: EAutoRange.Never,
+        autoRange: EAutoRange.Always,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
-        visibleRange: new NumberRange(0, 1), // Temporary, will be set after data loads
       });
       
       // Create Y axis - use Always so SciChart auto-fits Y to visible data
@@ -971,17 +970,15 @@ class LayoutEngineClass {
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
-        // Only control X axis - Y axis auto-ranges via EAutoRange.Always
-        pane.xAxis.autoRange = EAutoRange.Never;
-        pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
+        // Use SciChart's native zoomExtents to auto-fit all data
+        pane.surface.zoomExtents();
         
-        // Force redraw - Y will auto-adjust
-        pane.surface.invalidateElement();
-        
-        // Debug: Log one-time info per pane
+        // Debug: Log axis ranges
         if (!this._debuggedPanes.has(pane.id)) {
           this._debuggedPanes.add(pane.id);
-          console.log(`[LayoutEngine] ${pane.id}: X range set to ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}`);
+          const xRange = pane.xAxis.visibleRange;
+          const yRange = pane.yAxis.visibleRange;
+          console.log(`[LayoutEngine] ${pane.id}: zoomExtents applied X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
         }
       }
     }
