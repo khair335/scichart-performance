@@ -793,7 +793,13 @@ class LayoutEngineClass {
   }
   
   // Set visibility for all series based on the provided set
+  // If the set is empty, keep all series visible (don't hide everything)
   setSeriesVisibility(visibleSeries: Set<string>): void {
+    // If empty set, don't change visibility - this prevents hiding all series on init
+    if (visibleSeries.size === 0) {
+      return;
+    }
+    
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
       
@@ -914,13 +920,16 @@ class LayoutEngineClass {
     // Convert to seconds for DateTimeNumericAxis
     const maxTimeSec = maxTimeMs / 1000;
     
-    // Set visible range to show last 5 minutes of data
-    const windowSec = 5 * 60; // 5 minutes in seconds
+    // Set visible range to show last 60 seconds of data (more responsive)
+    const windowSec = 60; // 60 seconds
     const minTimeSec = maxTimeSec - windowSec;
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
         pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
+        // Keep Y-axis in auto-range mode so it adjusts to visible data
+        pane.yAxis.autoRange = EAutoRange.Always;
+        pane.surface.invalidateElement();
       }
     }
   }
