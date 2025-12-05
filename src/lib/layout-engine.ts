@@ -948,15 +948,17 @@ class LayoutEngineClass {
         // Use SciChart's native autoRange for Y-axis (efficient)
         pane.yAxis.autoRange = EAutoRange.Always;
         
-        // Debug: Log one-time info per pane
+        // Debug: Log one-time info per pane - check for X range mismatch
         if (!this._debuggedPanes.has(pane.id)) {
           this._debuggedPanes.add(pane.id);
-          console.log(`[LayoutEngine] ${pane.id}: X range ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}, series count: ${pane.surface.renderableSeries.size()}`);
+          console.log(`[LayoutEngine] ${pane.id}: AXIS X range ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}`);
+          
           for (const [seriesId, ds] of pane.dataSeries.entries()) {
             const count = ds.count();
             const xRange = count > 0 ? ds.getXRange() : null;
             const rs = pane.renderableSeries.get(seriesId);
-            console.log(`[LayoutEngine] ${seriesId}: ${count} pts, X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, visible=${rs?.isVisible}`);
+            const overlap = xRange ? (xRange.max >= minTimeSec && xRange.min <= maxTimeSec) : false;
+            console.log(`[LayoutEngine] ${seriesId}: ${count} pts, DATA X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, visible=${rs?.isVisible}, overlap=${overlap}`);
           }
         }
       }
