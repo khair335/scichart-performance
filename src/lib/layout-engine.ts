@@ -458,8 +458,7 @@ class LayoutEngineClass {
         console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points`);
       }
       
-      // Set Y-axis to auto-range and let SciChart handle it
-      pane.yAxis.autoRange = EAutoRange.Always;
+      // Don't set autoRange here - we'll set ranges manually in zoomExtents
       surface.invalidateElement();
     }
     
