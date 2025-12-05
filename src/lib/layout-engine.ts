@@ -834,31 +834,62 @@ class LayoutEngineClass {
     }
   }
   
-  // Zoom extents on all panes - use SciChart's native method
+  // Zoom extents on all panes - manually calculate from data
   zoomExtents(): void {
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
       
-      // Check if pane has any data
+      // Calculate X and Y ranges from all data series
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
       let hasData = false;
+      
       for (const dataSeries of pane.dataSeries.values()) {
-        if (dataSeries.count() > 0) {
-          hasData = true;
-          break;
+        const count = dataSeries.count();
+        if (count === 0) continue;
+        hasData = true;
+        
+        // Get X range
+        const xRange = dataSeries.getXRange();
+        if (xRange.min < minX) minX = xRange.min;
+        if (xRange.max > maxX) maxX = xRange.max;
+        
+        // Get Y range - handle OHLC vs XY differently
+        if ('highValues' in dataSeries) {
+          // OHLC series - use high/low
+          const ohlc = dataSeries as OhlcDataSeries;
+          const hVals = ohlc.getNativeHighValues();
+          const lVals = ohlc.getNativeLowValues();
+          for (let i = 0; i < count; i++) {
+            const h = hVals.get(i);
+            const l = lVals.get(i);
+            if (l < minY) minY = l;
+            if (h > maxY) maxY = h;
+          }
+        } else {
+          // XY series
+          const xy = dataSeries as XyDataSeries;
+          const yVals = xy.getNativeYValues();
+          for (let i = 0; i < count; i++) {
+            const y = yVals.get(i);
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
         }
       }
       
-      if (hasData) {
-        // Set Y-axis to auto-range BEFORE calling zoomExtents
+      if (hasData && minX !== Infinity && minY !== Infinity) {
+        // Apply 5% padding to Y range
+        const yPadding = (maxY - minY) * 0.05;
+        minY -= yPadding;
+        maxY += yPadding;
+        
+        // Set axis ranges
+        pane.xAxis.visibleRange = new NumberRange(minX, maxX);
+        pane.yAxis.visibleRange = new NumberRange(minY, maxY);
         pane.yAxis.autoRange = EAutoRange.Always;
         
-        // Use SciChart's native zoomExtents
-        pane.surface.zoomExtents();
-        
-        // Log for debugging
-        const xRange = pane.xAxis.visibleRange;
-        const yRange = pane.yAxis.visibleRange;
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${minX.toFixed(0)}-${maxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
       }
     }
   }
