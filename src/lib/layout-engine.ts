@@ -306,19 +306,20 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime) - use Never to prevent auto-range issues
+      // Create X axis (DateTime) - use Never, we control X range manually for linked scrolling
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
         autoRange: EAutoRange.Never,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
+        visibleRange: new NumberRange(0, 1), // Temporary, will be set after data loads
       });
       
-      // Create Y axis - use Never to prevent auto-range issues
+      // Create Y axis - use Always so SciChart auto-fits Y to visible data
       const yAxis = new NumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Right,
-        autoRange: EAutoRange.Never,
+        autoRange: EAutoRange.Always,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
@@ -920,23 +921,15 @@ class LayoutEngineClass {
         }
       }
       
+      // Only set X range - Y axis uses EAutoRange.Always to auto-fit
+      pane.xAxis.autoRange = EAutoRange.Never;
+      pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
+      
+      // Log for debugging
       if (hasData && minY !== Infinity) {
-        // Apply 5% padding to Y range
-        const yPadding = Math.max((maxY - minY) * 0.05, 0.01);
-        minY -= yPadding;
-        maxY += yPadding;
-        
-        // IMPORTANT: Set autoRange to Never BEFORE setting manual ranges
-        pane.xAxis.autoRange = EAutoRange.Never;
-        pane.yAxis.autoRange = EAutoRange.Never;
-        
-        // Set axis ranges - use unified X range for all
-        pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
-        pane.yAxis.visibleRange = new NumberRange(minY, maxY);
-        
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: SET X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y data range=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
       } else {
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: No data in range`);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, no Y data`);
       }
     }
     
@@ -978,28 +971,17 @@ class LayoutEngineClass {
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
-        // IMPORTANT: Set autoRange to Never BEFORE setting manual ranges
+        // Only control X axis - Y axis auto-ranges via EAutoRange.Always
         pane.xAxis.autoRange = EAutoRange.Never;
         pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
         
-        // Calculate Y range for visible X window
-        this.updateYAxisForVisibleRange(pane, minTimeSec, maxTimeSec);
-        
-        // Force redraw
+        // Force redraw - Y will auto-adjust
         pane.surface.invalidateElement();
         
-        // Debug: Log one-time info per pane - check for X range mismatch
+        // Debug: Log one-time info per pane
         if (!this._debuggedPanes.has(pane.id)) {
           this._debuggedPanes.add(pane.id);
-          console.log(`[LayoutEngine] ${pane.id}: AXIS X range ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}`);
-          
-          for (const [seriesId, ds] of pane.dataSeries.entries()) {
-            const count = ds.count();
-            const xRange = count > 0 ? ds.getXRange() : null;
-            const rs = pane.renderableSeries.get(seriesId);
-            const overlap = xRange ? (xRange.max >= minTimeSec && xRange.min <= maxTimeSec) : false;
-            console.log(`[LayoutEngine] ${seriesId}: ${count} pts, DATA X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, visible=${rs?.isVisible}, overlap=${overlap}`);
-          }
+          console.log(`[LayoutEngine] ${pane.id}: X range set to ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}`);
         }
       }
     }
@@ -1007,59 +989,7 @@ class LayoutEngineClass {
   
   private _debuggedPanes: Set<string> = new Set();
   
-  // Calculate and set Y-axis range based on data within visible X window
-  private updateYAxisForVisibleRange(pane: PaneSurface, minX: number, maxX: number): void {
-    let minY = Infinity;
-    let maxY = -Infinity;
-    
-    for (const dataSeries of pane.dataSeries.values()) {
-      const count = dataSeries.count();
-      if (count === 0) continue;
-      
-      // Get X range to check if any data is in visible window
-      const xRange = dataSeries.getXRange();
-      if (xRange.max < minX || xRange.min > maxX) continue;
-      
-      // Check if it's OHLC or XY series
-      if ('highValues' in dataSeries) {
-        const ohlc = dataSeries as OhlcDataSeries;
-        const xVals = ohlc.getNativeXValues();
-        const hVals = ohlc.getNativeHighValues();
-        const lVals = ohlc.getNativeLowValues();
-        for (let i = 0; i < count; i++) {
-          const x = xVals.get(i);
-          if (x >= minX && x <= maxX) {
-            const h = hVals.get(i);
-            const l = lVals.get(i);
-            if (l < minY) minY = l;
-            if (h > maxY) maxY = h;
-          }
-        }
-      } else {
-        const xy = dataSeries as XyDataSeries;
-        const xVals = xy.getNativeXValues();
-        const yVals = xy.getNativeYValues();
-        for (let i = 0; i < count; i++) {
-          const x = xVals.get(i);
-          if (x >= minX && x <= maxX) {
-            const y = yVals.get(i);
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-    }
-    
-    // Set Y range with 5% padding
-    if (minY < Infinity && maxY > -Infinity) {
-      const padding = (maxY - minY) * 0.05;
-      // Ensure we have some minimum range to avoid divide by zero
-      const effectivePadding = padding > 0 ? padding : Math.abs(maxY) * 0.05 || 1;
-      pane.yAxis.autoRange = EAutoRange.Never; // Disable auto-range BEFORE setting range
-      pane.yAxis.visibleRange = new NumberRange(minY - effectivePadding, maxY + effectivePadding);
-    }
-    // If no data in visible range, don't change the current Y range
-  }
+  // Note: Y-axis uses EAutoRange.Always, so no manual Y range calculation needed
   
   // Reset loading state (for cleanup)
   resetLoadingState(): void {
