@@ -246,6 +246,35 @@ export function TradingChartV2({
   const handleSelectNoneSeries = useCallback(() => {
     setVisibleSeries(new Set());
   }, []);
+  
+  // Auto-populate visibleSeries when registry changes
+  // Turn ON all series by default so they render on the chart
+  const manuallyToggledRef = useRef<Set<string>>(new Set());
+  
+  useEffect(() => {
+    if (registry.length === 0) return;
+    
+    setVisibleSeries(prev => {
+      const next = new Set(prev);
+      let changed = false;
+      
+      for (const row of registry) {
+        // Only auto-enable if not manually toggled and not already in set
+        if (!manuallyToggledRef.current.has(row.id) && !prev.has(row.id)) {
+          next.add(row.id);
+          changed = true;
+        }
+      }
+      
+      return changed ? next : prev;
+    });
+  }, [registry]);
+  
+  // Update handleToggleSeries to track manual toggles
+  const handleToggleSeriesWithTracking = useCallback((seriesId: string) => {
+    manuallyToggledRef.current.add(seriesId);
+    handleToggleSeries(seriesId);
+  }, [handleToggleSeries]);
 
   // Keyboard shortcuts (after handler definitions)
   useEffect(() => {
@@ -530,6 +559,7 @@ export function TradingChartV2({
       <div className="flex-1 min-h-0 relative">
         <DynamicPlotGrid
           layout={currentLayout}
+          visibleSeries={visibleSeries}
           onLayoutLoaded={() => console.log('[TradingChartV2] Layout loaded')}
           onError={(errors) => console.error('[TradingChartV2] Layout errors:', errors)}
           className="h-full"
@@ -592,7 +622,7 @@ export function TradingChartV2({
         onOpenChange={setSeriesBrowserOpen}
         registry={registry}
         visibleSeries={visibleSeries}
-        onToggleSeries={handleToggleSeries}
+        onToggleSeries={handleToggleSeriesWithTracking}
         onSelectAll={handleSelectAllSeries}
         onSelectNone={handleSelectNoneSeries}
       />

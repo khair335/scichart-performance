@@ -11,6 +11,7 @@ import { Loader2 } from 'lucide-react';
 
 interface DynamicPlotGridProps {
   layout: PlotLayoutJSON | null;
+  visibleSeries?: Set<string>;
   onLayoutLoaded?: () => void;
   onError?: (errors: string[]) => void;
   className?: string;
@@ -21,13 +22,19 @@ interface PaneState {
   seriesIds: string[];
 }
 
-export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: DynamicPlotGridProps) {
+export function DynamicPlotGrid({ layout, visibleSeries, onLayoutLoaded, onError, className }: DynamicPlotGridProps) {
   const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [paneStates, setPaneStates] = useState<Map<string, PaneState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [layoutErrors, setLayoutErrors] = useState<string[]>([]);
   const layoutIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
+  
+  // Sync series visibility with LayoutEngine when visibleSeries changes
+  useEffect(() => {
+    if (!visibleSeries) return;
+    LayoutEngine.setSeriesVisibility(visibleSeries);
+  }, [visibleSeries]);
   
   // Track mount state
   useEffect(() => {
