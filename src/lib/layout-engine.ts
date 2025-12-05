@@ -446,35 +446,17 @@ class LayoutEngineClass {
           existingData.l!.slice(startIdx),
           existingData.c!.slice(startIdx)
         );
-        // Calculate Y range from high/low values
-        const hSlice = existingData.h!.slice(startIdx);
-        const lSlice = existingData.l!.slice(startIdx);
-        const minY = Math.min(...Array.from(lSlice));
-        const maxY = Math.max(...Array.from(hSlice));
-        console.log(`[LayoutEngine] OHLC ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
-        
-        // Force Y-axis to this range immediately
-        const padding = (maxY - minY) * 0.05 || 1;
-        pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
+        console.log(`[LayoutEngine] OHLC ${config.series_id}: appended ${dataToAppend} points`);
       } else {
         (dataSeries as XyDataSeries).appendRange(
           existingData.x.slice(startIdx),
           existingData.y.slice(startIdx)
         );
-        // Log actual data range for debugging
-        const ySlice = existingData.y.slice(startIdx);
-        const minY = Math.min(...Array.from(ySlice));
-        const maxY = Math.max(...Array.from(ySlice));
-        console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
-        
-        // Force Y-axis to this range immediately
-        const padding = (maxY - minY) * 0.05 || 1;
-        pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
+        console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points`);
       }
-      console.log(`[LayoutEngine] Populated ${config.series_id} with ${dataToAppend} existing points`);
       
-      // Force surface invalidation and zoomExtents after populating data
-      surface.zoomExtents();
+      // Set Y-axis to auto-range and let SciChart handle it
+      pane.yAxis.autoRange = EAutoRange.Always;
       surface.invalidateElement();
     }
     
@@ -852,91 +834,31 @@ class LayoutEngineClass {
     }
   }
   
-  // Zoom extents on all panes - calculate union of all data ranges
+  // Zoom extents on all panes - use SciChart's native method
   zoomExtents(): void {
-    // First, calculate the union of all X ranges across all panes
-    let minX = Infinity;
-    let maxX = -Infinity;
-    
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
       
+      // Check if pane has any data
+      let hasData = false;
       for (const dataSeries of pane.dataSeries.values()) {
-        const count = dataSeries.count();
-        if (count > 0) {
-          const xRange = dataSeries.getXRange();
-          if (xRange.min < minX) minX = xRange.min;
-          if (xRange.max > maxX) maxX = xRange.max;
+        if (dataSeries.count() > 0) {
+          hasData = true;
+          break;
         }
       }
-    }
-    
-    console.log(`[LayoutEngine] zoomExtents: calculated X range ${minX} to ${maxX}`);
-    
-    // If we have valid data, set X range on all panes
-    if (minX < Infinity && maxX > -Infinity) {
-      // Add small padding (1%)
-      const padding = (maxX - minX) * 0.01;
-      const xRange = new NumberRange(minX - padding, maxX + padding);
       
-      for (const pane of this.state.panes.values()) {
-        if (!pane.isDeleted) {
-          pane.xAxis.visibleRange = xRange;
-          
-          // Manually calculate Y range from all series in this pane
-          let minY = Infinity;
-          let maxY = -Infinity;
-          
-          for (const dataSeries of pane.dataSeries.values()) {
-            const count = dataSeries.count();
-            if (count > 0) {
-              // Check if it's an OHLC series or XY series
-              if ('highValues' in dataSeries) {
-                // OHLC series - use high/low
-                const ohlc = dataSeries as OhlcDataSeries;
-                const highValues = ohlc.getNativeHighValues();
-                const lowValues = ohlc.getNativeLowValues();
-                for (let i = 0; i < count; i++) {
-                  const h = highValues.get(i);
-                  const l = lowValues.get(i);
-                  if (l < minY) minY = l;
-                  if (h > maxY) maxY = h;
-                }
-              } else {
-                // XY series
-                const xy = dataSeries as XyDataSeries;
-                const yValues = xy.getNativeYValues();
-                for (let i = 0; i < count; i++) {
-                  const y = yValues.get(i);
-                  if (y < minY) minY = y;
-                  if (y > maxY) maxY = y;
-                }
-              }
-            }
-          }
-          
-          // Set Y range with padding
-          if (minY < Infinity && maxY > -Infinity) {
-            const yPadding = (maxY - minY) * 0.05;
-            pane.yAxis.visibleRange = new NumberRange(minY - yPadding, maxY + yPadding);
-            console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
-          } else {
-            // Fallback to autoRange
-            pane.yAxis.autoRange = EAutoRange.Always;
-            console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=auto`);
-          }
-          
-          // Force SciChart to redraw
-          pane.surface.invalidateElement();
-        }
-      }
-    } else {
-      // Fallback: call zoomExtents on each surface
-      for (const pane of this.state.panes.values()) {
-        if (!pane.isDeleted) {
-          pane.surface.zoomExtents();
-          pane.surface.invalidateElement();
-        }
+      if (hasData) {
+        // Set Y-axis to auto-range BEFORE calling zoomExtents
+        pane.yAxis.autoRange = EAutoRange.Always;
+        
+        // Use SciChart's native zoomExtents
+        pane.surface.zoomExtents();
+        
+        // Log for debugging
+        const xRange = pane.xAxis.visibleRange;
+        const yRange = pane.yAxis.visibleRange;
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
       }
     }
   }
