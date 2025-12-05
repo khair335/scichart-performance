@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { PlotLayoutJSON, PaneConfig } from '@/types/layout';
 import { validateLayout } from '@/types/layout';
 import { LayoutEngine } from '@/lib/layout-engine';
+import { SeriesStore } from '@/lib/series-store';
 import { Loader2 } from 'lucide-react';
 
 interface DynamicPlotGridProps {
@@ -37,6 +38,39 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
       LayoutEngine.resetLoadingState();
     };
   }, []);
+  
+  // Subscribe to SeriesStore to track when panes have data
+  useEffect(() => {
+    if (!layout) return;
+    
+    const unsubscribe = SeriesStore.subscribe((entries) => {
+      setPaneStates(prev => {
+        const next = new Map(prev);
+        let changed = false;
+        
+        for (const pane of layout.panes) {
+          const seriesIds = layout.series
+            .filter(s => s.pane === pane.id)
+            .map(s => s.series_id);
+          
+          const hasData = seriesIds.some(id => {
+            const entry = entries.get(id);
+            return entry && entry.metadata.pointCount > 0;
+          });
+          
+          const current = next.get(pane.id);
+          if (!current || current.hasData !== hasData) {
+            next.set(pane.id, { hasData, seriesIds });
+            changed = true;
+          }
+        }
+        
+        return changed ? next : prev;
+      });
+    });
+    
+    return unsubscribe;
+  }, [layout]);
   
   // Initialize layout when it changes
   useEffect(() => {
@@ -207,6 +241,9 @@ interface PaneContainerProps {
 
 function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainerProps) {
   const seriesForPane = layout.series.filter(s => s.pane === pane.id);
+  const hasSeriesDefinitions = seriesForPane.length > 0;
+  const hasData = state?.hasData ?? false;
+  const showWaitingForData = !isLoading && hasSeriesDefinitions && !hasData;
   
   return (
     <div
@@ -237,10 +274,28 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
         </div>
       )}
       
+      {/* Waiting for data overlay */}
+      {showWaitingForData && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/95 z-10">
+          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground mb-2" />
+          <span className="text-xs text-muted-foreground">Waiting for data...</span>
+          <span className="text-xs text-muted-foreground/70 mt-1">
+            {seriesForPane.length} series pending
+          </span>
+        </div>
+      )}
+      
       {/* PnL indicator */}
       {pane.isPnL && (
-        <div className="absolute top-2 right-3 z-10 text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded">
+        <div className="absolute top-2 right-3 z-10 text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
           PnL
+        </div>
+      )}
+      
+      {/* Bar/OHLC indicator */}
+      {pane.isBar && (
+        <div className="absolute top-2 right-3 z-10 text-xs font-medium text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+          OHLC
         </div>
       )}
     </div>
