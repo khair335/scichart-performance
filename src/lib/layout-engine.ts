@@ -155,7 +155,12 @@ class LayoutEngineClass {
       this.linkXAxes();
       
       // Force zoom extents on all panes to show all data
+      // Do it twice - once immediately and once after a delay to ensure rendering completes
       this.zoomExtents();
+      setTimeout(() => {
+        this.zoomExtents();
+        console.log('[LayoutEngine] Delayed zoomExtents applied');
+      }, 500);
       
       // Start drain loop
       this.startDrainLoop();
@@ -177,6 +182,18 @@ class LayoutEngineClass {
   }
   
   private async createPaneSurface(config: PaneConfig, container: HTMLDivElement): Promise<void> {
+    // Debug: Check container dimensions
+    const rect = container.getBoundingClientRect();
+    console.log(`[LayoutEngine] Container ${config.id} dimensions: ${rect.width}x${rect.height}`);
+    
+    if (rect.width === 0 || rect.height === 0) {
+      console.warn(`[LayoutEngine] Container ${config.id} has zero dimensions! Waiting for layout...`);
+      // Wait for layout to complete
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const rect2 = container.getBoundingClientRect();
+      console.log(`[LayoutEngine] Container ${config.id} after wait: ${rect2.width}x${rect2.height}`);
+    }
+    
     const { sciChartSurface, wasmContext } = await SciChartSurface.create(container, {
       theme: {
         type: 'Dark',
