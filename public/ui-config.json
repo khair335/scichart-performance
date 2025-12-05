@@ -38,16 +38,34 @@
     "continueWhenPaused": true,
     "backgroundBufferSize": 10000000
   },
+  "layout": {
+    "preserveViewportOnReload": true,
+    "reuseXAxis": true,
+    "defaultLayout": null
+  },
   "minimap": {
     "enabled": false,
     "overlay": true,
     "liveWindowMs": 300000
   },
   "ui": {
+    "hud": {
+      "visible": true,
+      "mode": "minimal",
+      "autoHideMs": 0
+    },
+    "toolbar": {
+      "autoHide": false,
+      "opacityIdle": 1
+    },
     "theme": {
       "default": "dark",
       "allowToggle": true
     }
+  },
+  "logging": {
+    "level": "info",
+    "includeStatus": true,
+    "includeEvents": false
   }
 }
-
