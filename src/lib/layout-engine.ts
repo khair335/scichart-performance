@@ -121,11 +121,13 @@ class LayoutEngineClass {
         SciChartSurface.useWasmFromCDN();
         DpiHelper.IsDpiScaleEnabled = false;
         SciChartDefaults.useNativeText = true;
-        SciChartDefaults.useSharedCache = true;
+        // Disable shared cache to avoid potential issues with multiple surfaces
+        SciChartDefaults.useSharedCache = false;
+        SciChartDefaults.performanceWarnings = false;
         this.wasmInitialized = true;
         
         // Wait for WASM to fully initialize
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
       
       // Create surfaces for each pane
@@ -201,70 +203,79 @@ class LayoutEngineClass {
     if (rect.width === 0 || rect.height === 0) {
       console.warn(`[LayoutEngine] Container ${config.id} has zero dimensions! Waiting for layout...`);
       // Wait for layout to complete
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 300));
       const rect2 = container.getBoundingClientRect();
       console.log(`[LayoutEngine] Container ${config.id} after wait: ${rect2.width}x${rect2.height}`);
     }
     
-    const { sciChartSurface, wasmContext } = await SciChartSurface.create(container, {
-      theme: {
-        type: 'Dark',
-        sciChartBackground: '#1c2027',
-        loadingAnimationBackground: '#1c2027',
-        loadingAnimationForeground: '#50C7E0',
-        majorGridLineBrush: '#2a3040',
-        minorGridLineBrush: '#1e2530',
-        tickTextBrush: '#9fb2c9',
-      },
-    });
-    
-    // Create X axis (DateTime)
-    const xAxis = new DateTimeNumericAxis(wasmContext, {
-      axisAlignment: EAxisAlignment.Bottom,
-      autoRange: EAutoRange.Always,
-      drawMajorGridLines: true,
-      drawMinorGridLines: false,
-      drawMajorBands: false,
-    });
-    
-    // Create Y axis
-    const yAxis = new NumericAxis(wasmContext, {
-      axisAlignment: EAxisAlignment.Right,
-      autoRange: EAutoRange.Always,
-      drawMajorGridLines: true,
-      drawMinorGridLines: false,
-      drawMajorBands: false,
-    });
-    
-    sciChartSurface.xAxes.add(xAxis);
-    sciChartSurface.yAxes.add(yAxis);
-    
-    // Add modifiers
-    sciChartSurface.chartModifiers.add(
-      new ZoomPanModifier(),
-      new ZoomExtentsModifier(),
-      new MouseWheelZoomModifier(),
-      new RubberBandXyZoomModifier(),
-      new XAxisDragModifier(),
-      new YAxisDragModifier()
-    );
-    
-    const paneSurface: PaneSurface = {
-      id: config.id,
-      surface: sciChartSurface,
-      wasmContext,
-      xAxis,
-      yAxis,
-      renderableSeries: new Map(),
-      dataSeries: new Map(),
-      annotations: new Map(),
-      markers: new Map(),
-      config,
-      isDeleted: false,
-    };
-    
-    this.state.panes.set(config.id, paneSurface);
-    console.log(`[LayoutEngine] Created pane surface: ${config.id}`);
+    try {
+      const { sciChartSurface, wasmContext } = await SciChartSurface.create(container, {
+        theme: {
+          type: 'Dark',
+          sciChartBackground: '#1c2027',
+          loadingAnimationBackground: '#1c2027',
+          loadingAnimationForeground: '#50C7E0',
+          majorGridLineBrush: '#2a3040',
+          minorGridLineBrush: '#1e2530',
+          tickTextBrush: '#9fb2c9',
+        },
+      });
+      
+      // Debug: Verify surface was created with canvas
+      const canvas = container.querySelector('canvas');
+      console.log(`[LayoutEngine] Surface ${config.id} created, canvas present: ${!!canvas}, canvas size: ${canvas?.width}x${canvas?.height}`);
+      
+      // Create X axis (DateTime)
+      const xAxis = new DateTimeNumericAxis(wasmContext, {
+        axisAlignment: EAxisAlignment.Bottom,
+        autoRange: EAutoRange.Always,
+        drawMajorGridLines: true,
+        drawMinorGridLines: false,
+        drawMajorBands: false,
+      });
+      
+      // Create Y axis
+      const yAxis = new NumericAxis(wasmContext, {
+        axisAlignment: EAxisAlignment.Right,
+        autoRange: EAutoRange.Always,
+        drawMajorGridLines: true,
+        drawMinorGridLines: false,
+        drawMajorBands: false,
+      });
+      
+      sciChartSurface.xAxes.add(xAxis);
+      sciChartSurface.yAxes.add(yAxis);
+      
+      // Add modifiers
+      sciChartSurface.chartModifiers.add(
+        new ZoomPanModifier(),
+        new ZoomExtentsModifier(),
+        new MouseWheelZoomModifier(),
+        new RubberBandXyZoomModifier(),
+        new XAxisDragModifier(),
+        new YAxisDragModifier()
+      );
+      
+      const paneSurface: PaneSurface = {
+        id: config.id,
+        surface: sciChartSurface,
+        wasmContext,
+        xAxis,
+        yAxis,
+        renderableSeries: new Map(),
+        dataSeries: new Map(),
+        annotations: new Map(),
+        markers: new Map(),
+        config,
+        isDeleted: false,
+      };
+      
+      this.state.panes.set(config.id, paneSurface);
+      console.log(`[LayoutEngine] Created pane surface: ${config.id}`);
+    } catch (err) {
+      console.error(`[LayoutEngine] Failed to create surface for ${config.id}:`, err);
+      throw err;
+    }
   }
   
   private async bindSeriesToPane(config: SeriesConfig): Promise<void> {
