@@ -154,6 +154,18 @@ class LayoutEngineClass {
       // Link X axes
       this.linkXAxes();
       
+      // Force all surfaces to recognize their container size
+      for (const pane of this.state.panes.values()) {
+        if (!pane.isDeleted && pane.surface) {
+          // Trigger a resize to ensure SciChart recognizes container dimensions
+          const container = this.containerRefs.get(pane.id);
+          if (container) {
+            const rect = container.getBoundingClientRect();
+            console.log(`[LayoutEngine] Final container size for ${pane.id}: ${rect.width}x${rect.height}`);
+          }
+        }
+      }
+      
       // Force zoom extents on all panes to show all data
       // Do it twice - once immediately and once after a delay to ensure rendering completes
       this.zoomExtents();
@@ -671,6 +683,8 @@ class LayoutEngineClass {
           pane.xAxis.visibleRange = xRange;
           // Let Y axis auto-range to fit visible data
           pane.yAxis.autoRange = EAutoRange.Always;
+          // Force SciChart to redraw
+          pane.surface.invalidateElement();
         }
       }
     } else {
@@ -678,6 +692,7 @@ class LayoutEngineClass {
       for (const pane of this.state.panes.values()) {
         if (!pane.isDeleted) {
           pane.surface.zoomExtents();
+          pane.surface.invalidateElement();
         }
       }
     }

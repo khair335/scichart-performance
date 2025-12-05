@@ -103,8 +103,8 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
     
     // Wait for containers to be rendered
     const initLayout = async () => {
-      // Small delay to ensure DOM is ready
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Longer delay to ensure DOM is fully ready and sized
+      await new Promise(resolve => setTimeout(resolve, 300));
       
       if (!isMountedRef.current) return;
       
@@ -113,7 +113,12 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
       for (const pane of layout.panes) {
         const container = containerRefs.current.get(pane.id);
         if (container) {
+          // Log container dimensions for debugging
+          const rect = container.getBoundingClientRect();
+          console.log(`[DynamicPlotGrid] Container ${pane.id}: ${rect.width}x${rect.height}`);
           containers.set(pane.id, container);
+        } else {
+          console.warn(`[DynamicPlotGrid] Container ref not found for pane: ${pane.id}`);
         }
       }
       
@@ -251,25 +256,26 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
         gridRow: `${pane.row + 1} / span ${pane.height || 1}`,
         gridColumn: `${pane.col + 1} / span ${pane.width || 1}`,
       }}
-      className="relative bg-card overflow-hidden"
+      className="relative bg-card overflow-hidden flex flex-col"
     >
       {/* Pane title */}
       {pane.title && (
-        <div className="absolute top-2 left-3 z-10 text-xs font-medium text-muted-foreground bg-card/80 px-2 py-0.5 rounded">
+        <div className="absolute top-2 left-3 z-20 text-xs font-medium text-muted-foreground bg-card/80 px-2 py-0.5 rounded pointer-events-none">
           {pane.title}
         </div>
       )}
       
-      {/* Chart container */}
+      {/* Chart container - takes all available space */}
       <div 
         ref={setRef}
-        className="w-full h-full"
+        className="flex-1 w-full relative z-0"
+        style={{ minHeight: '100px' }}
         data-pane-id={pane.id}
       />
       
       {/* Loading overlay */}
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-card/90 z-20">
+        <div className="absolute inset-0 flex items-center justify-center bg-card/90 z-30">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
         </div>
       )}
@@ -287,14 +293,14 @@ function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainer
       
       {/* PnL indicator */}
       {pane.isPnL && (
-        <div className="absolute top-2 right-3 z-10 text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
+        <div className="absolute top-2 right-3 z-20 text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20 pointer-events-none">
           PnL
         </div>
       )}
       
       {/* Bar/OHLC indicator */}
       {pane.isBar && (
-        <div className="absolute top-2 right-3 z-10 text-xs font-medium text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+        <div className="absolute top-2 right-3 z-20 text-xs font-medium text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20 pointer-events-none">
           OHLC
         </div>
       )}
