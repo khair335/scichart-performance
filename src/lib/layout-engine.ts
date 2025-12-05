@@ -401,23 +401,42 @@ class LayoutEngineClass {
   private linkXAxes(): void {
     // Link all X axes so they scroll together
     const panes = Array.from(this.state.panes.values());
-    if (panes.length < 2) return;
+    if (panes.length < 2) {
+      console.log(`[LayoutEngine] Only ${panes.length} pane(s), no linking needed`);
+      return;
+    }
     
     const primaryXAxis = panes[0].xAxis;
+    let isSyncing = false; // Prevent infinite loops
     
     for (let i = 1; i < panes.length; i++) {
       const xAxis = panes[i].xAxis;
       
-      // Sync visible range changes
+      // Sync visible range changes from primary to secondary
       primaryXAxis.visibleRangeChanged.subscribe((args) => {
-        if (args.visibleRange) {
+        if (isSyncing || !args.visibleRange) return;
+        isSyncing = true;
+        try {
           xAxis.visibleRange = new NumberRange(args.visibleRange.min, args.visibleRange.max);
+        } finally {
+          isSyncing = false;
         }
       });
       
+      // Sync visible range changes from secondary to primary
       xAxis.visibleRangeChanged.subscribe((args) => {
-        if (args.visibleRange) {
+        if (isSyncing || !args.visibleRange) return;
+        isSyncing = true;
+        try {
           primaryXAxis.visibleRange = new NumberRange(args.visibleRange.min, args.visibleRange.max);
+          // Also sync to other secondary axes
+          for (let j = 1; j < panes.length; j++) {
+            if (j !== i) {
+              panes[j].xAxis.visibleRange = new NumberRange(args.visibleRange.min, args.visibleRange.max);
+            }
+          }
+        } finally {
+          isSyncing = false;
         }
       });
     }
@@ -620,11 +639,46 @@ class LayoutEngineClass {
     }
   }
   
-  // Zoom extents on all panes
+  // Zoom extents on all panes - calculate union of all data ranges
   zoomExtents(): void {
+    // First, calculate the union of all X ranges across all panes
+    let minX = Infinity;
+    let maxX = -Infinity;
+    
     for (const pane of this.state.panes.values()) {
-      if (!pane.isDeleted) {
-        pane.surface.zoomExtents();
+      if (pane.isDeleted) continue;
+      
+      for (const dataSeries of pane.dataSeries.values()) {
+        const count = dataSeries.count();
+        if (count > 0) {
+          const xRange = dataSeries.getXRange();
+          if (xRange.min < minX) minX = xRange.min;
+          if (xRange.max > maxX) maxX = xRange.max;
+        }
+      }
+    }
+    
+    console.log(`[LayoutEngine] zoomExtents: calculated X range ${minX} to ${maxX}`);
+    
+    // If we have valid data, set X range on all panes
+    if (minX < Infinity && maxX > -Infinity) {
+      // Add small padding (1%)
+      const padding = (maxX - minX) * 0.01;
+      const xRange = new NumberRange(minX - padding, maxX + padding);
+      
+      for (const pane of this.state.panes.values()) {
+        if (!pane.isDeleted) {
+          pane.xAxis.visibleRange = xRange;
+          // Let Y axis auto-range to fit visible data
+          pane.yAxis.autoRange = EAutoRange.Always;
+        }
+      }
+    } else {
+      // Fallback: call zoomExtents on each surface
+      for (const pane of this.state.panes.values()) {
+        if (!pane.isDeleted) {
+          pane.surface.zoomExtents();
+        }
       }
     }
   }
