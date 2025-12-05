@@ -51,8 +51,9 @@ export interface LayoutEngineState {
 
 type LayoutChangeListener = (state: LayoutEngineState) => void;
 
-// Safe FIFO capacity - smaller to avoid WASM memory issues
-const SAFE_FIFO_CAPACITY = 10000;
+// FIFO capacity for chart rendering (not the main data store)
+// SeriesStore holds the full 1M+ points, this is just for rendering
+const CHART_FIFO_CAPACITY = 50000;
 
 class LayoutEngineClass {
   private state: LayoutEngineState = {
@@ -235,7 +236,7 @@ class LayoutEngineClass {
       case 'FastCandlestickRenderableSeries':
         dataSeries = new OhlcDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: SAFE_FIFO_CAPACITY,
+          fifoCapacity: CHART_FIFO_CAPACITY,
         });
         renderableSeries = new FastCandlestickRenderableSeries(wasmContext, {
           dataSeries: dataSeries as OhlcDataSeries,
@@ -249,7 +250,7 @@ class LayoutEngineClass {
       case 'FastMountainRenderableSeries':
         dataSeries = new XyDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: SAFE_FIFO_CAPACITY,
+          fifoCapacity: CHART_FIFO_CAPACITY,
         });
         renderableSeries = new FastMountainRenderableSeries(wasmContext, {
           dataSeries: dataSeries as XyDataSeries,
@@ -263,7 +264,7 @@ class LayoutEngineClass {
       default:
         dataSeries = new XyDataSeries(wasmContext, {
           dataSeriesName: config.series_id,
-          fifoCapacity: SAFE_FIFO_CAPACITY,
+          fifoCapacity: CHART_FIFO_CAPACITY,
         });
         renderableSeries = new FastLineRenderableSeries(wasmContext, {
           dataSeries: dataSeries as XyDataSeries,
@@ -280,7 +281,7 @@ class LayoutEngineClass {
     // If data already exists in store, populate immediately
     const existingData = SeriesStore.getLinearizedData(config.series_id);
     if (existingData && existingData.x.length > 0) {
-      const dataToAppend = Math.min(existingData.x.length, SAFE_FIFO_CAPACITY - 100);
+      const dataToAppend = Math.min(existingData.x.length, CHART_FIFO_CAPACITY - 100);
       const startIdx = Math.max(0, existingData.x.length - dataToAppend);
       
       if (config.type === 'FastCandlestickRenderableSeries' && existingData.o) {
@@ -416,7 +417,7 @@ class LayoutEngineClass {
       
       // Append only new data (limited to avoid overflow)
       const startIdx = currentCount;
-      const maxAppend = SAFE_FIFO_CAPACITY - currentCount - 100;
+      const maxAppend = CHART_FIFO_CAPACITY - currentCount - 100;
       if (maxAppend <= 0) continue;
       
       const appendCount = Math.min(newCount - currentCount, maxAppend);
