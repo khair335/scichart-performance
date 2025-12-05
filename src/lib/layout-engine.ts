@@ -3,6 +3,7 @@
 
 import type { PlotLayoutJSON, PaneConfig, SeriesConfig, HLineOverlay, VLineOverlay } from '@/types/layout';
 import type { StrategyMarker, MarkerStyle } from '@/types/markers';
+import type { ZoomMode } from '@/types/zoom';
 import { DEFAULT_MARKER_STYLES } from '@/types/markers';
 import { SeriesStore } from './series-store';
 import {
@@ -33,6 +34,7 @@ import {
   ECoordinateMode,
   EHorizontalAnchorPoint,
   EVerticalAnchorPoint,
+  EXyDirection,
 } from 'scichart';
 
 export interface PaneSurface {
@@ -73,6 +75,7 @@ class LayoutEngineClass {
   };
   
   private markerStyles: MarkerStyle = DEFAULT_MARKER_STYLES;
+  private currentZoomMode: ZoomMode = 'xy';
   
   private listeners: Set<LayoutChangeListener> = new Set();
   private containerRefs: Map<string, HTMLElement> = new Map();
@@ -661,6 +664,62 @@ class LayoutEngineClass {
   // Get all markers
   getMarkers(): StrategyMarker[] {
     return [...this.state.markers];
+  }
+  
+  // Get current zoom mode
+  getZoomMode(): ZoomMode {
+    return this.currentZoomMode;
+  }
+  
+  // Set zoom mode for all panes
+  setZoomMode(mode: ZoomMode): void {
+    this.currentZoomMode = mode;
+    
+    for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
+      // Find rubber band modifier and update its direction
+      const rubberBand = pane.surface.chartModifiers.asArray().find(
+        m => m instanceof RubberBandXyZoomModifier
+      ) as RubberBandXyZoomModifier | undefined;
+      
+      if (rubberBand) {
+        switch (mode) {
+          case 'x':
+            rubberBand.xyDirection = EXyDirection.XDirection;
+            break;
+          case 'y':
+            rubberBand.xyDirection = EXyDirection.YDirection;
+            break;
+          case 'xy':
+          case 'box':
+          default:
+            rubberBand.xyDirection = EXyDirection.XyDirection;
+            break;
+        }
+      }
+      
+      // Update mouse wheel zoom direction
+      const mouseWheel = pane.surface.chartModifiers.asArray().find(
+        m => m instanceof MouseWheelZoomModifier
+      ) as MouseWheelZoomModifier | undefined;
+      
+      if (mouseWheel) {
+        switch (mode) {
+          case 'x':
+            mouseWheel.xyDirection = EXyDirection.XDirection;
+            break;
+          case 'y':
+            mouseWheel.xyDirection = EXyDirection.YDirection;
+            break;
+          default:
+            mouseWheel.xyDirection = EXyDirection.XyDirection;
+            break;
+        }
+      }
+    }
+    
+    console.log(`[LayoutEngine] Zoom mode set to: ${mode}`);
   }
 }
 

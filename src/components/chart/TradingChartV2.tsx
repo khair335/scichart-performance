@@ -4,7 +4,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, RefreshCw, RotateCcw, Map as MapIcon, Command as CommandIcon } from 'lucide-react';
+import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, RefreshCw, RotateCcw, Map as MapIcon, Command as CommandIcon, MoveHorizontal, MoveVertical, Maximize2, Square } from 'lucide-react';
 import { HUD } from './HUD';
 import { SeriesBrowser } from './SeriesBrowser';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
@@ -13,10 +13,13 @@ import { Minimap } from './Minimap';
 import { useIngestPipeline } from '@/hooks/useIngestPipeline';
 import { useLayoutManager } from '@/hooks/useLayoutManager';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
+import { useVisibilityThrottle } from '@/hooks/useVisibilityThrottle';
 import { LayoutEngine } from '@/lib/layout-engine';
 import { SeriesStore } from '@/lib/series-store';
 import type { PlotLayoutJSON, UIConfig } from '@/types/layout';
 import type { RegistryRow, Sample } from '@/lib/wsfeed-client';
+import type { ZoomMode } from '@/types/zoom';
+import { ZOOM_MODES, DEFAULT_ZOOM_MODE } from '@/types/zoom';
 
 interface TradingChartV2Props {
   wsUrl?: string;
@@ -36,10 +39,17 @@ export function TradingChartV2({
   const [seriesBrowserOpen, setSeriesBrowserOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [minimapEnabled, setMinimapEnabled] = useState(false);
+  const [zoomMode, setZoomMode] = useState<ZoomMode>(DEFAULT_ZOOM_MODE);
   const [visibleSeries, setVisibleSeries] = useState<Set<string>>(new Set());
   const [demoMode, setDemoMode] = useState(false);
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
   const [tickCount, setTickCount] = useState(0);
+  
+  // Tab visibility throttling
+  const { isVisible, wasHidden } = useVisibilityThrottle({
+    onVisible: () => console.log('[TradingChartV2] Tab became visible'),
+    onHidden: () => console.log('[TradingChartV2] Tab hidden, throttling updates'),
+  });
   
   // Configure SeriesStore from UI config
   useEffect(() => {
@@ -196,6 +206,12 @@ export function TradingChartV2({
     setIsLive(false);
   }, []);
   
+  // Zoom mode change
+  const handleSetZoomMode = useCallback((mode: ZoomMode) => {
+    setZoomMode(mode);
+    LayoutEngine.setZoomMode(mode);
+  }, []);
+  
   // Load layout from file
   const handleLoadLayout = useCallback(async () => {
     await loadLayoutFromFile();
@@ -273,12 +289,25 @@ export function TradingChartV2({
           setCommandPaletteOpen(false);
           setSeriesBrowserOpen(false);
           break;
+        // Zoom modes: 1-4
+        case '1':
+          handleSetZoomMode('xy');
+          break;
+        case '2':
+          handleSetZoomMode('x');
+          break;
+        case '3':
+          handleSetZoomMode('y');
+          break;
+        case '4':
+          handleSetZoomMode('box');
+          break;
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleJumpToLive, handleZoomExtents, handleToggleTheme, handleToggleMinimap, handleToggleLive, handleLoadLayout]);
+  }, [handleJumpToLive, handleZoomExtents, handleToggleTheme, handleToggleMinimap, handleToggleLive, handleLoadLayout, handleSetZoomMode]);
   
   const showConnectionOverlay = !isConnected && stage !== 'connecting' && !demoMode;
   const showConnectingOverlay = stage === 'connecting' && !demoMode;
@@ -327,6 +356,46 @@ export function TradingChartV2({
           >
             <ZoomIn className="w-4 h-4" />
           </Button>
+          
+          {/* Zoom Mode Selector */}
+          <div className="flex items-center gap-0.5 ml-1 px-1 py-0.5 rounded bg-muted/50">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSetZoomMode('xy')}
+              className={cn('h-6 w-6 p-0', zoomMode === 'xy' && 'bg-accent text-accent-foreground')}
+              title="XY Zoom (1)"
+            >
+              <Maximize2 className="w-3 h-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSetZoomMode('x')}
+              className={cn('h-6 w-6 p-0', zoomMode === 'x' && 'bg-accent text-accent-foreground')}
+              title="X-Only Zoom (2)"
+            >
+              <MoveHorizontal className="w-3 h-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSetZoomMode('y')}
+              className={cn('h-6 w-6 p-0', zoomMode === 'y' && 'bg-accent text-accent-foreground')}
+              title="Y-Only Zoom (3)"
+            >
+              <MoveVertical className="w-3 h-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleSetZoomMode('box')}
+              className={cn('h-6 w-6 p-0', zoomMode === 'box' && 'bg-accent text-accent-foreground')}
+              title="Box Zoom (4)"
+            >
+              <Square className="w-3 h-3" />
+            </Button>
+          </div>
         </div>
         
         <div className="w-px h-6 bg-border" />
