@@ -1,15 +1,17 @@
-import { useCallback, useState, useEffect, useMemo } from 'react';
-import { useMultiPaneChart } from './MultiPaneChart';
+import { useCallback, useState, useEffect } from 'react';
+import { useChartEngine } from './ChartEngine';
+import { DynamicPanes } from './DynamicPanes';
 import { useWebSocketFeed } from '@/hooks/useWebSocketFeed';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
 import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
 import { SeriesBrowser } from './SeriesBrowser';
-import { defaultChartConfig } from '@/types/chart';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Play } from 'lucide-react';
 import type { Sample, RegistryRow } from '@/lib/wsfeed-client';
+import type { PlotLayout } from '@/types/layout';
+import { defaultLayout, parseLayout } from '@/types/layout';
 
 interface TradingChartProps {
   wsUrl?: string;
@@ -18,35 +20,36 @@ interface TradingChartProps {
 
 export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: TradingChartProps) {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [minimapEnabled, setMinimapEnabled] = useState(defaultChartConfig.minimap.enabled);
+  const [minimapEnabled, setMinimapEnabled] = useState(true);
   const [seriesBrowserOpen, setSeriesBrowserOpen] = useState(false);
   const [visibleSeries, setVisibleSeries] = useState<Set<string>>(new Set());
-  const [isLive, setIsLive] = useState(true);
   const [fps, setFps] = useState(0);
-  const [dataClockMs, setDataClockMs] = useState(0);
   const [tickCount, setTickCount] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
+  const [layout, setLayout] = useState<PlotLayout>(defaultLayout);
 
-  // Initialize multi-pane charts
+  const containerId = 'trading-chart';
+
+  // Initialize chart engine with layout
   const {
-    isReady,
-    appendSamples,
+    state: chartState,
+    enqueueSamples,
     setLiveMode,
     zoomExtents,
     jumpToLive,
-  } = useMultiPaneChart({
-    tickContainerId: 'tick-chart',
-    ohlcContainerId: 'ohlc-chart',
-    overviewContainerId: minimapEnabled ? 'overview-chart' : undefined,
+    getIngestStats,
+  } = useChartEngine({
+    containerId,
+    layout,
+    theme,
     onFpsUpdate: setFps,
-    onDataClockUpdate: setDataClockMs,
     onReadyChange: () => {},
   });
 
   // Handle samples from any source
   const handleSamples = useCallback((samples: Sample[]) => {
-    appendSamples(samples);
+    enqueueSamples(samples);
     
     // Update tick count
     const newTicks = samples.filter(s => s.series_id.includes(':ticks')).length;
@@ -80,7 +83,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
         return Array.from(map.values());
       });
     }
-  }, [appendSamples, demoMode]);
+  }, [enqueueSamples, demoMode]);
 
   // WebSocket feed
   const { state: feedState, registry: wsRegistry } = useWebSocketFeed({
@@ -125,13 +128,11 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
   }, []);
 
   const handleToggleLive = useCallback(() => {
-    const newLive = !isLive;
-    setIsLive(newLive);
+    const newLive = !chartState.isLive;
     setLiveMode(newLive);
-  }, [isLive, setLiveMode]);
+  }, [chartState.isLive, setLiveMode]);
 
   const handleJumpToLive = useCallback(() => {
-    setIsLive(true);
     setLiveMode(true);
     jumpToLive();
   }, [setLiveMode, jumpToLive]);
@@ -157,8 +158,10 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
       if (file) {
         try {
           const text = await file.text();
-          const layout = JSON.parse(text);
-          console.log('Layout loaded:', layout);
+          const json = JSON.parse(text);
+          const newLayout = parseLayout(json);
+          setLayout(newLayout);
+          console.log('Layout loaded:', newLayout);
         } catch (err) {
           console.error('Failed to load layout:', err);
         }
@@ -176,11 +179,14 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
   const isConnected = demoMode || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta';
   const currentStage = demoMode ? 'demo' : feedState.stage;
 
+  // Get ingest stats for HUD
+  const ingestStats = getIngestStats();
+
   return (
     <div className={cn('flex flex-col h-screen bg-background overflow-hidden', className)}>
       {/* Top Toolbar */}
       <Toolbar
-        isLive={isLive}
+        isLive={chartState.isLive}
         minimapEnabled={minimapEnabled}
         theme={theme}
         onJumpToLive={handleJumpToLive}
@@ -199,26 +205,22 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
         rate={demoMode ? 50 : feedState.rate}
         fps={fps}
         heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
-        dataClockMs={dataClockMs}
-        isLive={isLive}
+        dataClockMs={chartState.dataClockMs}
+        isLive={chartState.isLive}
         historyProgress={demoMode ? 100 : feedState.historyProgress}
         tickCount={tickCount}
+        queuedSamples={ingestStats.queued}
         className="shrink-0 border-b border-border"
       />
 
       {/* Main Chart Area */}
-      <div className="flex-1 min-h-0 flex flex-col relative">
-        {/* Tick/Line Chart Pane */}
-        <div className="relative flex-[6] min-h-0 border-b border-border">
-          <div className="pane-title">Tick Price & Indicators</div>
-          <div id="tick-chart" className="w-full h-full" />
-        </div>
-
-        {/* OHLC Candlestick Pane */}
-        <div className="relative flex-[4] min-h-0">
-          <div className="pane-title">OHLC Candlesticks</div>
-          <div id="ohlc-chart" className="w-full h-full" />
-        </div>
+      <div className="flex-1 min-h-0 relative">
+        {/* Dynamic Panes based on layout */}
+        <DynamicPanes
+          containerId={containerId}
+          layout={layout}
+          className="h-full"
+        />
 
         {/* Connection Status Overlay */}
         {!isConnected && feedState.stage !== 'connecting' && (
@@ -265,7 +267,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
         )}
 
         {/* Chart Loading Overlay */}
-        {!isReady && (
+        {!chartState.isReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-card/95 backdrop-blur-sm z-20">
             <div className="text-center">
               <div className="w-16 h-16 border-3 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -281,7 +283,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className }: Tradi
       {/* Overview/Minimap (when enabled) */}
       {minimapEnabled && (
         <div className="shrink-0 h-16 border-t border-border bg-card">
-          <div id="overview-chart" className="w-full h-full" />
+          <div id={`${containerId}-overview`} className="w-full h-full" />
         </div>
       )}
 
