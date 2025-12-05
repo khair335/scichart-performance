@@ -156,7 +156,7 @@ class LayoutEngineClass {
       // Link X axes
       this.linkXAxes();
       
-      // Force all surfaces to recognize their container size
+      // Force all surfaces to recognize their container size and invalidate
       for (const pane of this.state.panes.values()) {
         if (!pane.isDeleted && pane.surface) {
           // Trigger a resize to ensure SciChart recognizes container dimensions
@@ -165,6 +165,16 @@ class LayoutEngineClass {
             const rect = container.getBoundingClientRect();
             console.log(`[LayoutEngine] Final container size for ${pane.id}: ${rect.width}x${rect.height}`);
           }
+          
+          // Force explicit invalidation of each surface
+          pane.surface.invalidateElement();
+          
+          // Log the renderable series count and data count for debugging
+          console.log(`[LayoutEngine] Surface ${pane.id} has ${pane.surface.renderableSeries.size()} series`);
+          pane.dataSeries.forEach((ds, seriesId) => {
+            const count = ds.count();
+            console.log(`[LayoutEngine] DataSeries ${seriesId} has ${count} points`);
+          });
         }
       }
       
@@ -173,6 +183,13 @@ class LayoutEngineClass {
       this.zoomExtents();
       setTimeout(() => {
         this.zoomExtents();
+        // Also call native SciChart zoomExtents on each surface
+        for (const pane of this.state.panes.values()) {
+          if (!pane.isDeleted && pane.surface) {
+            pane.surface.zoomExtents();
+            console.log(`[LayoutEngine] Called native zoomExtents on ${pane.id}`);
+          }
+        }
         console.log('[LayoutEngine] Delayed zoomExtents applied');
       }, 500);
       
@@ -336,8 +353,11 @@ class LayoutEngineClass {
     pane.dataSeries.set(config.series_id, dataSeries);
     pane.renderableSeries.set(config.series_id, renderableSeries);
     
+    // Ensure series is visible
+    renderableSeries.isVisible = true;
+    
     // Debug: verify series was added
-    console.log(`[LayoutEngine] Surface ${config.pane} now has ${surface.renderableSeries.size()} renderable series`);
+    console.log(`[LayoutEngine] Surface ${config.pane} now has ${surface.renderableSeries.size()} renderable series, isVisible: ${renderableSeries.isVisible}`);
     
     // If data already exists in store, populate immediately
     const existingData = SeriesStore.getLinearizedData(config.series_id);
@@ -378,6 +398,9 @@ class LayoutEngineClass {
         console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
       }
       console.log(`[LayoutEngine] Populated ${config.series_id} with ${dataToAppend} existing points`);
+      
+      // Force surface invalidation after populating data
+      surface.invalidateElement();
     }
     
     console.log(`[LayoutEngine] Bound series ${config.series_id} to pane ${config.pane}`);
@@ -699,6 +722,10 @@ class LayoutEngineClass {
           pane.yAxis.autoRange = EAutoRange.Always;
           // Force SciChart to redraw
           pane.surface.invalidateElement();
+          
+          // Debug: Log Y axis range after invalidation
+          const yRange = pane.yAxis.visibleRange;
+          console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange?.min?.toFixed(2)}-${yRange?.max?.toFixed(2)}`);
         }
       }
     } else {
