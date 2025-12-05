@@ -132,13 +132,22 @@ export function DynamicPlotGrid({ layout, onLayoutLoaded, onError, className }: 
       if (success) {
         onLayoutLoaded?.();
         
-        // Initialize pane states
+        // Initialize pane states - check for existing data in SeriesStore
+        const allEntries = SeriesStore.getAllEntries();
         const states = new Map<string, PaneState>();
         for (const pane of layout.panes) {
           const seriesIds = layout.series
             .filter(s => s.pane === pane.id)
             .map(s => s.series_id);
-          states.set(pane.id, { hasData: false, seriesIds });
+          
+          // Check if any series already has data
+          const hasData = seriesIds.some(id => {
+            const entry = allEntries.get(id);
+            return entry && entry.metadata.pointCount > 0;
+          });
+          
+          states.set(pane.id, { hasData, seriesIds });
+          console.log(`[DynamicPlotGrid] Pane ${pane.id} hasData: ${hasData}, series: ${seriesIds.join(', ')}`);
         }
         setPaneStates(states);
       } else {
