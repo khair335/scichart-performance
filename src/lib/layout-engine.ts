@@ -205,21 +205,24 @@ class LayoutEngineClass {
             pane.dataSeries.forEach((ds, seriesId) => {
               const count = ds.count();
               const xRange = count > 0 ? ds.getXRange() : null;
-              // Calculate Y range manually since getYRange doesn't exist
+              // Calculate Y range manually using correct API
               let minY = Infinity, maxY = -Infinity;
               if (count > 0) {
                 if ('highValues' in ds) {
                   const ohlc = ds as OhlcDataSeries;
+                  const hVals = ohlc.getNativeHighValues();
+                  const lVals = ohlc.getNativeLowValues();
                   for (let i = 0; i < count; i++) {
-                    const h = ohlc.highValues.get(i);
-                    const l = ohlc.lowValues.get(i);
+                    const h = hVals.get(i);
+                    const l = lVals.get(i);
                     if (l < minY) minY = l;
                     if (h > maxY) maxY = h;
                   }
-                } else if ('yValues' in ds) {
+                } else {
                   const xy = ds as XyDataSeries;
+                  const yVals = xy.getNativeYValues();
                   for (let i = 0; i < count; i++) {
-                    const y = xy.yValues.get(i);
+                    const y = yVals.get(i);
                     if (y < minY) minY = y;
                     if (y > maxY) maxY = y;
                   }
@@ -891,8 +894,8 @@ class LayoutEngineClass {
               if ('highValues' in dataSeries) {
                 // OHLC series - use high/low
                 const ohlc = dataSeries as OhlcDataSeries;
-                const highValues = ohlc.highValues;
-                const lowValues = ohlc.lowValues;
+                const highValues = ohlc.getNativeHighValues();
+                const lowValues = ohlc.getNativeLowValues();
                 for (let i = 0; i < count; i++) {
                   const h = highValues.get(i);
                   const l = lowValues.get(i);
@@ -902,7 +905,7 @@ class LayoutEngineClass {
               } else {
                 // XY series
                 const xy = dataSeries as XyDataSeries;
-                const yValues = xy.yValues;
+                const yValues = xy.getNativeYValues();
                 for (let i = 0; i < count; i++) {
                   const y = yValues.get(i);
                   if (y < minY) minY = y;
