@@ -218,9 +218,32 @@ class LayoutEngineClass {
             pane.dataSeries.forEach((ds, seriesId) => {
               const count = ds.count();
               const xRange = count > 0 ? ds.getXRange() : null;
-              const yRange = count > 0 && 'getYRange' in ds ? (ds as any).getYRange() : null;
-              console.log(`[LayoutEngine] FINAL CHECK ${seriesId}: ${count} pts, X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, Y=${yRange?.min?.toFixed(2)}-${yRange?.max?.toFixed(2)}`);
+              // Calculate Y range manually since getYRange doesn't exist
+              let minY = Infinity, maxY = -Infinity;
+              if (count > 0) {
+                if ('highValues' in ds) {
+                  const ohlc = ds as OhlcDataSeries;
+                  for (let i = 0; i < count; i++) {
+                    const h = ohlc.highValues.get(i);
+                    const l = ohlc.lowValues.get(i);
+                    if (l < minY) minY = l;
+                    if (h > maxY) maxY = h;
+                  }
+                } else if ('yValues' in ds) {
+                  const xy = ds as XyDataSeries;
+                  for (let i = 0; i < count; i++) {
+                    const y = xy.yValues.get(i);
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                  }
+                }
+              }
+              const yStr = minY < Infinity ? `${minY.toFixed(2)}-${maxY.toFixed(2)}` : 'no data';
+              console.log(`[LayoutEngine] FINAL CHECK ${seriesId}: ${count} pts, X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, Y=${yStr}`);
             });
+            // Also log actual Y axis visible range
+            const yAxisRange = pane.yAxis.visibleRange;
+            console.log(`[LayoutEngine] ${pane.id} Y-axis visible: ${yAxisRange.min.toFixed(2)} to ${yAxisRange.max.toFixed(2)}`);
           }
         }
       }, 1000);
