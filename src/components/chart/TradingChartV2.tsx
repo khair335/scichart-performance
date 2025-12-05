@@ -9,6 +9,7 @@ import { HUD } from './HUD';
 import { SeriesBrowser } from './SeriesBrowser';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
 import { CommandPalette } from './CommandPalette';
+import { Minimap } from './Minimap';
 import { useIngestPipeline } from '@/hooks/useIngestPipeline';
 import { useLayoutManager } from '@/hooks/useLayoutManager';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
@@ -494,6 +495,12 @@ export function TradingChartV2({
           </div>
         )}
       </div>
+      
+      {/* Minimap */}
+      <Minimap 
+        enabled={minimapEnabled} 
+        sourceSeriesId={currentLayout?.minimap?.source?.series_id}
+      />
       
       {/* Series Browser Drawer */}
       <SeriesBrowser
