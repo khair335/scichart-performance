@@ -52,14 +52,61 @@
       "strokeThickness": 1
     },
     {
-      "series_id": "MESU5:sma_50",
+      "series_id": "MESU5:sma_30",
       "pane": "price-pane",
       "type": "FastLineRenderableSeries",
       "color": "#AB47BC",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "MESU5:sma_40",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#FF7043",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "MESU5:sma_50",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#7E57C2",
       "strokeThickness": 2
     },
     {
+      "series_id": "MESU5:sma_60",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#66BB6A",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "MESU5:sma_70",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#42A5F5",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "MESU5:sma_80",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#EC407A",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "MESU5:sma_90",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#FFCA28",
+      "strokeThickness": 1
+    },
+    {
       "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
       "pane": "ohlc-pane",
       "type": "FastCandlestickRenderableSeries"
     },
@@ -83,6 +130,6 @@
   "meta": {
     "version": "1.0",
     "name": "MESU5 Full Layout",
-    "description": "Complete layout for MESU5 with ticks, SMAs, OHLC, and PnL"
+    "description": "Complete layout for MESU5 with ticks, all SMAs, OHLC bars, and PnL"
   }
 }
