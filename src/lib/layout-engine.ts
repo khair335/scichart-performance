@@ -306,19 +306,19 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime) - use Once to auto-range initially, we'll set ranges manually later
+      // Create X axis (DateTime) - use Never to prevent auto-range issues
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
-        autoRange: EAutoRange.Once,
+        autoRange: EAutoRange.Never,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
       });
       
-      // Create Y axis - use Once to auto-range initially, we'll set ranges manually later
+      // Create Y axis - use Never to prevent auto-range issues
       const yAxis = new NumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Right,
-        autoRange: EAutoRange.Once,
+        autoRange: EAutoRange.Never,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
@@ -927,7 +927,6 @@ class LayoutEngineClass {
         maxY += yPadding;
         
         // IMPORTANT: Set autoRange to Never BEFORE setting manual ranges
-        // EAutoRange.Always would override our manual range settings
         pane.xAxis.autoRange = EAutoRange.Never;
         pane.yAxis.autoRange = EAutoRange.Never;
         
@@ -935,14 +934,22 @@ class LayoutEngineClass {
         pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
         pane.yAxis.visibleRange = new NumberRange(minY, maxY);
         
-        // Force redraw
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: SET X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+      } else {
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: No data in range`);
+      }
+    }
+    
+    // After setting all manual ranges, force a complete redraw of all surfaces
+    for (const pane of this.state.panes.values()) {
+      if (!pane.isDeleted) {
+        // Force complete redraw without using zoomExtents (which would override our ranges)
         pane.surface.invalidateElement();
         
-        // VERIFY: Read back the actual values to confirm they were set
-        const actualXRange = pane.xAxis.visibleRange;
-        const actualYRange = pane.yAxis.visibleRange;
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: SET X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: ACTUAL X=${actualXRange.min.toFixed(0)}-${actualXRange.max.toFixed(0)}, Y=${actualYRange.min.toFixed(2)}-${actualYRange.max.toFixed(2)}`);
+        // Log final axis state
+        const xRange = pane.xAxis.visibleRange;
+        const yRange = pane.yAxis.visibleRange;
+        console.log(`[LayoutEngine] ${pane.id} FINAL: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
       }
     }
   }
@@ -1048,12 +1055,10 @@ class LayoutEngineClass {
       const padding = (maxY - minY) * 0.05;
       // Ensure we have some minimum range to avoid divide by zero
       const effectivePadding = padding > 0 ? padding : Math.abs(maxY) * 0.05 || 1;
+      pane.yAxis.autoRange = EAutoRange.Never; // Disable auto-range BEFORE setting range
       pane.yAxis.visibleRange = new NumberRange(minY - effectivePadding, maxY + effectivePadding);
-      pane.yAxis.autoRange = EAutoRange.Never; // Disable auto-range after setting manually
-    } else {
-      // Fallback to auto-range
-      pane.yAxis.autoRange = EAutoRange.Always;
     }
+    // If no data in visible range, don't change the current Y range
   }
   
   // Reset loading state (for cleanup)
