@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import type { RegistryRow } from '@/lib/wsfeed-client';
 import { cn } from '@/lib/utils';
+import { getDisplayType, parseSeriesType } from '@/lib/series-namespace';
 import { Activity, BarChart3, TrendingUp, Target, DollarSign } from 'lucide-react';
 
 interface SeriesBrowserProps {
@@ -11,29 +12,29 @@ interface SeriesBrowserProps {
   registry: RegistryRow[];
   visibleSeries: Set<string>;
   onToggleSeries: (seriesId: string) => void;
+  onSelectAll?: () => void;
+  onSelectNone?: () => void;
 }
 
 function getSeriesIcon(seriesId: string) {
-  if (seriesId.includes(':ticks')) return <Activity className="w-4 h-4 text-primary" />;
-  if (seriesId.includes(':sma_')) return <TrendingUp className="w-4 h-4 text-accent" />;
-  if (seriesId.includes(':ohlc_')) return <BarChart3 className="w-4 h-4 text-chart-up" />;
-  if (seriesId.includes(':strategy:')) {
-    if (seriesId.includes(':pnl')) return <DollarSign className="w-4 h-4 text-success" />;
-    return <Target className="w-4 h-4 text-warning" />;
+  const info = parseSeriesType(seriesId);
+  
+  switch (info.type) {
+    case 'tick':
+      return <Activity className="w-4 h-4 text-primary" />;
+    case 'tick-indicator':
+    case 'bar-indicator':
+      return <TrendingUp className="w-4 h-4 text-accent" />;
+    case 'ohlc-bar':
+      return <BarChart3 className="w-4 h-4 text-chart-up" />;
+    case 'strategy-pnl':
+      return <DollarSign className="w-4 h-4 text-success" />;
+    case 'strategy-signal':
+    case 'strategy-marker':
+      return <Target className="w-4 h-4 text-warning" />;
+    default:
+      return <Activity className="w-4 h-4 text-muted-foreground" />;
   }
-  return <Activity className="w-4 h-4 text-muted-foreground" />;
-}
-
-function getSeriesType(seriesId: string): string {
-  if (seriesId.includes(':ticks')) return 'Tick';
-  if (seriesId.includes(':sma_')) return 'Indicator';
-  if (seriesId.includes(':ohlc_')) return 'OHLC';
-  if (seriesId.includes(':strategy:')) {
-    if (seriesId.includes(':pnl')) return 'PnL';
-    if (seriesId.includes(':signals')) return 'Signal';
-    if (seriesId.includes(':markers')) return 'Marker';
-  }
-  return 'Other';
 }
 
 function formatCount(n: number): string {
@@ -54,10 +55,12 @@ export function SeriesBrowser({
   registry,
   visibleSeries,
   onToggleSeries,
+  onSelectAll,
+  onSelectNone,
 }: SeriesBrowserProps) {
-  // Group series by type
+  // Group series by type using namespace-based detection
   const grouped = registry.reduce((acc, row) => {
-    const type = getSeriesType(row.id);
+    const type = getDisplayType(row.id);
     if (!acc[type]) acc[type] = [];
     acc[type].push(row);
     return acc;
@@ -72,7 +75,23 @@ export function SeriesBrowser({
           <SheetTitle className="text-sidebar-foreground">Discovered Series</SheetTitle>
         </SheetHeader>
         
-        <ScrollArea className="h-[calc(100vh-100px)] mt-4">
+        {/* Select All/None buttons */}
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={onSelectAll}
+            className="flex-1 px-3 py-2 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+          >
+            Select All
+          </button>
+          <button
+            onClick={onSelectNone}
+            className="flex-1 px-3 py-2 text-xs font-medium bg-muted text-muted-foreground rounded-md hover:bg-muted/80 transition-colors"
+          >
+            Clear All
+          </button>
+        </div>
+        
+        <ScrollArea className="h-[calc(100vh-160px)] mt-4">
           <div className="space-y-4 pr-4">
             {typeOrder.map(type => {
               const items = grouped[type];

@@ -1,0 +1,89 @@
+{
+  "wsUrl": "ws://127.0.0.1:8765",
+  "timezone": "America/Chicago",
+  "theme": "dark",
+  "performance": {
+    "maxTickPoints": 30000,
+    "maxSmaPoints": 30000,
+    "maxBarPoints": 15000,
+    "fifoEnabled": true,
+    "downsampleRatio": 4,
+    "targetFPS": 60,
+    "maxBatchSize": 300,
+    "maxBufferSize": 3000
+  },
+  "minimap": {
+    "enabled": false,
+    "height": 60
+  },
+  "chart": {
+    "backgroundColor": "#1a1d23",
+    "gridLineColor": "#2a2f36",
+    "textColor": "#9fb2c9",
+    "useNativeText": true,
+    "useSharedCache": true,
+    "disableDpiScaling": true
+  },
+  "axes": {
+    "xAxis": {
+      "autoRange": "Once",
+      "maxAutoTicks": 8,
+      "adaptiveLabels": true
+    },
+    "yAxis": {
+      "autoRange": "Always",
+      "maxAutoTicks": 3
+    }
+  },
+  "interactions": {
+    "enableBoxZoom": true,
+    "enableMouseWheelZoom": true,
+    "enablePan": false,
+    "enableAxisDrag": false,
+    "userInteractionTimeout": 10000
+  },
+  "hud": {
+    "showCPU": true,
+    "showMemory": true,
+    "showGPU": true,
+    "showFPS": true,
+    "showDataClock": true,
+    "showTickCount": true,
+    "showRate": true,
+    "showLag": true
+  },
+  "defaultLayout": {
+    "panes": [
+      {
+        "id": "tick-pane",
+        "title": "Tick Price & Indicators",
+        "heightRatio": 0.6,
+        "series": [
+          {
+            "seriesId": "ticks",
+            "type": "line",
+            "color": "#50C7E0"
+          },
+          {
+            "seriesId": "sma_10",
+            "type": "line",
+            "color": "#F48420"
+          }
+        ]
+      },
+      {
+        "id": "ohlc-pane",
+        "title": "OHLC Candlesticks",
+        "heightRatio": 0.4,
+        "series": [
+          {
+            "seriesId": "ohlc_time",
+            "type": "ohlc"
+          }
+        ]
+      }
+    ],
+    "minimapSourceSeries": "ticks"
+  }
+}
+

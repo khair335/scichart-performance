@@ -78,7 +78,7 @@ export function useSciChart({ containerId, config = {} }: UseSciChartOptions) {
         // Create main surface
         const { sciChartSurface, wasmContext } = await SciChartSurface.create(containerId, {
           theme: {
-            type: 'Custom',
+            type: 'Dark' as const,
             axisBorder: 'transparent',
             axisTitleColor: '#9fb2c9',
             annotationsGripsBackgroundBrush: 'transparent',

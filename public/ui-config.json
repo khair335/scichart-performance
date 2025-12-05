@@ -1,0 +1,53 @@
+{
+  "transport": {
+    "wsUrl": "ws://127.0.0.1:8765",
+    "binary": false,
+    "useWorker": false
+  },
+  "ingest": {
+    "targetTransferHz": 20,
+    "maxPointsPerBatch": 131072
+  },
+  "uiDrain": {
+    "maxBatchesPerFrame": 8,
+    "maxMsPerFrame": 6
+  },
+  "data": {
+    "registry": {
+      "enabled": true,
+      "maxRows": 5000
+    },
+    "buffers": {
+      "pointsPerSeries": 1000000,
+      "maxPointsTotal": 10000000
+    }
+  },
+  "performance": {
+    "targetFPS": 60,
+    "batchSize": 500,
+    "downsampleRatio": 2,
+    "maxAutoTicks": 8
+  },
+  "chart": {
+    "separateXAxes": true,
+    "autoScroll": true,
+    "autoScrollThreshold": 200,
+    "timezone": "UTC"
+  },
+  "dataCollection": {
+    "continueWhenPaused": true,
+    "backgroundBufferSize": 10000000
+  },
+  "minimap": {
+    "enabled": false,
+    "overlay": true,
+    "liveWindowMs": 300000
+  },
+  "ui": {
+    "theme": {
+      "default": "dark",
+      "allowToggle": true
+    }
+  }
+}
+

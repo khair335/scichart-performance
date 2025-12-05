@@ -1,0 +1,696 @@
+<!doctype html>
+<meta charset="utf-8"/>
+<title>WS Feed Demo — ticks/bars/indicators/strategy/pnl</title>
+<style>
+    body {
+        font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 16px;
+        color: #ddd;
+        background: #1c1f24;
+    }
+    h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+        color: #fff;
+    }
+    .row {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+    }
+    .card {
+        background: #2a2f36;
+        border: 1px solid #3a424c;
+        border-radius: 8px;
+        padding: 12px;
+        min-width: 280px;
+        box-sizing: border-box;
+    }
+    .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    th, td {
+        padding: 4px 6px;
+        border-bottom: 1px solid #3a424c;
+    }
+    th {
+        text-align: left;
+        color: #9fb2c9;
+    }
+    .pill {
+        display:inline-block;
+        padding:2px 6px;
+        border-radius:999px;
+        background:#39424d;
+        color:#c9d7e6;
+        font-size:12px;
+    }
+    .ok { background:#215d34; }
+    .warn { background:#6b4d16; }
+
+    /* SciChart containers */
+    #chartContainer {
+        width: 100%;
+        height: 600px;
+        display: flex;
+        flex-direction: column;
+        margin-top: 16px;
+        border: 1px solid #3a424c;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .chart-pane {
+        flex: 1;
+        border-bottom: 1px solid #3a424c;
+        position: relative;
+        min-height: 0;
+    }
+    .chart-pane:last-child {
+        border-bottom: none;
+    }
+    .chart-title {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 100;
+        background: rgba(42, 47, 54, 0.9);
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        color: #9fb2c9;
+    }
+</style>
+
+<h1>WebSocket Feed — Diagnostics</h1>
+
+<!-- Row 1: status/ticks, Discovered Series, Strategy PnL -->
+<div class="row">
+    <div class="card" style="flex:1">
+        <div id="status" class="mono">status: (connecting…)</div>
+        <div id="feedMetrics" class="mono" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card" style="flex:1">
+        <div><b>Discovered Series</b></div>
+        <table class="mono" id="registry">
+            <thead>
+            <tr>
+                <th>series_id</th>
+                <th>count</th>
+                <th>last t_ms</th>
+                <th>gaps</th>
+                <th>missed</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card" style="flex:1">
+        <div><b>Strategy PnL</b></div>
+        <table class="mono" id="pnlTable">
+            <thead>
+            <tr>
+                <th>strategy</th><th>last t_ms</th><th style="text-align:right">PnL</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Row 2: strategy intent + executed markers -->
+<div class="row">
+    <div class="card" style="flex:1">
+        <div><b>Strategy Signals (intent, latest 20)</b></div>
+        <table class="mono" id="signals">
+            <thead>
+            <tr>
+                <th>time</th><th>strategy</th><th>side</th><th>qty</th><th style="text-align:right">price</th><th>reason</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card" style="flex:1">
+        <div><b>Strategy Markers (executed, latest 20)</b></div>
+        <table class="mono" id="markers">
+            <thead>
+            <tr>
+                <th>time</th><th>strategy</th><th>side</th><th>tag</th><th style="text-align:right">price</th><th>qty</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- SciChart 2x1 Layout: Top pane (Tick + SMA), Bottom pane (OHLC) -->
+<div id="chartContainer">
+    <div id="topPane" class="chart-pane">
+        <div class="chart-title">Tick Price & SMA</div>
+    </div>
+    <div id="bottomPane" class="chart-pane">
+        <div class="chart-title">OHLC Candlesticks</div>
+    </div>
+</div>
+
+<!-- SciChart JS from CDN -->
+<script src="https://cdn.jsdelivr.net/npm/scichart@4.0.897/index.min.js" crossorigin="anonymous"></script>
+
+<script type="module">
+    import { WsFeedClient, MemoryStorage } from './wsfeed-client.js';
+
+    // Wait for SciChart to load
+    const waitForSciChart = () => {
+        return new Promise((resolve, reject) => {
+            if (window.SciChart) {
+                resolve(window.SciChart);
+                return;
+            }
+            let attempts = 0;
+            const checkInterval = setInterval(() => {
+                attempts++;
+                if (window.SciChart) {
+                    clearInterval(checkInterval);
+                    resolve(window.SciChart);
+                } else if (attempts > 50) {
+                    clearInterval(checkInterval);
+                    reject(new Error('SciChart failed to load'));
+                }
+            }, 100);
+        });
+    };
+
+    (async () => {
+        const statusEl       = document.getElementById('status');
+        const feedMetricsEl  = document.getElementById('feedMetrics');
+        const registryBody   = document.querySelector('#registry tbody');
+        const markersBody    = document.querySelector('#markers tbody');
+        const signalsBody    = document.querySelector('#signals tbody');
+        const pnlBody        = document.querySelector('#pnlTable tbody');
+
+        // State
+        const lastMarkers = [];   // [{t_ms,strategy,side,tag,price,qty}]
+        const lastSignals = [];   // [{t_ms,strategy,side,qty,price,reason}]
+        const pnlByStrategy = new Map(); // strat -> { value, lastMs }
+
+        let totalTickCount = 0;
+        const tickArrivalTimes = []; // wall clock arrival times
+        let connectStart = null;
+
+        // Initialize SciChart
+        let SciChart;
+        let sciChartSurface, sciChartSurface2, wasmContext, wasmContext2;
+        let tickDataSeries, smaDataSeries, ohlcDataSeries;
+        let tickSeriesId = null, smaSeriesId = null, ohlcSeriesId = null;
+        let lastDataTime = null;
+        let lastTickTs = null; // for detecting time jumps in tick stream
+        let isLiveMode = false;
+        let userHasInteracted = false;
+        let initialZoomDone = false;
+        let autoScrollEnabled = false;
+        // FPS tracking state (needs to be visible to onStatus)
+        let currentFPS = null;
+
+        // Buffers for batch appends (must be outside try block for onSamples access)
+        const tickBuffer = { x: [], y: [] };
+        const smaBuffer = { x: [], y: [] };
+        const ohlcBuffer = { x: [], o: [], h: [], l: [], c: [] };
+        let flushScheduled = false;
+
+        // Flush function (will be set up after SciChart initialization)
+        let flushBuffers = () => {};
+        let scheduleFlush = () => {};
+
+        try {
+            SciChart = await waitForSciChart();
+            const scichartVersion = '4.0.897';
+            SciChart.SciChartDefaults.performanceWarnings = false;
+            SciChart.SciChartSurface.configure({
+                dataUrl: `https://cdn.jsdelivr.net/npm/scichart@${scichartVersion}/_wasm/scichart2d.data`,
+                wasmUrl: `https://cdn.jsdelivr.net/npm/scichart@${scichartVersion}/_wasm/scichart2d.wasm`
+            });
+
+            const chartDivTop = document.getElementById('topPane');
+            const chartDivBottom = document.getElementById('bottomPane');
+
+            const [{ sciChartSurface: s1, wasmContext: w1 }, { sciChartSurface: s2, wasmContext: w2 }] =
+                await Promise.all([
+                    SciChart.SciChartSurface.create(chartDivTop.id),
+                    SciChart.SciChartSurface.create(chartDivBottom.id),
+                ]);
+            sciChartSurface = s1;
+            sciChartSurface2 = s2;
+            wasmContext = w1;
+            wasmContext2 = w2;
+
+            // Axes for top chart (Tick + SMA)
+            const xAxisTop = new SciChart.DateTimeNumericAxis(wasmContext, {
+                axisTitle: "Time",
+                axisTitleStyle: { color: "#9fb2c9" },
+                labelStyle: { color: "#9fb2c9" },
+                majorGridLineStyle: { color: "#3a424c" },
+                minorGridLineStyle: { color: "#2a2f36" },
+                // Use Once so we can still zoom/pan after initial auto range
+                autoRange: SciChart.EAutoRange.Once
+            });
+            const yAxisTop = new SciChart.NumericAxis(wasmContext, {
+                axisTitle: "Price",
+                axisTitleStyle: { color: "#9fb2c9" },
+                labelStyle: { color: "#9fb2c9" },
+                majorGridLineStyle: { color: "#3a424c" },
+                minorGridLineStyle: { color: "#2a2f36" },
+                autoRange: SciChart.EAutoRange.Always
+            });
+            sciChartSurface.xAxes.add(xAxisTop);
+            sciChartSurface.yAxes.add(yAxisTop);
+
+            // Axes for bottom chart (OHLC)
+            const xAxisBottom = new SciChart.DateTimeNumericAxis(wasmContext2, {
+                axisTitle: "Time",
+                axisTitleStyle: { color: "#9fb2c9" },
+                labelStyle: { color: "#9fb2c9" },
+                majorGridLineStyle: { color: "#3a424c" },
+                minorGridLineStyle: { color: "#2a2f36" },
+                autoRange: SciChart.EAutoRange.Once
+            });
+            const yAxisBottom = new SciChart.NumericAxis(wasmContext2, {
+                axisTitle: "Price",
+                axisTitleStyle: { color: "#9fb2c9" },
+                labelStyle: { color: "#9fb2c9" },
+                majorGridLineStyle: { color: "#3a424c" },
+                minorGridLineStyle: { color: "#2a2f36" },
+                autoRange: SciChart.EAutoRange.Always
+            });
+            sciChartSurface2.xAxes.add(xAxisBottom);
+            sciChartSurface2.yAxes.add(yAxisBottom);
+
+            // Data series with preallocated circular buffers
+            const MAX_TICK_POINTS = 3_000_000;
+            const MAX_SMA_POINTS = 3_000_000;
+            const MAX_BAR_POINTS = 1_000_000;
+
+            tickDataSeries = new SciChart.XyDataSeries(wasmContext, {
+                dataSeriesName: "Ticks",
+                fifoCapacity: MAX_TICK_POINTS,
+                containsNaN: false,
+                isSorted: true
+            });
+            smaDataSeries = new SciChart.XyDataSeries(wasmContext, {
+                dataSeriesName: "SMA",
+                fifoCapacity: MAX_SMA_POINTS,
+                containsNaN: false,
+                isSorted: true
+            });
+            ohlcDataSeries = new SciChart.OhlcDataSeries(wasmContext2, {
+                dataSeriesName: "OHLC Bars",
+                fifoCapacity: MAX_BAR_POINTS,
+                containsNaN: false
+            });
+
+            // Renderable series
+            const tickLineSeries = new SciChart.FastLineRenderableSeries(wasmContext, {
+                dataSeries: tickDataSeries,
+                stroke: "#50C7E0",
+                strokeThickness: 1
+            });
+            const smaLineSeries = new SciChart.FastLineRenderableSeries(wasmContext, {
+                dataSeries: smaDataSeries,
+                stroke: "#F48420",
+                strokeThickness: 2
+            });
+            const candlesSeries = new SciChart.FastCandlestickRenderableSeries(wasmContext2, {
+                dataSeries: ohlcDataSeries,
+                strokeUp: "#26a69a",
+                fillUp: "#26a69a55",
+                strokeDown: "#ef5350",
+                fillDown: "#ef535055",
+                strokeThickness: 1
+            });
+
+            sciChartSurface.renderableSeries.add(tickLineSeries);
+            sciChartSurface.renderableSeries.add(smaLineSeries);
+            sciChartSurface2.renderableSeries.add(candlesSeries);
+
+            // Expose surfaces globally for debugging in DevTools console
+            window.sciChartSurface = sciChartSurface;
+            window.sciChartSurface2 = sciChartSurface2;
+
+            // FPS tracking: measure actual chart renders (per-surface)
+            let frameCount = 0;
+            let lastFpsTime = performance.now();
+            const FPS_WINDOW_MS = 1000;
+
+            const updateFPS = () => {
+                frameCount++;
+                const now = performance.now();
+                const elapsed = now - lastFpsTime;
+                if (elapsed >= FPS_WINDOW_MS) {
+                    currentFPS = Math.round((frameCount * 1000) / elapsed);
+                    frameCount = 0;
+                    lastFpsTime = now;
+                }
+            };
+            sciChartSurface.renderedToDestination.subscribe(updateFPS);
+            sciChartSurface2.renderedToDestination.subscribe(updateFPS);
+
+            flushBuffers = () => {
+                flushScheduled = false;
+                if (sciChartSurface && tickDataSeries) {
+                    sciChartSurface.suspendUpdates(() => {
+                        if (tickBuffer.x.length) {
+                            tickDataSeries.appendRange(
+                                Float64Array.from(tickBuffer.x),
+                                Float64Array.from(tickBuffer.y)
+                            );
+                            tickBuffer.x.length = 0;
+                            tickBuffer.y.length = 0;
+                        }
+                        if (smaBuffer.x.length && smaDataSeries) {
+                            smaDataSeries.appendRange(
+                                Float64Array.from(smaBuffer.x),
+                                Float64Array.from(smaBuffer.y)
+                            );
+                            smaBuffer.x.length = 0;
+                            smaBuffer.y.length = 0;
+                        }
+                    });
+                }
+
+                if (sciChartSurface2 && ohlcDataSeries) {
+                    sciChartSurface2.suspendUpdates(() => {
+                        if (ohlcBuffer.x.length) {
+                            ohlcDataSeries.appendRange(
+                                Float64Array.from(ohlcBuffer.x),
+                                Float64Array.from(ohlcBuffer.o),
+                                Float64Array.from(ohlcBuffer.h),
+                                Float64Array.from(ohlcBuffer.l),
+                                Float64Array.from(ohlcBuffer.c)
+                            );
+                            ohlcBuffer.x.length = 0;
+                            ohlcBuffer.o.length = 0;
+                            ohlcBuffer.h.length = 0;
+                            ohlcBuffer.l.length = 0;
+                            ohlcBuffer.c.length = 0;
+                        }
+                    });
+                }
+            };
+
+            scheduleFlush = () => {
+                if (!flushScheduled) {
+                    flushScheduled = true;
+                    requestAnimationFrame(flushBuffers);
+                }
+            };
+
+            // Chart modifiers for zoom/pan
+            sciChartSurface.chartModifiers.add(
+                new SciChart.ZoomPanModifier(),
+                new SciChart.ZoomExtentsModifier(),
+                new SciChart.MouseWheelZoomModifier()
+            );
+            sciChartSurface2.chartModifiers.add(
+                new SciChart.ZoomPanModifier(),
+                new SciChart.ZoomExtentsModifier(),
+                new SciChart.MouseWheelZoomModifier()
+            );
+
+            // Auto-scroll functionality
+            const reenableAutoScroll = () => {
+                if (!isLiveMode) return;
+                userHasInteracted = false;
+            };
+            const markInteracted = () => {
+                userHasInteracted = true;
+                setTimeout(reenableAutoScroll, 10000);
+            };
+            const interactionEvents = ['mousedown', 'mouseup', 'wheel', 'touchstart', 'touchmove', 'keydown'];
+            interactionEvents.forEach(eventType => {
+                sciChartSurface.domCanvas2D.addEventListener(eventType, markInteracted, { passive: true });
+                sciChartSurface2.domCanvas2D.addEventListener(eventType, markInteracted, { passive: true });
+            });
+
+            const autoScrollToLatest = (force = false) => {
+                if (!lastDataTime) return;
+                if (!force && (!autoScrollEnabled || !isLiveMode || userHasInteracted)) return;
+                const windowSize = 5 * 60 * 1000;
+                const lead = windowSize * 0.05;
+                const start = lastDataTime - windowSize;
+                const end = lastDataTime + lead;
+                const xAxis1 = sciChartSurface.xAxes.get(0);
+                const xAxis2 = sciChartSurface2.xAxes.get(0);
+                if (xAxis1 && xAxis2) {
+                    xAxis1.visibleRange = new SciChart.NumberRange(start, end);
+                    xAxis2.visibleRange = new SciChart.NumberRange(start, end);
+                }
+            };
+
+            window.autoScrollToLatest = autoScrollToLatest;
+        } catch (error) {
+            console.error('SciChart initialization error:', error);
+        }
+
+        function fmtTs(ms){
+            if (typeof ms !== 'number' || !isFinite(ms)) return '';
+            const d=new Date(ms);
+            return d.toISOString().replace('T',' ').slice(0,19);
+        }
+
+        function updateTickMetrics() {
+            const now = Date.now();
+            const windowMs = 2000; // sliding window for ticks/sec
+            while (tickArrivalTimes.length && (now - tickArrivalTimes[0]) > windowMs) {
+                tickArrivalTimes.shift();
+            }
+            const ticksPerSec = tickArrivalTimes.length * 1000 / windowMs;
+            const elapsedSec = connectStart ? ((now - connectStart) / 1000).toFixed(1) : '0.0';
+
+            feedMetricsEl.textContent =
+                `ticks=${totalTickCount} | ticks/sec≈${ticksPerSec.toFixed(1)} | elapsed=${elapsedSec}s`;
+        }
+
+        const client = new WsFeedClient({
+            url: 'ws://127.0.0.1:8765',
+            storage: new MemoryStorage(), // reset resume cursor on page reload
+            onSamples: (arr) => {
+                const nowWall = Date.now();
+
+                for (const s of arr) {
+                    const sid = s.series_id || '';
+                    const { t_ms, payload } = s;
+
+                    // Simple, reliable path: append directly per-sample.
+                    if (SciChart && tickDataSeries && smaDataSeries && ohlcDataSeries) {
+                        // Detect series IDs once
+                        if (!tickSeriesId && sid.includes(':ticks')) {
+                            tickSeriesId = sid;
+                        }
+                        if (!smaSeriesId && sid.includes(':sma_')) {
+                            smaSeriesId = sid;
+                        }
+                        if (!ohlcSeriesId && sid.includes(':ohlc_time:')) {
+                            ohlcSeriesId = sid;
+                        }
+
+                        if (typeof t_ms === 'number') {
+                            lastDataTime = t_ms;
+                        }
+
+                        if (sid === tickSeriesId && typeof payload?.price === 'number' && typeof t_ms === 'number') {
+                            // Detect abnormal jumps in time between consecutive ticks (debug only)
+                            if (lastTickTs !== null) {
+                                const dt = t_ms - lastTickTs;
+                                if (Math.abs(dt) > 60_000) { // > 1 minute gap
+                                    console.warn('TIME JUMP detected in ticks:', {
+                                        prev: lastTickTs,
+                                        current: t_ms,
+                                        deltaMs: dt
+                                    });
+                                }
+                            }
+                            lastTickTs = t_ms;
+
+                            tickDataSeries.append(t_ms, payload.price);
+                        }
+
+                        if (sid === smaSeriesId && typeof payload?.value === 'number' && typeof t_ms === 'number') {
+                            smaDataSeries.append(t_ms, payload.value);
+                        }
+
+                        if (sid === ohlcSeriesId &&
+                            typeof payload?.o === 'number' &&
+                            typeof payload?.h === 'number' &&
+                            typeof payload?.l === 'number' &&
+                            typeof payload?.c === 'number' &&
+                            typeof t_ms === 'number') {
+                            ohlcDataSeries.append(t_ms, payload.o, payload.h, payload.l, payload.c);
+                        }
+                    }
+
+                    // Tick stats (existing diagnostics)
+                    if (sid.endsWith(':ticks')) {
+                        totalTickCount++;
+                        tickArrivalTimes.push(nowWall);
+                    }
+
+                    // Strategy markers (fills)
+                    if (sid.includes(':strategy:') && sid.endsWith(':markers')) {
+                        const { strategy, side, tag, price, qty } = s.payload || {};
+                        lastMarkers.push({
+                            t_ms: s.t_ms,
+                            strategy: strategy || '?',
+                            side: side || '',
+                            tag: tag || '',
+                            price: (price ?? ''),
+                            qty: (qty ?? '')
+                        });
+                        if (lastMarkers.length > 20) lastMarkers.shift();
+                    }
+
+                    // Strategy signals (intent)
+                    if (sid.includes(':strategy:') && sid.endsWith(':signals')) {
+                        const { strategy, side, desired_qty, price, reason } = s.payload || {};
+                        lastSignals.push({
+                            t_ms: s.t_ms,
+                            strategy: strategy || '?',
+                            side: side || '',
+                            qty: (desired_qty ?? ''),
+                            price: (price ?? ''),
+                            reason: reason || ''
+                        });
+                        if (lastSignals.length > 20) lastSignals.shift();
+                    }
+
+                    // PnL
+                    if (sid.includes(':strategy:') && sid.endsWith(':pnl')) {
+                        const parts = sid.split(':');
+                        const idx = parts.indexOf('strategy');
+                        const strat = (idx >= 0 && parts[idx+1]) ? parts[idx+1] : 'unknown';
+                        const value = s.payload?.value ?? 0;
+                        pnlByStrategy.set(strat, { value, lastMs: s.t_ms });
+                    }
+                }
+
+                // Render markers
+                if (markersBody) {
+                    markersBody.innerHTML = lastMarkers.map(m => (
+                        `<tr>
+                            <td>${fmtTs(m.t_ms)}</td>
+                            <td>${m.strategy}</td>
+                            <td>${m.side}</td>
+                            <td>${m.tag}</td>
+                            <td style="text-align:right">${m.price}</td>
+                            <td>${m.qty}</td>
+                        </tr>`
+                    )).join('');
+                }
+
+                // Render signals
+                if (signalsBody) {
+                    signalsBody.innerHTML = lastSignals.map(sg => (
+                        `<tr>
+                            <td>${fmtTs(sg.t_ms)}</td>
+                            <td>${sg.strategy}</td>
+                            <td>${sg.side}</td>
+                            <td>${sg.qty}</td>
+                            <td style="text-align:right">${sg.price}</td>
+                            <td>${sg.reason}</td>
+                        </tr>`
+                    )).join('');
+                }
+
+                // Render PnL table
+                if (pnlBody) {
+                    const rows = Array.from(pnlByStrategy.entries())
+                        .sort((a,b) => a[0].localeCompare(b[0]));
+                    pnlBody.innerHTML = rows.map(([strat, data]) => (
+                        `<tr>
+                            <td>${strat}</td>
+                            <td>${fmtTs(data.lastMs)}</td>
+                            <td style="text-align:right">${data.value.toFixed(2)}</td>
+                        </tr>`
+                    )).join('');
+                }
+
+                updateTickMetrics();
+
+                // Handle auto-scroll / initial zoom
+                if (SciChart && tickDataSeries && tickDataSeries.count() > 0) {
+                    if (!initialZoomDone) {
+                        initialZoomDone = true;
+                        sciChartSurface.zoomExtents();
+                        sciChartSurface2.zoomExtents();
+                        setTimeout(() => {
+                            autoScrollEnabled = true;
+                            if (window.autoScrollToLatest) window.autoScrollToLatest(true);
+                        }, 3000);
+                    } else if (window.autoScrollToLatest) {
+                        window.autoScrollToLatest();
+                    }
+                }
+            },
+            onRegistry: (rows) => {
+                registryBody.innerHTML = rows
+                    .sort((a,b) => a.id.localeCompare(b.id))
+                    .map(r => (
+                        `<tr>
+                            <td>${r.id}</td>
+                            <td>${r.count}</td>
+                            <td>${fmtTs(r.lastMs)}</td>
+                            <td>${r.gaps ?? 0}</td>
+                            <td>${r.missed ?? 0}</td>
+                        </tr>`
+                    ))
+                    .join('');
+            },
+            onStatus: (s) => {
+                if (connectStart === null && s.stage && s.stage !== 'idle') {
+                    connectStart = Date.now();
+                }
+
+                // Update live mode for auto-scroll
+                isLiveMode = s.stage === 'live';
+
+                const pill = (cls,txt) => `<span class="pill ${cls}">${txt}</span>`;
+                const stage = (s.stage || '').toLowerCase();
+                const livePill =
+                    stage === 'live'    ? pill('ok','LIVE')    :
+                        stage === 'history' ? pill('warn','HISTORY') :
+                            stage === 'delta'   ? pill('warn','DELTA') :
+                                pill('', (s.stage || 'CLOSED').toUpperCase());
+
+                const wire = (s.wireFormat || 'unknown').toString().toUpperCase();
+                const g = (s.gaps && s.gaps.global) ? s.gaps.global : { gaps: 0, missed: 0 };
+                const initGap = s.resume && s.resume.truncated ? 'YES' : 'no';
+
+                statusEl.innerHTML =
+                    `${livePill} seq=${s.lastSeq} | ` +
+                    `hist=${s.history.received}/${s.history.expected} (${s.history.pct}%) | ` +
+                    `rate=${s.rate.perSec}/s | ` +
+                    `lag=${s.heartbeatLagMs ?? '—'}ms | ` +
+                    `ws=${wire} | ` +
+                    `gaps=${g.gaps}/${g.missed} | ` +
+                    `initGap=${initGap} | ` +
+                    `FPS≈${typeof currentFPS === 'number' ? currentFPS : '—'}`;
+            },
+            onEvent: (e) => {
+                if (e.type === 'error') {
+                    console.warn('[ws error]', e);
+                }
+            }
+        });
+
+        client.connect();
+    })();
+</script>

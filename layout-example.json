@@ -1,0 +1,59 @@
+{
+  "name": "Trading Session Layout",
+  "panes": [
+    {
+      "id": "tick-pane",
+      "title": "Tick Price & Indicators",
+      "heightRatio": 0.6,
+      "series": [
+        {
+          "seriesId": "MESU5:ticks",
+          "type": "line",
+          "color": "#50C7E0",
+          "strokeThickness": 1,
+          "visible": true
+        },
+        {
+          "seriesId": "MESU5:sma_10",
+          "type": "line",
+          "color": "#F48420",
+          "strokeThickness": 1,
+          "visible": true
+        },
+        {
+          "seriesId": "MESU5:sma_20",
+          "type": "line",
+          "color": "#9C27B0",
+          "strokeThickness": 1,
+          "visible": true
+        }
+      ],
+      "overlays": [
+        {
+          "type": "hline",
+          "value": 100.0,
+          "color": "#666666",
+          "label": "Reference Level"
+        }
+      ]
+    },
+    {
+      "id": "ohlc-pane",
+      "title": "OHLC Candlesticks",
+      "heightRatio": 0.4,
+      "series": [
+        {
+          "seriesId": "MESU5:ohlc_time:3600000",
+          "type": "ohlc",
+          "visible": true
+        }
+      ]
+    }
+  ],
+  "minimapSourceSeries": "MESU5:ticks",
+  "metadata": {
+    "created": "2025-12-03T00:00:00Z",
+    "description": "Example layout with tick price, 2 SMAs, and OHLC bars"
+  }
+}
+

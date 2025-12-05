@@ -9,7 +9,9 @@ interface HUDProps {
   isLive: boolean;
   historyProgress: number;
   tickCount: number;
-  queuedSamples?: number;
+  cpuUsage?: number;
+  memoryUsage?: number;
+  gpuDrawCalls?: number;
   className?: string;
 }
 
@@ -22,7 +24,9 @@ export function HUD({
   isLive,
   historyProgress,
   tickCount,
-  queuedSamples = 0,
+  cpuUsage = 0,
+  memoryUsage = 0,
+  gpuDrawCalls = 0,
   className,
 }: HUDProps) {
   const formatTime = (ms: number) => {
@@ -130,13 +134,32 @@ export function HUD({
         <span className="text-foreground">{tickCount.toLocaleString()}</span>
       </div>
 
-      {/* Queue (when backpressure) */}
-      {queuedSamples > 100 && (
+      {/* CPU Usage */}
+      {cpuUsage > 0 && (
         <div className="flex items-center gap-1.5">
-          <span className="text-muted-foreground">Queue:</span>
+          <span className="text-muted-foreground">CPU:</span>
           <span className={cn(
-            queuedSamples > 10000 ? 'text-warning' : 'text-foreground'
-          )}>{queuedSamples.toLocaleString()}</span>
+            'font-medium',
+            cpuUsage > 80 ? 'text-destructive' : cpuUsage > 50 ? 'text-warning' : 'text-success'
+          )}>
+            {cpuUsage.toFixed(0)}%
+          </span>
+        </div>
+      )}
+
+      {/* Memory Usage */}
+      {memoryUsage > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Mem:</span>
+          <span className="text-foreground">{memoryUsage.toFixed(0)}MB</span>
+        </div>
+      )}
+
+      {/* GPU Draw Calls */}
+      {gpuDrawCalls > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">GPU:</span>
+          <span className="text-foreground">{gpuDrawCalls}</span>
         </div>
       )}
 

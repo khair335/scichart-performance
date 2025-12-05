@@ -1,0 +1,23 @@
+{
+    "name": "Current Feed Layout",
+    "panes": [
+      {
+        "id": "tick-pane",
+        "title": "Tick Price & Indicator",
+        "heightRatio": 0.6,
+        "series": [
+          { "seriesId": "ticks", "type": "line", "visible": true },
+          { "seriesId": "sma_10", "type": "line", "visible": true }
+        ]
+      },
+      {
+        "id": "ohlc-pane",
+        "title": "OHLC Candlesticks",
+        "heightRatio": 0.4,
+        "series": [
+          { "seriesId": "10000", "type": "ohlc", "visible": true }
+        ]
+      }
+    ],
+    "minimapSourceSeries": "ticks"
+  }

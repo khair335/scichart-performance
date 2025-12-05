@@ -69,7 +69,7 @@ export const defaultChartConfig: ChartConfig = {
     fifoEnabled: true,
   },
   minimap: {
-    enabled: true,
+    enabled: false, // Disabled by default for better FPS - user can enable via toolbar
     height: 60,
   },
   defaultLayout: {

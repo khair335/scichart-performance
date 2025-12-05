@@ -1,73 +1,108 @@
-# Welcome to your Lovable project
+# SciChart Real-Time Trading Terminal
 
-## Project info
+A high-performance real-time charting application built with React, Vite, and SciChart JS, powered by a Python WebSocket server.
 
-**URL**: https://lovable.dev/projects/bd2f3d95-0f96-4a68-b221-62938638768c
+## Quick Start (Local Development)
 
-## How can I edit this code?
+### Step 1 – Run static HTTP server (Terminal A)
 
-There are several ways of editing your application.
+From the directory where `index.html` and `wsfeed-client.js` live:
 
-**Use Lovable**
+```bash
+python -m http.server 8080
+```
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/bd2f3d95-0f96-4a68-b221-62938638768c) and start prompting.
+Or use Vite dev server:
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+```bash
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+* This serves the app at:
+  `http://127.0.0.1:8080/index.html` (or `http://localhost:8080` with Vite)
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Step 2 – Run WebSocket server (Terminal B)
 
-**Use GitHub Codespaces**
+Random Walk:
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+```powershell
+python server.py `
+    --mode session `
+    --instrument MESU5 `
+    --session-ms 23400000 `
+    --tick-dt-ms 25 `
+    --indicator-windows "10,20,30,40,50,60,70,80,90" `
+    --bar-intervals "10000,30000" `
+    --strategy-rate-per-min 2 `
+    --strategy-hold-bars 5 `
+    --strategy-max-open 3 `
+    --total-samples 12000000 `
+    --ring-capacity 12000000 `
+    --live-batch 2048 `
+    --emit-samples-per-sec 20000 `
+    --ws-format text `
+    --price-model randomwalk
+```
+and Sine Wave:
 
-## What technologies are used for this project?
+```powershell
+python server.py `
+    --mode session `
+    --instrument MESU5 `
+    --session-ms 23400000 `
+    --tick-dt-ms 25 `
+    --indicator-windows "10,20,30,40,50,60,70,80,90" `
+    --bar-intervals "10000,30000" `
+    --strategy-rate-per-min 2 `
+    --strategy-hold-bars 5 `
+    --strategy-max-open 3 `
+    --total-samples 12000000 `
+    --ring-capacity 12000000 `
+    --live-batch 2048 `
+    --emit-samples-per-sec 20000 `
+    --ws-format text `
+    --price-model sine `
+    --sine-period-sec 60
+```
 
-This project is built with:
+## Deployment
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+### Frontend (Vercel)
 
-## How can I deploy this project?
+The frontend can be deployed to Vercel. See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed instructions.
 
-Simply open [Lovable](https://lovable.dev/projects/bd2f3d95-0f96-4a68-b221-62938638768c) and click on Share -> Publish.
+**Quick deploy:**
+```bash
+# Install Vercel CLI
+npm i -g vercel
 
-## Can I connect a custom domain to my Lovable project?
+# Login and deploy
+vercel login
+vercel --prod
 
-Yes, you can!
+# Set WebSocket server URL
+vercel env add VITE_WS_URL production
+# Enter: wss://your-server-domain.com
+```
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+### WebSocket Server
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+**⚠️ Important**: The Python WebSocket server (`server.py`) cannot run on Vercel. You must deploy it separately.
+
+**Recommended options:**
+- **Railway** (easiest) - See [DEPLOYMENT.md](./DEPLOYMENT.md)
+- **Render** - Uses `render.yaml` config
+- **Fly.io** - Great for global distribution
+- **AWS EC2 / VPS** - Full control
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete deployment guide with all options.
+
+## Project Structure
+
+- `src/` - React frontend source code
+- `server.py` - Python WebSocket feed server
+- `public/` - Static assets and config files
+- `vercel.json` - Vercel deployment configuration
+- `requirements.txt` - Python server dependencies
+- `DEPLOYMENT.md` - Complete deployment guide
