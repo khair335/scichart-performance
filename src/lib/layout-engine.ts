@@ -626,19 +626,33 @@ class LayoutEngineClass {
       
       // Get current count in chart
       const currentCount = dataSeries.count();
-      const newCount = data.x.length;
+      const storeCount = data.x.length;
       
-      if (newCount <= currentCount) continue;
+      // Get the latest X value in both chart and store to detect new data
+      const chartMaxX = currentCount > 0 ? dataSeries.getXRange().max : 0;
+      const storeMaxX = data.x[data.x.length - 1];
       
-      // Calculate how many new points to append
-      const newDataCount = newCount - currentCount;
-      const maxBatchSize = Math.min(10000, CHART_FIFO_CAPACITY);
-      const appendCount = Math.min(newDataCount, maxBatchSize);
+      // If store has newer data (higher X value), we need to append
+      if (storeMaxX <= chartMaxX) {
+        continue; // No new data
+      }
       
+      // Find where to start appending - find first index in store data > chartMaxX
+      let startIdx = 0;
+      for (let i = data.x.length - 1; i >= 0; i--) {
+        if (data.x[i] <= chartMaxX) {
+          startIdx = i + 1;
+          break;
+        }
+      }
+      
+      const appendCount = data.x.length - startIdx;
       if (appendCount <= 0) continue;
       
-      // Start from the appropriate index
-      const startIdx = newCount - appendCount;
+      // Limit batch size for performance
+      const maxBatchSize = Math.min(5000, CHART_FIFO_CAPACITY);
+      const actualAppendCount = Math.min(appendCount, maxBatchSize);
+      const actualStartIdx = data.x.length - actualAppendCount;
       
       try {
         pane.surface.suspendUpdates();
@@ -647,18 +661,18 @@ class LayoutEngineClass {
           // OHLC
           const ohlcDs = dataSeries as OhlcDataSeries;
           ohlcDs.appendRange(
-            data.x.slice(startIdx, startIdx + appendCount),
-            data.o.slice(startIdx, startIdx + appendCount),
-            data.h!.slice(startIdx, startIdx + appendCount),
-            data.l!.slice(startIdx, startIdx + appendCount),
-            data.c!.slice(startIdx, startIdx + appendCount)
+            data.x.slice(actualStartIdx),
+            data.o.slice(actualStartIdx),
+            data.h!.slice(actualStartIdx),
+            data.l!.slice(actualStartIdx),
+            data.c!.slice(actualStartIdx)
           );
         } else {
           // XY
           const xyDs = dataSeries as XyDataSeries;
           xyDs.appendRange(
-            data.x.slice(startIdx, startIdx + appendCount),
-            data.y.slice(startIdx, startIdx + appendCount)
+            data.x.slice(actualStartIdx),
+            data.y.slice(actualStartIdx)
           );
         }
         
@@ -910,21 +924,32 @@ class LayoutEngineClass {
     // Convert to seconds for DateTimeNumericAxis
     const maxTimeSec = maxTimeMs / 1000;
     
-    // Set visible range to show last 60 seconds of data (more responsive)
-    const windowSec = 60; // 60 seconds
+    // Set visible range to show last 60 seconds of data
+    const windowSec = 60;
     const minTimeSec = maxTimeSec - windowSec;
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
         pane.xAxis.visibleRange = new NumberRange(minTimeSec, maxTimeSec);
+        // Use SciChart's native autoRange for Y-axis (efficient)
+        pane.yAxis.autoRange = EAutoRange.Always;
         
-        // Manually calculate Y range from data in visible X window
-        this.updateYAxisForVisibleRange(pane, minTimeSec, maxTimeSec);
-        
-        pane.surface.invalidateElement();
+        // Debug: Log one-time info per pane
+        if (!this._debuggedPanes.has(pane.id)) {
+          this._debuggedPanes.add(pane.id);
+          console.log(`[LayoutEngine] ${pane.id}: X range ${minTimeSec.toFixed(0)}-${maxTimeSec.toFixed(0)}, series count: ${pane.surface.renderableSeries.size()}`);
+          for (const [seriesId, ds] of pane.dataSeries.entries()) {
+            const count = ds.count();
+            const xRange = count > 0 ? ds.getXRange() : null;
+            const rs = pane.renderableSeries.get(seriesId);
+            console.log(`[LayoutEngine] ${seriesId}: ${count} pts, X=${xRange?.min?.toFixed(0)}-${xRange?.max?.toFixed(0)}, visible=${rs?.isVisible}`);
+          }
+        }
       }
     }
   }
+  
+  private _debuggedPanes: Set<string> = new Set();
   
   // Calculate and set Y-axis range based on data within visible X window
   private updateYAxisForVisibleRange(pane: PaneSurface, minX: number, maxX: number): void {
