@@ -9,6 +9,7 @@ interface HUDProps {
   isLive: boolean;
   historyProgress: number;
   tickCount: number;
+  queuedSamples?: number;
   className?: string;
 }
 
@@ -21,6 +22,7 @@ export function HUD({
   isLive,
   historyProgress,
   tickCount,
+  queuedSamples = 0,
   className,
 }: HUDProps) {
   const formatTime = (ms: number) => {
@@ -127,6 +129,16 @@ export function HUD({
         <span className="text-muted-foreground">Ticks:</span>
         <span className="text-foreground">{tickCount.toLocaleString()}</span>
       </div>
+
+      {/* Queue (when backpressure) */}
+      {queuedSamples > 100 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Queue:</span>
+          <span className={cn(
+            queuedSamples > 10000 ? 'text-warning' : 'text-foreground'
+          )}>{queuedSamples.toLocaleString()}</span>
+        </div>
+      )}
 
       {/* Live/Paused indicator */}
       <div className="ml-auto">

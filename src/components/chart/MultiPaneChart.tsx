@@ -25,6 +25,7 @@ import {
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
+import { darkChartTheme } from '@/lib/chart-theme';
 
 interface MultiPaneChartProps {
   tickContainerId: string;
@@ -74,31 +75,8 @@ export function useMultiPaneChart({
   const lastDataTimeRef = useRef(0);
   const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Theme configuration
-  const chartTheme = {
-    type: 'Custom' as const,
-    axisBorder: 'transparent',
-    axisTitleColor: '#9fb2c9',
-    annotationsGripsBackgroundBrush: 'transparent',
-    annotationsGripsBorderBrush: 'transparent',
-    axis3DBandsFill: 'transparent',
-    axisBandsFill: 'transparent',
-    gridBackgroundBrush: 'transparent',
-    gridBorderBrush: 'transparent',
-    loadingAnimationBackground: '#1c2027',
-    loadingAnimationForeground: '#50C7E0',
-    majorGridLineBrush: '#2a3040',
-    minorGridLineBrush: '#1e2530',
-    sciChartBackground: '#1c2027',
-    tickTextBrush: '#9fb2c9',
-    labelBackgroundBrush: '#1c2027',
-    labelBorderBrush: '#3a424c',
-    labelForegroundBrush: '#9fb2c9',
-    textAnnotationBackground: '#2a2f36',
-    textAnnotationForeground: '#c9d7e6',
-    cursorLineBrush: '#50C7E0',
-    rolloverLineStroke: '#50C7E0',
-  };
+  // Use proper SciChart theme
+  const chartTheme = darkChartTheme;
 
   // Initialize charts
   useEffect(() => {
