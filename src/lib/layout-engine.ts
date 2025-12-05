@@ -319,11 +319,17 @@ class LayoutEngineClass {
           existingData.l!.slice(startIdx),
           existingData.c!.slice(startIdx)
         );
+        console.log(`[LayoutEngine] OHLC ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}`);
       } else {
         (dataSeries as XyDataSeries).appendRange(
           existingData.x.slice(startIdx),
           existingData.y.slice(startIdx)
         );
+        // Log actual data range for debugging
+        const ySlice = existingData.y.slice(startIdx);
+        const minY = Math.min(...Array.from(ySlice));
+        const maxY = Math.max(...Array.from(ySlice));
+        console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
       }
       console.log(`[LayoutEngine] Populated ${config.series_id} with ${dataToAppend} existing points`);
     }

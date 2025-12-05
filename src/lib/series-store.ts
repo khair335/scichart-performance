@@ -126,24 +126,34 @@ class SeriesStoreClass {
     // Circular buffer write
     const idx = buffer.head;
     // SciChart DateTimeNumericAxis expects Unix timestamp in SECONDS, not milliseconds
-    buffer.xValues[idx] = sample.t_ms / 1000;
+    const xVal = sample.t_ms / 1000;
+    buffer.xValues[idx] = xVal;
     
     // Handle different payload types
     if (buffer.openValues && 'o' in payload) {
       // OHLC data
-      buffer.openValues[idx] = Number(payload.o) || 0;
-      buffer.highValues![idx] = Number(payload.h) || 0;
-      buffer.lowValues![idx] = Number(payload.l) || 0;
-      buffer.closeValues![idx] = Number(payload.c) || 0;
-      buffer.yValues[idx] = Number(payload.c) || 0; // Use close as Y
+      const oVal = Number(payload.o) || 0;
+      const hVal = Number(payload.h) || 0;
+      const lVal = Number(payload.l) || 0;
+      const cVal = Number(payload.c) || 0;
+      buffer.openValues[idx] = oVal;
+      buffer.highValues![idx] = hVal;
+      buffer.lowValues![idx] = lVal;
+      buffer.closeValues![idx] = cVal;
+      buffer.yValues[idx] = cVal; // Use close as Y
+      
+      // Debug: Log first few OHLC samples
+      if (metadata.pointCount < 3) {
+        console.log(`[SeriesStore] OHLC sample: series=${metadata.seriesId}, x=${xVal}, o=${oVal}, h=${hVal}, l=${lVal}, c=${cVal}`);
+      }
     } else {
       // Tick/indicator data - extract y value
       const yVal = Number(payload.y ?? payload.price ?? payload.value ?? 0);
       buffer.yValues[idx] = yVal;
       
-      // Debug: Log first few samples for tick series
-      if (metadata.seriesId.includes(':ticks') && metadata.pointCount < 5) {
-        console.log(`[SeriesStore] Tick sample: series=${metadata.seriesId}, t_ms=${sample.t_ms}, payload=`, payload, `extracted y=${yVal}`);
+      // Debug: Log first few samples for all XY series
+      if (metadata.pointCount < 3) {
+        console.log(`[SeriesStore] XY sample: series=${metadata.seriesId}, x=${xVal}, y=${yVal}, payload=`, payload);
       }
     }
     
