@@ -86,7 +86,7 @@ interface DataSeriesEntry {
   dataSeries: XyDataSeries | OhlcDataSeries;
   renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries;
   chartTarget: 'tick' | 'ohlc'; // Which chart surface this series belongs to
-  seriesType: 'tick' | 'ohlc-bar' | 'tick-indicator' | 'bar-indicator' | 'strategy-marker' | 'strategy-signal' | 'strategy-pnl';
+  seriesType: 'tick' | 'ohlc-bar' | 'tick-indicator' | 'bar-indicator' | 'strategy-marker' | 'strategy-signal' | 'strategy-pnl' | 'other';
 }
 
 interface ChartRefs {
@@ -99,6 +99,65 @@ interface ChartRefs {
   dataSeriesStore: Map<string, DataSeriesEntry>;
   verticalGroup: SciChartVerticalGroup | null;
   overview: SciChartOverview | null;
+}
+
+// Helper function to get Y range from any data series type
+function getDataSeriesYRange(dataSeries: XyDataSeries | OhlcDataSeries, xMin?: number, xMax?: number): { min: number; max: number } | null {
+  try {
+    if (dataSeries.count() === 0) return null;
+    
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    const count = dataSeries.count();
+    
+    // Check if it's an OHLC series (has high/low values)
+    if ('getNativeHighValues' in dataSeries) {
+      const ohlcDs = dataSeries as OhlcDataSeries;
+      const xValues = ohlcDs.getNativeXValues();
+      const highValues = ohlcDs.getNativeHighValues();
+      const lowValues = ohlcDs.getNativeLowValues();
+      
+      for (let i = 0; i < count; i++) {
+        const x = xValues.get(i);
+        // Skip if outside X range (if specified)
+        if (xMin !== undefined && xMax !== undefined) {
+          if (x < xMin || x > xMax) continue;
+        }
+        const high = highValues.get(i);
+        const low = lowValues.get(i);
+        if (isFinite(high) && isFinite(low)) {
+          yMin = Math.min(yMin, low);
+          yMax = Math.max(yMax, high);
+        }
+      }
+    } else {
+      // XyDataSeries - use getNativeXValues and getNativeYValues
+      const xyDs = dataSeries as XyDataSeries;
+      const xValues = xyDs.getNativeXValues();
+      const yValues = xyDs.getNativeYValues();
+      
+      for (let i = 0; i < count; i++) {
+        const x = xValues.get(i);
+        // Skip if outside X range (if specified)
+        if (xMin !== undefined && xMax !== undefined) {
+          if (x < xMin || x > xMax) continue;
+        }
+        const y = yValues.get(i);
+        if (isFinite(y)) {
+          yMin = Math.min(yMin, y);
+          yMax = Math.max(yMax, y);
+        }
+      }
+    }
+    
+    if (isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
+      return { min: yMin, max: yMax };
+    }
+    
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
 export function useMultiPaneChart({
@@ -1234,27 +1293,12 @@ export function useMultiPaneChart({
                   
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
                     if (entry.chartTarget === 'tick' && entry.dataSeries.count() > 0) {
-                      try {
-                        // Get Y-range for data within visible X-axis range only
-                        // This prevents scaling to full history data
-                        const yRange = entry.dataSeries.getYRange(visibleXMin, visibleXMax);
-                        if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                          yMin = Math.min(yMin, yRange.min);
-                          yMax = Math.max(yMax, yRange.max);
-                          hasYData = true;
-                        }
-                      } catch (err) {
-                        // If getYRange with X-filter fails, try full range as last resort
-                        try {
-                          const yRange = entry.dataSeries.getYRange();
-                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                            yMin = Math.min(yMin, yRange.min);
-                            yMax = Math.max(yMax, yRange.max);
-                            hasYData = true;
-                          }
-                        } catch (err2) {
-                          // Ignore
-                        }
+                      // Get Y-range for data within visible X-axis range only
+                      const yRange = getDataSeriesYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                      if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
+                        yMin = Math.min(yMin, yRange.min);
+                        yMax = Math.max(yMax, yRange.max);
+                        hasYData = true;
                       }
                     }
                   }
@@ -1299,27 +1343,12 @@ export function useMultiPaneChart({
                   
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
                     if (entry.chartTarget === 'ohlc' && entry.dataSeries.count() > 0) {
-                      try {
-                        // Get Y-range for data within visible X-axis range only
-                        // This prevents scaling to full history data
-                        const yRange = entry.dataSeries.getYRange(visibleXMin, visibleXMax);
-                        if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                          yMin = Math.min(yMin, yRange.min);
-                          yMax = Math.max(yMax, yRange.max);
-                          hasYData = true;
-                        }
-                      } catch (err) {
-                        // If getYRange with X-filter fails, try full range as last resort
-                        try {
-                          const yRange = entry.dataSeries.getYRange();
-                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                            yMin = Math.min(yMin, yRange.min);
-                            yMax = Math.max(yMax, yRange.max);
-                            hasYData = true;
-                          }
-                        } catch (err2) {
-                          // Ignore
-                        }
+                      // Get Y-range for data within visible X-axis range only
+                      const yRange = getDataSeriesYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                      if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
+                        yMin = Math.min(yMin, yRange.min);
+                        yMax = Math.max(yMax, yRange.max);
+                        hasYData = true;
                       }
                     }
                   }
@@ -1460,6 +1489,7 @@ export function useMultiPaneChart({
           // 3. Or diff is significant (smooth scrolling threshold)
           // 4. Or current range is too wide (showing old history instead of recent data)
           const isDataOutsideRange = actualDataMax > currentMax || actualDataMax < currentMin;
+          const isDataAhead = actualDataMax > currentMax; // Data is ahead of visible range
           const currentRangeWidth = currentMax - currentMin;
           const isRangeTooWide = currentRangeWidth > windowMs * 1.5; // If range is > 15 minutes, it's too wide
           
@@ -1914,15 +1944,11 @@ export function useMultiPaneChart({
                         let hasYData = false;
                         
                         for (const entry of entriesWithData) {
-                          try {
-                            const yRange = entry.dataSeries.getYRange();
-                            if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                              yMin = Math.min(yMin, yRange.min);
-                              yMax = Math.max(yMax, yRange.max);
-                              hasYData = true;
-                            }
-                          } catch (e) {
-                            // Ignore errors for individual series
+                          const yRange = getDataSeriesYRange(entry.dataSeries);
+                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
+                            yMin = Math.min(yMin, yRange.min);
+                            yMax = Math.max(yMax, yRange.max);
+                            hasYData = true;
                           }
                         }
                         
@@ -2017,15 +2043,11 @@ export function useMultiPaneChart({
                         let hasYData = false;
                         
                         for (const entry of entriesWithData) {
-                          try {
-                            const yRange = entry.dataSeries.getYRange();
-                            if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                              yMin = Math.min(yMin, yRange.min);
-                              yMax = Math.max(yMax, yRange.max);
-                              hasYData = true;
-                            }
-                          } catch (e) {
-                            // Ignore errors for individual series
+                          const yRange = getDataSeriesYRange(entry.dataSeries);
+                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
+                            yMin = Math.min(yMin, yRange.min);
+                            yMax = Math.max(yMax, yRange.max);
+                            hasYData = true;
                           }
                         }
                         
