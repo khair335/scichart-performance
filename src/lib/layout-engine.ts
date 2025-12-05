@@ -189,14 +189,13 @@ class LayoutEngineClass {
         }
       }
       
-      // Jump to live data immediately - this ensures we see the latest data
-      // FIFO data series can have stale X range values with getXRange()
-      this.jumpToLive();
+      // Use zoomExtents to show all data initially (this was working before)
+      this.zoomExtents();
       
-      // Delayed jump to live again to ensure data is fully populated
+      // Delayed zoomExtents to ensure rendering completes
       setTimeout(() => {
-        this.jumpToLive();
-        console.log('[LayoutEngine] Delayed jumpToLive applied');
+        this.zoomExtents();
+        console.log('[LayoutEngine] Delayed zoomExtents applied');
       }, 500);
       
       // Third delayed check for full rendering
@@ -638,72 +637,91 @@ class LayoutEngineClass {
         continue;
       }
       
-      // Get current count in chart
+      // Simple approach: append newest data that chart doesn't have yet
+      // Use count comparison - if store has more data, append the difference
       const currentCount = dataSeries.count();
       const storeCount = data.x.length;
       
-      // Get the latest X value in both chart and store to detect new data
-      const chartMaxX = currentCount > 0 ? dataSeries.getXRange().max : 0;
-      const storeMaxX = data.x[data.x.length - 1];
-      
-      // If store has newer data (higher X value), we need to append
-      if (storeMaxX <= chartMaxX) {
-        continue; // No new data
-      }
-      
-      // Find where to start appending - find first index in store data > chartMaxX
-      let startIdx = 0;
-      for (let i = data.x.length - 1; i >= 0; i--) {
-        if (data.x[i] <= chartMaxX) {
-          startIdx = i + 1;
-          break;
-        }
-      }
-      
-      const appendCount = data.x.length - startIdx;
-      if (appendCount <= 0) continue;
-      
-      // Limit batch size for performance
-      const maxBatchSize = Math.min(5000, CHART_FIFO_CAPACITY);
-      const actualAppendCount = Math.min(appendCount, maxBatchSize);
-      const actualStartIdx = data.x.length - actualAppendCount;
-      
-      try {
-        pane.surface.suspendUpdates();
+      // If chart is full (FIFO), we need to track by timestamp instead
+      if (currentCount >= CHART_FIFO_CAPACITY - 100) {
+        // Chart FIFO is nearly full - use timestamp-based sync
+        const chartMaxX = dataSeries.getXRange().max;
+        const storeMaxX = data.x[data.x.length - 1];
         
-        if ('appendRange' in dataSeries && data.o) {
-          // OHLC
-          const ohlcDs = dataSeries as OhlcDataSeries;
-          ohlcDs.appendRange(
-            data.x.slice(actualStartIdx),
-            data.o.slice(actualStartIdx),
-            data.h!.slice(actualStartIdx),
-            data.l!.slice(actualStartIdx),
-            data.c!.slice(actualStartIdx)
-          );
-        } else {
-          // XY
-          const xyDs = dataSeries as XyDataSeries;
-          xyDs.appendRange(
-            data.x.slice(actualStartIdx),
-            data.y.slice(actualStartIdx)
-          );
+        if (storeMaxX <= chartMaxX) continue;
+        
+        // Find first index in store with X > chartMaxX
+        let startIdx = data.x.length;
+        for (let i = data.x.length - 1; i >= 0; i--) {
+          if (data.x[i] <= chartMaxX) {
+            startIdx = i + 1;
+            break;
+          }
+          if (i === 0) startIdx = 0;
         }
         
-        pane.surface.resumeUpdates();
-        dataAppended = true;
-      } catch (e) {
-        console.error(`[LayoutEngine] Error draining ${seriesId}:`, e);
+        if (startIdx >= data.x.length) continue;
+        
+        try {
+          pane.surface.suspendUpdates();
+          
+          if ('appendRange' in dataSeries && data.o) {
+            (dataSeries as OhlcDataSeries).appendRange(
+              data.x.slice(startIdx),
+              data.o.slice(startIdx),
+              data.h!.slice(startIdx),
+              data.l!.slice(startIdx),
+              data.c!.slice(startIdx)
+            );
+          } else {
+            (dataSeries as XyDataSeries).appendRange(
+              data.x.slice(startIdx),
+              data.y.slice(startIdx)
+            );
+          }
+          
+          pane.surface.resumeUpdates();
+          dataAppended = true;
+        } catch (e) {
+          console.error(`[LayoutEngine] Error draining ${seriesId}:`, e);
+        }
+      } else {
+        // Chart has room - use simple count-based sync
+        if (storeCount <= currentCount) continue;
+        
+        const newDataCount = storeCount - currentCount;
+        const appendCount = Math.min(newDataCount, 5000);
+        const startIdx = storeCount - appendCount;
+        
+        try {
+          pane.surface.suspendUpdates();
+          
+          if ('appendRange' in dataSeries && data.o) {
+            (dataSeries as OhlcDataSeries).appendRange(
+              data.x.slice(startIdx),
+              data.o.slice(startIdx),
+              data.h!.slice(startIdx),
+              data.l!.slice(startIdx),
+              data.c!.slice(startIdx)
+            );
+          } else {
+            (dataSeries as XyDataSeries).appendRange(
+              data.x.slice(startIdx),
+              data.y.slice(startIdx)
+            );
+          }
+          
+          pane.surface.resumeUpdates();
+          dataAppended = true;
+        } catch (e) {
+          console.error(`[LayoutEngine] Error draining ${seriesId}:`, e);
+        }
       }
     }
     
-    // Log unmatched series (series in store but not in layout)
-    if (!foundInPane) {
-      // Only log once per series
-      if (!this._loggedUnmatchedSeries.has(seriesId)) {
-        this._loggedUnmatchedSeries.add(seriesId);
-        console.warn(`[LayoutEngine] Series ${seriesId} in store but NOT in layout - check series_id mismatch!`);
-      }
+    if (!foundInPane && !this._loggedUnmatchedSeries.has(seriesId)) {
+      this._loggedUnmatchedSeries.add(seriesId);
+      console.warn(`[LayoutEngine] Series ${seriesId} in store but NOT in layout`);
     }
     
     return dataAppended;
