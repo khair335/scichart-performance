@@ -123,15 +123,13 @@ class SeriesStoreClass {
     const { buffer, metadata } = entry;
     const payload = sample.payload;
     
-    // Circular buffer write
-    const idx = buffer.head;
-    // SciChart DateTimeNumericAxis expects Unix timestamp in SECONDS, not milliseconds
-    const xVal = sample.t_ms / 1000;
-    buffer.xValues[idx] = xVal;
-    
     // Handle different payload types
     if (buffer.openValues && 'o' in payload) {
-      // OHLC data
+      // OHLC data - always append
+      const idx = buffer.head;
+      const xVal = sample.t_ms / 1000;
+      buffer.xValues[idx] = xVal;
+      
       const oVal = Number(payload.o) || 0;
       const hVal = Number(payload.h) || 0;
       const lVal = Number(payload.l) || 0;
@@ -148,7 +146,21 @@ class SeriesStoreClass {
       }
     } else {
       // Tick/indicator data - extract y value
-      const yVal = Number(payload.y ?? payload.price ?? payload.value ?? 0);
+      // IMPORTANT: Skip null/undefined values to avoid polluting axis range
+      const rawValue = payload.y ?? payload.price ?? payload.value;
+      if (rawValue === null || rawValue === undefined) {
+        // Skip this sample - don't store nulls as zeros
+        return;
+      }
+      
+      const yVal = Number(rawValue);
+      if (isNaN(yVal)) {
+        return; // Skip invalid numbers
+      }
+      
+      const idx = buffer.head;
+      const xVal = sample.t_ms / 1000;
+      buffer.xValues[idx] = xVal;
       buffer.yValues[idx] = yVal;
       
       // Debug: Log first few samples for all XY series
@@ -157,7 +169,8 @@ class SeriesStoreClass {
       }
     }
     
-    // Update head and count
+    // Update head and count (only reached if we actually stored data)
+    const idx = buffer.head;
     buffer.head = (buffer.head + 1) % buffer.capacity;
     if (buffer.count < buffer.capacity) {
       buffer.count++;
