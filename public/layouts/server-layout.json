@@ -1,0 +1,55 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "panes": [
+    {
+      "id": "tick-pane",
+      "title": "Tick Price & SMA",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1
+    },
+    {
+      "id": "ohlc-pane",
+      "title": "OHLC (10s bars)",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "isBar": true
+    }
+  ],
+  "series": [
+    {
+      "series_id": "SYN:ticks",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#50C7E0",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "SYN:sma_10",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#F48420",
+      "strokeThickness": 2
+    },
+    {
+      "series_id": "SYN:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "minimap": {
+    "source": {
+      "series_id": "SYN:ticks",
+      "yField": "y"
+    }
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "Server Layout (SYN instrument)",
+    "description": "Layout matching server.py default output"
+  }
+}
