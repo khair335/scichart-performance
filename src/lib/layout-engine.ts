@@ -444,7 +444,16 @@ class LayoutEngineClass {
           existingData.l!.slice(startIdx),
           existingData.c!.slice(startIdx)
         );
-        console.log(`[LayoutEngine] OHLC ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}`);
+        // Calculate Y range from high/low values
+        const hSlice = existingData.h!.slice(startIdx);
+        const lSlice = existingData.l!.slice(startIdx);
+        const minY = Math.min(...Array.from(lSlice));
+        const maxY = Math.max(...Array.from(hSlice));
+        console.log(`[LayoutEngine] OHLC ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
+        
+        // Force Y-axis to this range immediately
+        const padding = (maxY - minY) * 0.05 || 1;
+        pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
       } else {
         (dataSeries as XyDataSeries).appendRange(
           existingData.x.slice(startIdx),
@@ -455,10 +464,15 @@ class LayoutEngineClass {
         const minY = Math.min(...Array.from(ySlice));
         const maxY = Math.max(...Array.from(ySlice));
         console.log(`[LayoutEngine] XY ${config.series_id}: appended ${dataToAppend} points, X range: ${existingData.x[startIdx]} to ${existingData.x[existingData.x.length-1]}, Y range: ${minY} to ${maxY}`);
+        
+        // Force Y-axis to this range immediately
+        const padding = (maxY - minY) * 0.05 || 1;
+        pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
       }
       console.log(`[LayoutEngine] Populated ${config.series_id} with ${dataToAppend} existing points`);
       
-      // Force surface invalidation after populating data
+      // Force surface invalidation and zoomExtents after populating data
+      surface.zoomExtents();
       surface.invalidateElement();
     }
     
