@@ -274,18 +274,20 @@ class LayoutEngineClass {
       const canvas = container.querySelector('canvas');
       console.log(`[LayoutEngine] Surface ${config.id} created, canvas present: ${!!canvas}, canvas size: ${canvas?.width}x${canvas?.height}`);
       
-      // Add WebGL context lost listener
+      // Add WebGL context lost listener (but don't try to acquire context - SciChart owns it)
       if (canvas) {
         canvas.addEventListener('webglcontextlost', (e) => {
-          console.error(`[LayoutEngine] WebGL context LOST for ${config.id}!`, e);
+          console.error(`[LayoutEngine] WebGL context LOST for ${config.id}!`);
+          e.preventDefault(); // Try to restore context
         });
-        canvas.addEventListener('webglcontextrestored', (e) => {
-          console.log(`[LayoutEngine] WebGL context restored for ${config.id}`, e);
+        canvas.addEventListener('webglcontextrestored', () => {
+          console.log(`[LayoutEngine] WebGL context restored for ${config.id}`);
+          // Try to invalidate surface to force redraw
+          const pane = this.state.panes.get(config.id);
+          if (pane && !pane.isDeleted) {
+            pane.surface.invalidateElement();
+          }
         });
-        
-        // Check if WebGL context is valid
-        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-        console.log(`[LayoutEngine] Surface ${config.id} WebGL context: ${gl ? 'valid' : 'NULL'}`);
       }
       
       // Create X axis (DateTime)
@@ -731,6 +733,23 @@ class LayoutEngineClass {
       } catch (e) {
         console.error('[LayoutEngine] Listener error:', e);
       }
+    }
+  }
+  
+  // Set visibility for all series based on the provided set
+  setSeriesVisibility(visibleSeries: Set<string>): void {
+    for (const pane of this.state.panes.values()) {
+      if (pane.isDeleted) continue;
+      
+      for (const [seriesId, renderableSeries] of pane.renderableSeries) {
+        const shouldBeVisible = visibleSeries.has(seriesId);
+        if (renderableSeries.isVisible !== shouldBeVisible) {
+          renderableSeries.isVisible = shouldBeVisible;
+        }
+      }
+      
+      // Invalidate surface to apply visibility changes
+      pane.surface.invalidateElement();
     }
   }
   
