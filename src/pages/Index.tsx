@@ -1,10 +1,11 @@
 import { Helmet } from 'react-helmet-async';
-import { TradingChart } from '@/components/chart/TradingChart';
+import { TradingChartV2 } from '@/components/chart/TradingChartV2';
 import { useEffect, useState } from 'react';
+import type { UIConfig } from '@/types/layout';
 
 const Index = () => {
-  const [config, setConfig] = useState<any>(null);
-  const [uiConfig, setUIConfig] = useState<any>(null);
+  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
+  const [uiConfig, setUIConfig] = useState<UIConfig | null>(null);
   
   // Load config.json and ui-config.json on startup
   useEffect(() => {
@@ -12,14 +13,14 @@ const Index = () => {
       fetch('/config.json').then(res => res.json()).catch(() => ({})),
       fetch('/ui-config.json').then(res => res.json()).catch(() => ({}))
     ]).then(([cfg, uiCfg]) => {
-      console.log('Config loaded:', cfg);
-      console.log('UI Config loaded:', uiCfg);
+      console.log('[Index] Config loaded:', cfg);
+      console.log('[Index] UI Config loaded:', uiCfg);
       setConfig(cfg);
-      setUIConfig(uiCfg);
+      setUIConfig(uiCfg as UIConfig);
     }).catch(err => {
-      console.warn('Config files not found, using defaults:', err);
+      console.warn('[Index] Config files not found, using defaults:', err);
       setConfig({});
-      setUIConfig({});
+      setUIConfig({} as UIConfig);
     });
   }, []);
   
@@ -34,8 +35,8 @@ const Index = () => {
     );
   }
   
-  // Get WebSocket URL from environment variable, config.json, or default
-  const wsUrl = import.meta.env.VITE_WS_URL || config.wsUrl || 'ws://127.0.0.1:8765';
+  // Get WebSocket URL from ui-config, environment variable, or default
+  const wsUrl = uiConfig?.transport?.wsUrl || import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8765';
   
   return (
     <>
@@ -44,7 +45,7 @@ const Index = () => {
         <meta name="description" content="High-performance real-time charting UI for market data visualization with SciChart JS" />
       </Helmet>
       
-      <TradingChart wsUrl={wsUrl} uiConfig={uiConfig} />
+      <TradingChartV2 wsUrl={wsUrl} uiConfig={uiConfig} />
     </>
   );
 };

@@ -1,19 +1,20 @@
 // TradingChartV2 - Layout-driven chart system
-// This version implements the complete pipeline architecture
+// Implements the complete pipeline: WS → SeriesStore → LayoutEngine → Charts
 
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, Command, RefreshCw } from 'lucide-react';
+import { Play, Pause, Maximize, ZoomIn, Layout, Moon, Sun, List, RefreshCw, RotateCcw } from 'lucide-react';
 import { HUD } from './HUD';
 import { SeriesBrowser } from './SeriesBrowser';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
 import { useIngestPipeline } from '@/hooks/useIngestPipeline';
 import { useLayoutManager } from '@/hooks/useLayoutManager';
+import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
 import { LayoutEngine } from '@/lib/layout-engine';
 import { SeriesStore } from '@/lib/series-store';
 import type { PlotLayoutJSON, UIConfig } from '@/types/layout';
-import type { RegistryRow } from '@/lib/wsfeed-client';
+import type { RegistryRow, Sample } from '@/lib/wsfeed-client';
 
 interface TradingChartV2Props {
   wsUrl?: string;
@@ -33,13 +34,25 @@ export function TradingChartV2({
   const [seriesBrowserOpen, setSeriesBrowserOpen] = useState(false);
   const [visibleSeries, setVisibleSeries] = useState<Set<string>>(new Set());
   const [demoMode, setDemoMode] = useState(false);
+  const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
+  const [tickCount, setTickCount] = useState(0);
   
-  // Use the new ingest pipeline
+  // Configure SeriesStore from UI config
+  useEffect(() => {
+    if (uiConfig?.data?.buffers) {
+      SeriesStore.configure({
+        pointsPerSeries: uiConfig.data.buffers.pointsPerSeries,
+        maxPointsTotal: uiConfig.data.buffers.maxPointsTotal,
+      });
+    }
+  }, [uiConfig]);
+  
+  // Use the ingest pipeline (only when not in demo mode)
   const {
     stage,
     isConnected,
     stats,
-    registry,
+    registry: wsRegistry,
     connect,
     disconnect,
     status,
@@ -59,6 +72,51 @@ export function TradingChartV2({
     loadLayoutFromFile,
     clearLayout,
   } = useLayoutManager({ uiConfig });
+  
+  // Handle demo samples - append to SeriesStore
+  const handleDemoSamples = useCallback((samples: Sample[]) => {
+    // Append to SeriesStore (the source of truth)
+    SeriesStore.appendSamples(samples);
+    
+    // Update tick count
+    const newTicks = samples.filter(s => s.series_id.includes(':ticks')).length;
+    setTickCount(prev => prev + newTicks);
+    
+    // Update demo registry
+    setDemoRegistry(prev => {
+      const map = new Map(prev.map(r => [r.id, r]));
+      for (const s of samples) {
+        const existing = map.get(s.series_id);
+        if (existing) {
+          existing.count++;
+          existing.lastSeq = s.seq;
+          existing.lastMs = s.t_ms;
+        } else {
+          map.set(s.series_id, {
+            id: s.series_id,
+            count: 1,
+            firstSeq: s.seq,
+            lastSeq: s.seq,
+            firstMs: s.t_ms,
+            lastMs: s.t_ms,
+            firstSeriesSeq: null,
+            lastSeriesSeq: null,
+            gaps: 0,
+            missed: 0,
+          });
+        }
+      }
+      return Array.from(map.values());
+    });
+  }, []);
+  
+  // Demo data generator
+  useDemoDataGenerator({
+    enabled: demoMode,
+    ticksPerSecond: 50,
+    basePrice: 6000,
+    onSamples: handleDemoSamples,
+  });
   
   // FPS counter
   const fpsCounterRef = useRef({ frameCount: 0, lastTime: performance.now() });
@@ -99,6 +157,45 @@ export function TradingChartV2({
     return unsubscribe;
   }, []);
   
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      switch (e.key.toLowerCase()) {
+        case 'j':
+          handleJumpToLive();
+          break;
+        case 'z':
+          handleZoomExtents();
+          break;
+        case 't':
+          handleToggleTheme();
+          break;
+        case 'f':
+          document.documentElement.requestFullscreen?.();
+          break;
+        case ' ':
+          e.preventDefault();
+          handleToggleLive();
+          break;
+      }
+      
+      // Ctrl/Cmd + K for command palette (future)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        // TODO: Open command palette
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+  
+  // Use appropriate registry
+  const registry = demoMode ? demoRegistry : wsRegistry;
+  
   // Theme toggle
   const handleToggleTheme = useCallback(() => {
     setTheme(prev => {
@@ -134,7 +231,9 @@ export function TradingChartV2({
   // Start demo mode
   const handleStartDemo = useCallback(() => {
     setDemoMode(true);
-    // Demo mode will be handled by useDemoDataGenerator
+    setTickCount(0);
+    setDemoRegistry([]);
+    SeriesStore.clear();
   }, []);
   
   // Series visibility
@@ -158,11 +257,11 @@ export function TradingChartV2({
     setVisibleSeries(new Set());
   }, []);
   
-  // Convert registry to expected format
-  const registryForBrowser: RegistryRow[] = registry;
-  
   const showConnectionOverlay = !isConnected && stage !== 'connecting' && !demoMode;
   const showConnectingOverlay = stage === 'connecting' && !demoMode;
+  const currentStage = demoMode ? 'demo' : stage;
+  const currentRate = demoMode ? 50 : stats.samplesPerSecond;
+  const currentPoints = demoMode ? tickCount : stats.totalPoints;
   
   return (
     <div className={cn('flex flex-col h-screen bg-background overflow-hidden', className)}>
@@ -178,6 +277,7 @@ export function TradingChartV2({
               'h-8 px-2',
               isLive ? 'text-green-500' : 'text-yellow-500'
             )}
+            title="Toggle Live/Pause (Space)"
           >
             {isLive ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
             <span className="ml-1 text-xs">{isLive ? 'LIVE' : 'PAUSED'}</span>
@@ -220,14 +320,32 @@ export function TradingChartV2({
           <span className="ml-1 text-xs">Layout</span>
         </Button>
         
+        {/* Clear Layout */}
+        {currentLayout && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearLayout}
+            className="h-8 px-2 text-muted-foreground"
+            title="Clear Layout"
+          >
+            <RotateCcw className="w-3 h-3" />
+          </Button>
+        )}
+        
         {/* Current Layout Name */}
         {currentLayout?.meta?.name && (
-          <span className="text-xs text-muted-foreground truncate max-w-32">
+          <span className="text-xs text-muted-foreground truncate max-w-40">
             {currentLayout.meta.name}
           </span>
         )}
         
         <div className="flex-1" />
+        
+        {/* Registry Count */}
+        <span className="text-xs text-muted-foreground">
+          {registry.length} series
+        </span>
         
         {/* Series Browser */}
         <Button
@@ -265,14 +383,14 @@ export function TradingChartV2({
       
       {/* HUD */}
       <HUD
-        stage={demoMode ? 'demo' : stage}
-        rate={stats.samplesPerSecond}
+        stage={currentStage}
+        rate={currentRate}
         fps={fps}
         heartbeatLag={status?.heartbeatLagMs ?? null}
         dataClockMs={dataClockMs}
         isLive={isLive}
         historyProgress={status?.history?.pct ?? 100}
-        tickCount={stats.totalPoints}
+        tickCount={currentPoints}
         cpuUsage={0}
         memoryUsage={0}
         gpuDrawCalls={0}
@@ -337,7 +455,7 @@ export function TradingChartV2({
       <SeriesBrowser
         open={seriesBrowserOpen}
         onOpenChange={setSeriesBrowserOpen}
-        registry={registryForBrowser}
+        registry={registry}
         visibleSeries={visibleSeries}
         onToggleSeries={handleToggleSeries}
         onSelectAll={handleSelectAllSeries}

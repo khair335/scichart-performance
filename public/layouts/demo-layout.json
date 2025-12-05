@@ -1,0 +1,55 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "panes": [
+    {
+      "id": "tick-pane",
+      "title": "Demo Tick Price & SMA",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1
+    },
+    {
+      "id": "ohlc-pane",
+      "title": "Demo OHLC (10s bars)",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "isBar": true
+    }
+  ],
+  "series": [
+    {
+      "series_id": "DEMO:ticks",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#50C7E0",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "DEMO:sma_10",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "color": "#F48420",
+      "strokeThickness": 1
+    },
+    {
+      "series_id": "DEMO:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "minimap": {
+    "source": {
+      "series_id": "DEMO:ticks",
+      "yField": "y"
+    }
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "Demo Layout",
+    "description": "Layout for demo mode data visualization"
+  }
+}
