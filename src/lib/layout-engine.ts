@@ -306,22 +306,25 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime) - use Always initially to let SciChart auto-fit
+      // Create X axis (DateTime) - use Once to calculate initial range from data, then manual control
+      // This is critical: EAutoRange.Always with zoomExtents() keeps resetting ranges
+      // EAutoRange.Once calculates range once from initial data, then we control manually
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
-        autoRange: EAutoRange.Always,
+        autoRange: EAutoRange.Once,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
       });
       
-      // Create Y axis - use Always so SciChart auto-fits Y to visible data
+      // Create Y axis - use Once with growBy for initial auto-range, then we control for live scrolling
       const yAxis = new NumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Right,
-        autoRange: EAutoRange.Always,
+        autoRange: EAutoRange.Once,
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
+        growBy: new NumberRange(0.1, 0.1), // 10% padding above/below data
       });
       
       sciChartSurface.xAxes.add(xAxis);
@@ -920,29 +923,22 @@ class LayoutEngineClass {
         }
       }
       
-      // Only set X range - Y axis uses EAutoRange.Always to auto-fit
+      // Set X range manually
       pane.xAxis.autoRange = EAutoRange.Never;
       pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
       
-      // Log for debugging
+      // Set Y range manually with padding
       if (hasData && minY !== Infinity) {
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y data range=${minY.toFixed(2)}-${maxY.toFixed(2)}`);
+        const yRange = maxY - minY;
+        const yPadding = yRange * 0.1 || 1;
+        pane.yAxis.autoRange = EAutoRange.Never;
+        pane.yAxis.visibleRange = new NumberRange(minY - yPadding, maxY + yPadding);
+        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${(minY - yPadding).toFixed(2)}-${(maxY + yPadding).toFixed(2)}`);
       } else {
         console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, no Y data`);
       }
-    }
-    
-    // After setting all manual ranges, force a complete redraw of all surfaces
-    for (const pane of this.state.panes.values()) {
-      if (!pane.isDeleted) {
-        // Force complete redraw without using zoomExtents (which would override our ranges)
-        pane.surface.invalidateElement();
-        
-        // Log final axis state
-        const xRange = pane.xAxis.visibleRange;
-        const yRange = pane.yAxis.visibleRange;
-        console.log(`[LayoutEngine] ${pane.id} FINAL: X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
-      }
+      
+      pane.surface.invalidateElement();
     }
   }
   
@@ -964,29 +960,81 @@ class LayoutEngineClass {
     // Convert to seconds for DateTimeNumericAxis
     const maxTimeSec = maxTimeMs / 1000;
     
-    // Set visible range to show last 60 seconds of data
+    // Set visible range to show last 60 seconds of data with 5s padding on right
     const windowSec = 60;
+    const paddingSec = 5;
     const minTimeSec = maxTimeSec - windowSec;
+    const xRange = new NumberRange(minTimeSec, maxTimeSec + paddingSec);
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
-        // Use SciChart's native zoomExtents to auto-fit all data
-        pane.surface.zoomExtents();
+        // Manually set X axis range - don't use zoomExtents which would fit ALL data
+        pane.xAxis.autoRange = EAutoRange.Never; // Take manual control
+        pane.xAxis.visibleRange = xRange;
         
-        // Debug: Log axis ranges
-        if (!this._debuggedPanes.has(pane.id)) {
-          this._debuggedPanes.add(pane.id);
-          const xRange = pane.xAxis.visibleRange;
-          const yRange = pane.yAxis.visibleRange;
-          console.log(`[LayoutEngine] ${pane.id}: zoomExtents applied X=${xRange.min.toFixed(0)}-${xRange.max.toFixed(0)}, Y=${yRange.min.toFixed(2)}-${yRange.max.toFixed(2)}`);
-        }
+        // Calculate Y range for visible X window
+        this.updateYAxisForPane(pane, minTimeSec, maxTimeSec + paddingSec);
+        
+        pane.surface.invalidateElement();
       }
     }
   }
   
-  private _debuggedPanes: Set<string> = new Set();
+  // Update Y axis range for a pane based on visible X window
+  private updateYAxisForPane(pane: PaneSurface, xMin: number, xMax: number): void {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let hasData = false;
+    
+    for (const [seriesId, dataSeries] of pane.dataSeries) {
+      const count = dataSeries.count();
+      if (count === 0) continue;
+      
+      hasData = true;
+      
+      if ('openValues' in dataSeries) {
+        // OHLC series
+        const ohlc = dataSeries as OhlcDataSeries;
+        const xVals = ohlc.getNativeXValues();
+        const hVals = ohlc.getNativeHighValues();
+        const lVals = ohlc.getNativeLowValues();
+        
+        for (let i = 0; i < count; i++) {
+          const x = xVals.get(i);
+          if (x >= xMin && x <= xMax) {
+            const h = hVals.get(i);
+            const l = lVals.get(i);
+            if (l < minY) minY = l;
+            if (h > maxY) maxY = h;
+          }
+        }
+      } else {
+        // XY series
+        const xy = dataSeries as XyDataSeries;
+        const xVals = xy.getNativeXValues();
+        const yVals = xy.getNativeYValues();
+        
+        for (let i = 0; i < count; i++) {
+          const x = xVals.get(i);
+          if (x >= xMin && x <= xMax) {
+            const y = yVals.get(i);
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+    }
+    
+    if (hasData && minY !== Infinity && maxY !== -Infinity) {
+      // Add 10% padding
+      const range = maxY - minY;
+      const padding = range * 0.1 || 1; // At least 1 unit padding
+      pane.yAxis.autoRange = EAutoRange.Never;
+      pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
+    }
+  }
   
-  // Note: Y-axis uses EAutoRange.Always, so no manual Y range calculation needed
+  private _debuggedPanes: Set<string> = new Set(); // For one-time debug logging
   
   // Reset loading state (for cleanup)
   resetLoadingState(): void {
