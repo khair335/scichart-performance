@@ -306,21 +306,21 @@ class LayoutEngineClass {
         });
       }
       
-      // Create X axis (DateTime) - use Once to calculate initial range from data, then manual control
-      // This is critical: EAutoRange.Always with zoomExtents() keeps resetting ranges
-      // EAutoRange.Once calculates range once from initial data, then we control manually
+      // Create X axis (DateTime) - use Always initially, switch to Never when we set manual ranges
+      // EAutoRange.Once fails because it calculates range before data arrives
+      // EAutoRange.Always will keep auto-ranging until we explicitly set Never + manual range
       const xAxis = new DateTimeNumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Bottom,
-        autoRange: EAutoRange.Once,
+        autoRange: EAutoRange.Always, // Auto-range until jumpToLive sets manual range
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
       });
       
-      // Create Y axis - use Once with growBy for initial auto-range, then we control for live scrolling
+      // Create Y axis - use Always initially, will dynamically update with visible data
       const yAxis = new NumericAxis(wasmContext, {
         axisAlignment: EAxisAlignment.Right,
-        autoRange: EAutoRange.Once,
+        autoRange: EAutoRange.Always, // Keep auto-ranging to fit visible data
         drawMajorGridLines: true,
         drawMinorGridLines: false,
         drawMajorBands: false,
@@ -879,64 +879,18 @@ class LayoutEngineClass {
     
     console.log(`[LayoutEngine] Unified X range: ${globalMinX.toFixed(0)} - ${globalMaxX.toFixed(0)}`);
     
-    // PHASE 2: For each pane, calculate Y range within unified X range
+    // PHASE 2: For each pane, set X range and let Y auto-range
     for (const pane of this.state.panes.values()) {
       if (pane.isDeleted) continue;
-      
-      let minY = Infinity, maxY = -Infinity;
-      let hasData = false;
-      
-      for (const dataSeries of pane.dataSeries.values()) {
-        const count = dataSeries.count();
-        if (count === 0) continue;
-        hasData = true;
-        
-        // Get Y range only for data within the unified X range
-        if ('highValues' in dataSeries) {
-          // OHLC series
-          const ohlc = dataSeries as OhlcDataSeries;
-          const xVals = ohlc.getNativeXValues();
-          const hVals = ohlc.getNativeHighValues();
-          const lVals = ohlc.getNativeLowValues();
-          for (let i = 0; i < count; i++) {
-            const x = xVals.get(i);
-            if (x >= globalMinX && x <= globalMaxX) {
-              const h = hVals.get(i);
-              const l = lVals.get(i);
-              if (l < minY) minY = l;
-              if (h > maxY) maxY = h;
-            }
-          }
-        } else {
-          // XY series
-          const xy = dataSeries as XyDataSeries;
-          const xVals = xy.getNativeXValues();
-          const yVals = xy.getNativeYValues();
-          for (let i = 0; i < count; i++) {
-            const x = xVals.get(i);
-            if (x >= globalMinX && x <= globalMaxX) {
-              const y = yVals.get(i);
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-            }
-          }
-        }
-      }
       
       // Set X range manually
       pane.xAxis.autoRange = EAutoRange.Never;
       pane.xAxis.visibleRange = new NumberRange(globalMinX, globalMaxX);
       
-      // Set Y range manually with padding
-      if (hasData && minY !== Infinity) {
-        const yRange = maxY - minY;
-        const yPadding = yRange * 0.1 || 1;
-        pane.yAxis.autoRange = EAutoRange.Never;
-        pane.yAxis.visibleRange = new NumberRange(minY - yPadding, maxY + yPadding);
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=${(minY - yPadding).toFixed(2)}-${(maxY + yPadding).toFixed(2)}`);
-      } else {
-        console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, no Y data`);
-      }
+      // Let Y axis auto-range - SciChart will calculate based on visible X data
+      pane.yAxis.autoRange = EAutoRange.Always;
+      
+      console.log(`[LayoutEngine] zoomExtents ${pane.id}: X=${globalMinX.toFixed(0)}-${globalMaxX.toFixed(0)}, Y=auto`);
       
       pane.surface.invalidateElement();
     }
@@ -968,69 +922,16 @@ class LayoutEngineClass {
     
     for (const pane of this.state.panes.values()) {
       if (!pane.isDeleted) {
-        // Manually set X axis range - don't use zoomExtents which would fit ALL data
-        pane.xAxis.autoRange = EAutoRange.Never; // Take manual control
+        // Take manual control of X axis for live scrolling
+        pane.xAxis.autoRange = EAutoRange.Never;
         pane.xAxis.visibleRange = xRange;
         
-        // Calculate Y range for visible X window
-        this.updateYAxisForPane(pane, minTimeSec, maxTimeSec + paddingSec);
+        // Keep Y axis in auto-range mode - it will adjust to visible X data automatically
+        // This is simpler and more reliable than manual Y calculation
+        pane.yAxis.autoRange = EAutoRange.Always;
         
         pane.surface.invalidateElement();
       }
-    }
-  }
-  
-  // Update Y axis range for a pane based on visible X window
-  private updateYAxisForPane(pane: PaneSurface, xMin: number, xMax: number): void {
-    let minY = Infinity;
-    let maxY = -Infinity;
-    let hasData = false;
-    
-    for (const [seriesId, dataSeries] of pane.dataSeries) {
-      const count = dataSeries.count();
-      if (count === 0) continue;
-      
-      hasData = true;
-      
-      if ('openValues' in dataSeries) {
-        // OHLC series
-        const ohlc = dataSeries as OhlcDataSeries;
-        const xVals = ohlc.getNativeXValues();
-        const hVals = ohlc.getNativeHighValues();
-        const lVals = ohlc.getNativeLowValues();
-        
-        for (let i = 0; i < count; i++) {
-          const x = xVals.get(i);
-          if (x >= xMin && x <= xMax) {
-            const h = hVals.get(i);
-            const l = lVals.get(i);
-            if (l < minY) minY = l;
-            if (h > maxY) maxY = h;
-          }
-        }
-      } else {
-        // XY series
-        const xy = dataSeries as XyDataSeries;
-        const xVals = xy.getNativeXValues();
-        const yVals = xy.getNativeYValues();
-        
-        for (let i = 0; i < count; i++) {
-          const x = xVals.get(i);
-          if (x >= xMin && x <= xMax) {
-            const y = yVals.get(i);
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-    }
-    
-    if (hasData && minY !== Infinity && maxY !== -Infinity) {
-      // Add 10% padding
-      const range = maxY - minY;
-      const padding = range * 0.1 || 1; // At least 1 unit padding
-      pane.yAxis.autoRange = EAutoRange.Never;
-      pane.yAxis.visibleRange = new NumberRange(minY - padding, maxY + padding);
     }
   }
   
