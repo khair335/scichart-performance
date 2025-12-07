@@ -1,0 +1,61 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "tick-pane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price & Indicators"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Candlesticks"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "tick-pane",
+      "type": "FastMountainRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["ohlc-pane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Example layout showing FastMountainRenderableSeries for SMA_10 indicator"
+  }
+}
+
+
+
+

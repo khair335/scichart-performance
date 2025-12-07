@@ -121,3 +121,6 @@ The only difference is **timing** (reactive vs proactive), but the **result is i
 
 **Action:** Check console logs to see if series are being created via registry preallocation or on-demand. Both should produce the same wave shape, but if registry preallocation isn't running, we should fix that.
 
+
+
+

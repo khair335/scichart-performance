@@ -1,18 +1,1 @@
-{
-  "wsUrl": "ws://127.0.0.1:8765",
-  "timezone": "America/Chicago",
-  "theme": "dark",
-  "performance": {
-    "maxTickPoints": 30000,
-    "maxSmaPoints": 30000,
-    "maxBarPoints": 15000,
-    "fifoEnabled": true,
-    "downsampleRatio": 4,
-    "targetFPS": 60
-  },
-  "minimap": {
-    "enabled": false,
-    "height": 60
-  }
-}
 

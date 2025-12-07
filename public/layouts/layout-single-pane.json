@@ -1,0 +1,45 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [1, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "main",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Main Chart"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "main",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "main",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "main",
+      "type": "FastLineRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": []
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Single pane layout - all series on one chart"
+  }
+}
+

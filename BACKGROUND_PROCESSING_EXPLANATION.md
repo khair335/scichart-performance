@@ -174,3 +174,6 @@ const autoScrollToLatest = (force = false) => {
 
 **Alternative:** We could implement a simpler version that matches new-index.html exactly, but it would lose the range restoration feature.
 
+
+
+

@@ -1,0 +1,69 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [3, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "tick-pane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price & Indicators"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Candlesticks"
+    },
+    {
+      "id": "pnl-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy PnL"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pnl-pane",
+      "type": "FastLineRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["ohlc-pane", "pnl-pane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Strategy markers should appear on tick-pane only (excluded from ohlc-pane and pnl-pane)"
+  }
+}
+
+
+
+

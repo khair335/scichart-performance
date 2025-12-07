@@ -1,330 +1,181 @@
-// DynamicPlotGrid - Renders a CSS Grid of chart panes based on layout JSON
-// This component creates the DOM structure that LayoutEngine will populate
+/**
+ * DynamicPlotGrid Component
+ * Renders a dynamic MxN grid of chart panes based on plot layout
+ */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { cn } from '@/lib/utils';
-import type { PlotLayoutJSON, PaneConfig } from '@/types/layout';
-import { validateLayout } from '@/types/layout';
-import { LayoutEngine } from '@/lib/layout-engine';
-import { SeriesStore } from '@/lib/series-store';
-import { Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
 interface DynamicPlotGridProps {
-  layout: PlotLayoutJSON | null;
-  visibleSeries?: Set<string>;
-  onLayoutLoaded?: () => void;
-  onError?: (errors: string[]) => void;
+  layout: ParsedLayout | null;
+  onPaneReady?: (paneId: string, containerId: string) => void;
+  onPaneDestroyed?: (paneId: string) => void;
   className?: string;
 }
 
-interface PaneState {
-  hasData: boolean;
-  seriesIds: string[];
-}
+export function DynamicPlotGrid({ 
+  layout, 
+  onPaneReady, 
+  onPaneDestroyed,
+  className = '' 
+}: DynamicPlotGridProps) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const containerIdsRef = useRef<Map<string, string>>(new Map());
+  const notifiedPanesRef = useRef<Set<string>>(new Set()); // Track which panes have been notified
+  const [gridStyle, setGridStyle] = useState<React.CSSProperties>({});
 
-export function DynamicPlotGrid({ layout, visibleSeries, onLayoutLoaded, onError, className }: DynamicPlotGridProps) {
-  const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const [paneStates, setPaneStates] = useState<Map<string, PaneState>>(new Map());
-  const [isLoading, setIsLoading] = useState(false);
-  const [layoutErrors, setLayoutErrors] = useState<string[]>([]);
-  const layoutIdRef = useRef<string | null>(null);
-  const isMountedRef = useRef(true);
-  
-  // Sync series visibility with LayoutEngine when visibleSeries changes
-  useEffect(() => {
-    if (!visibleSeries) return;
-    LayoutEngine.setSeriesVisibility(visibleSeries);
-  }, [visibleSeries]);
-  
-  // Track mount state
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-      // Reset loading state on unmount
-      LayoutEngine.resetLoadingState();
-    };
-  }, []);
-  
-  // Subscribe to SeriesStore to track when panes have data
-  useEffect(() => {
-    if (!layout) return;
-    
-    const unsubscribe = SeriesStore.subscribe((entries) => {
-      setPaneStates(prev => {
-        const next = new Map(prev);
-        let changed = false;
-        
-        for (const pane of layout.panes) {
-          const seriesIds = layout.series
-            .filter(s => s.pane === pane.id)
-            .map(s => s.series_id);
-          
-          const hasData = seriesIds.some(id => {
-            const entry = entries.get(id);
-            return entry && entry.metadata.pointCount > 0;
-          });
-          
-          const current = next.get(pane.id);
-          if (!current || current.hasData !== hasData) {
-            next.set(pane.id, { hasData, seriesIds });
-            changed = true;
-          }
-        }
-        
-        return changed ? next : prev;
-      });
-    });
-    
-    return unsubscribe;
-  }, [layout]);
-  
-  // Initialize layout when it changes
   useEffect(() => {
     if (!layout) {
-      // Dispose existing surfaces when layout is cleared
-      LayoutEngine.disposeAllSurfaces();
-      layoutIdRef.current = null;
-      return;
-    }
-    
-    // Generate a unique ID for this layout load
-    const layoutId = `${layout.meta?.name || 'unnamed'}_${Date.now()}`;
-    
-    // Skip if same layout is already loading/loaded
-    if (layoutIdRef.current === layout.meta?.name) {
-      return;
-    }
-    
-    // Validate layout
-    const validation = validateLayout(layout);
-    if (!validation.valid) {
-      setLayoutErrors(validation.errors);
-      onError?.(validation.errors);
-      return;
-    }
-    
-    setLayoutErrors([]);
-    setIsLoading(true);
-    layoutIdRef.current = layout.meta?.name || layoutId;
-    
-    // Wait for containers to be rendered
-    const initLayout = async () => {
-      // Longer delay to ensure DOM is fully ready and sized
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      if (!isMountedRef.current) return;
-      
-      // Collect container refs
-      const containers = new Map<string, HTMLDivElement>();
-      for (const pane of layout.panes) {
-        const container = containerRefs.current.get(pane.id);
-        if (container) {
-          // Log container dimensions for debugging
-          const rect = container.getBoundingClientRect();
-          console.log(`[DynamicPlotGrid] Container ${pane.id}: ${rect.width}x${rect.height}`);
-          containers.set(pane.id, container);
-        } else {
-          console.warn(`[DynamicPlotGrid] Container ref not found for pane: ${pane.id}`);
-        }
+      // No layout - clear grid
+      if (gridRef.current) {
+        gridRef.current.innerHTML = '';
       }
+      containerIdsRef.current.clear();
+      return;
+    }
+
+    const [rows, cols] = layout.layout.grid;
+    
+    // Set CSS Grid layout
+    setGridStyle({
+      display: 'grid',
+      gridTemplateRows: `repeat(${rows}, 1fr)`,
+      gridTemplateColumns: `repeat(${cols}, 1fr)`,
+      width: '100%',
+      height: '100%',
+      gap: '1px',
+    });
+
+    // Create container divs for each pane
+    if (gridRef.current) {
+      // Don't clear innerHTML - preserve existing panes and only update what's needed
+      const oldContainerIds = new Set(containerIdsRef.current.values());
       
-      // Load layout into engine
-      const success = await LayoutEngine.loadLayout(layout, containers);
-      
-      if (!isMountedRef.current) return;
-      
-      setIsLoading(false);
-      
-      if (success) {
-        onLayoutLoaded?.();
+      // Create panes
+      const newContainerIds = new Map<string, string>();
+      for (const pane of layout.layout.panes) {
+        const containerId = `pane-${pane.id}`;
+        newContainerIds.set(pane.id, containerId);
         
-        // Initialize pane states - check for existing data in SeriesStore
-        const allEntries = SeriesStore.getAllEntries();
-        const states = new Map<string, PaneState>();
-        for (const pane of layout.panes) {
-          const seriesIds = layout.series
-            .filter(s => s.pane === pane.id)
-            .map(s => s.series_id);
+        // Check if this pane already exists in DOM
+        const existingPane = document.getElementById(containerId);
+        if (!existingPane) {
+          // New pane - create container
+          const paneDiv = document.createElement('div');
+          paneDiv.id = containerId;
+          paneDiv.className = 'relative w-full h-full';
+          paneDiv.style.gridRow = `${pane.row + 1} / span ${pane.height}`;
+          paneDiv.style.gridColumn = `${pane.col + 1} / span ${pane.width}`;
+          paneDiv.style.position = 'relative';
+          paneDiv.style.overflow = 'hidden';
           
-          // Check if any series already has data
-          const hasData = seriesIds.some(id => {
-            const entry = allEntries.get(id);
-            return entry && entry.metadata.pointCount > 0;
-          });
+          // Add pane title if provided
+          if (pane.title) {
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'pane-title absolute top-0 left-0 right-0 z-10 bg-card/80 backdrop-blur-sm px-2 py-1 text-xs font-medium text-foreground border-b border-border';
+            titleDiv.textContent = pane.title;
+            paneDiv.appendChild(titleDiv);
+          }
           
-          states.set(pane.id, { hasData, seriesIds });
-          console.log(`[DynamicPlotGrid] Pane ${pane.id} hasData: ${hasData}, series: ${seriesIds.join(', ')}`);
+          // Add chart container
+          const chartContainer = document.createElement('div');
+          chartContainer.id = `${containerId}-chart`;
+          chartContainer.className = 'w-full h-full relative';
+          if (pane.title) {
+            chartContainer.style.paddingTop = '24px'; // Space for title
+          }
+          paneDiv.appendChild(chartContainer);
+
+          // Add "Waiting for Data" overlay container
+          // Append to paneDiv (not chartContainer) so it appears above the chart canvas
+          const waitingOverlay = document.createElement('div');
+          waitingOverlay.id = `${containerId}-waiting`;
+          // Position overlay to cover the chart area (accounting for title if present)
+          const topOffset = pane.title ? '24px' : '0';
+          waitingOverlay.className = 'absolute flex items-center justify-center bg-card/50 backdrop-blur-sm z-30 pointer-events-none';
+          waitingOverlay.style.display = 'none'; // Hidden by default, shown when waiting
+          waitingOverlay.style.top = topOffset;
+          waitingOverlay.style.left = '0';
+          waitingOverlay.style.right = '0';
+          waitingOverlay.style.bottom = '0';
+          // The content will be updated dynamically based on pending series count
+          waitingOverlay.innerHTML = `
+            <div class="text-center">
+              <div class="w-12 h-12 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+              <p class="text-sm text-muted-foreground">Waiting for Data...</p>
+              <p class="text-xs text-muted-foreground mt-1" id="${containerId}-waiting-count"></p>
+            </div>
+          `;
+          paneDiv.appendChild(waitingOverlay);
+          
+          gridRef.current.appendChild(paneDiv);
+          
+          // Notify parent that pane is ready (only once per pane)
+          if (onPaneReady && !notifiedPanesRef.current.has(pane.id)) {
+            notifiedPanesRef.current.add(pane.id);
+            // Small delay to ensure DOM is ready
+            setTimeout(() => {
+              if (onPaneReady) { // Check again in case callback was removed
+                onPaneReady(pane.id, `${containerId}-chart`);
+              }
+            }, 10);
+          }
+        } else {
+          // Pane already exists in DOM - check if we need to update it
+          // (e.g., if grid position changed, but for now we'll just skip)
+          // Only notify if not already notified (shouldn't happen, but safety check)
+          if (onPaneReady && !notifiedPanesRef.current.has(pane.id)) {
+            notifiedPanesRef.current.add(pane.id);
+            onPaneReady(pane.id, `${containerId}-chart`);
+          }
         }
-        setPaneStates(states);
-      } else {
-        const state = LayoutEngine.getState();
-        setLayoutErrors(state.errors);
-        onError?.(state.errors);
       }
-    };
-    
-    initLayout();
-    
-    return () => {
-      // Cleanup when layout changes
-    };
-  }, [layout?.meta?.name]); // Only re-run when layout name changes
-  
-  // Set container ref
-  const setContainerRef = useCallback((paneId: string) => (el: HTMLDivElement | null) => {
-    if (el) {
-      containerRefs.current.set(paneId, el);
-    } else {
-      containerRefs.current.delete(paneId);
+      
+      // Cleanup removed panes
+      for (const [paneId, containerId] of containerIdsRef.current) {
+        if (!newContainerIds.has(paneId)) {
+          const container = document.getElementById(containerId);
+          if (container) {
+            container.remove();
+          }
+          notifiedPanesRef.current.delete(paneId); // Remove from notified set
+          if (onPaneDestroyed) {
+            onPaneDestroyed(paneId);
+          }
+        }
+      }
+      
+      containerIdsRef.current = newContainerIds;
     }
+  }, [layout]); // Removed onPaneReady and onPaneDestroyed from deps to prevent re-runs
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (gridRef.current) {
+        gridRef.current.innerHTML = '';
+      }
+      containerIdsRef.current.clear();
+    };
   }, []);
-  
-  // No layout state
+
   if (!layout) {
     return (
-      <div className={cn('flex items-center justify-center h-full bg-card', className)}>
-        <div className="text-center max-w-md px-6">
-          <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
-            <svg className="w-10 h-10 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <rect x="3" y="3" width="7" height="7" strokeWidth="2" />
-              <rect x="14" y="3" width="7" height="7" strokeWidth="2" />
-              <rect x="3" y="14" width="7" height="7" strokeWidth="2" />
-              <rect x="14" y="14" width="7" height="7" strokeWidth="2" />
-            </svg>
-          </div>
-          <h3 className="text-xl font-semibold text-foreground mb-2">No Layout Loaded</h3>
-          <p className="text-sm text-muted-foreground mb-4">
-            Load a plot layout JSON file to visualize data. Data is being collected in the background.
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Use the toolbar to load a layout file.
-          </p>
+      <div className={`flex items-center justify-center h-full ${className}`}>
+        <div className="text-center text-muted-foreground">
+          <p className="text-sm">No layout loaded</p>
+          <p className="text-xs mt-1">Load a plot layout JSON file to begin</p>
         </div>
       </div>
     );
   }
-  
-  // Layout errors
-  if (layoutErrors.length > 0) {
-    return (
-      <div className={cn('flex items-center justify-center h-full bg-card', className)}>
-        <div className="text-center max-w-lg px-6">
-          <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center mx-auto mb-4">
-            <span className="text-destructive text-3xl">!</span>
-          </div>
-          <h3 className="text-xl font-semibold text-foreground mb-2">Layout Validation Failed</h3>
-          <ul className="text-sm text-destructive text-left list-disc list-inside space-y-1">
-            {layoutErrors.map((error, i) => (
-              <li key={i}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    );
-  }
-  
-  const [rows, cols] = layout.grid;
-  
+
   return (
     <div 
-      className={cn('h-full w-full relative', className)}
-      style={{
-        display: 'grid',
-        gridTemplateRows: `repeat(${rows}, 1fr)`,
-        gridTemplateColumns: `repeat(${cols}, 1fr)`,
-        gap: '1px',
-        backgroundColor: 'hsl(var(--border))',
-      }}
-    >
-      {layout.panes.map((pane) => (
-        <PaneContainer
-          key={pane.id}
-          pane={pane}
-          setRef={setContainerRef(pane.id)}
-          isLoading={isLoading}
-          state={paneStates.get(pane.id)}
-          layout={layout}
-        />
-      ))}
-    </div>
+      ref={gridRef}
+      className={`w-full h-full ${className}`}
+      style={gridStyle}
+    />
   );
 }
 
-// Individual pane container
-interface PaneContainerProps {
-  pane: PaneConfig;
-  setRef: (el: HTMLDivElement | null) => void;
-  isLoading: boolean;
-  state?: PaneState;
-  layout: PlotLayoutJSON;
-}
-
-function PaneContainer({ pane, setRef, isLoading, state, layout }: PaneContainerProps) {
-  const seriesForPane = layout.series.filter(s => s.pane === pane.id);
-  const hasSeriesDefinitions = seriesForPane.length > 0;
-  const hasData = state?.hasData ?? false;
-  const showWaitingForData = !isLoading && hasSeriesDefinitions && !hasData;
-  
-  return (
-    <div
-      style={{
-        gridRow: `${pane.row + 1} / span ${pane.height || 1}`,
-        gridColumn: `${pane.col + 1} / span ${pane.width || 1}`,
-        position: 'relative',
-      }}
-      className="bg-card flex flex-col"
-    >
-      {/* Pane title */}
-      {pane.title && (
-        <div className="absolute top-2 left-3 z-20 text-xs font-medium text-muted-foreground bg-card/80 px-2 py-0.5 rounded pointer-events-none">
-          {pane.title}
-        </div>
-      )}
-      
-      {/* Chart container - takes all available space */}
-      <div 
-        ref={setRef}
-        style={{ 
-          flex: 1,
-          width: '100%',
-          minHeight: '100px',
-          position: 'relative',
-        }}
-        data-pane-id={pane.id}
-      />
-      
-      {/* Loading overlay */}
-      {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-card/90 z-30">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-        </div>
-      )}
-      
-      {/* Waiting for data overlay */}
-      {showWaitingForData && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/95 z-10">
-          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground mb-2" />
-          <span className="text-xs text-muted-foreground">Waiting for data...</span>
-          <span className="text-xs text-muted-foreground/70 mt-1">
-            {seriesForPane.length} series pending
-          </span>
-        </div>
-      )}
-      
-      {/* PnL indicator */}
-      {pane.isPnL && (
-        <div className="absolute top-2 right-3 z-20 text-xs font-medium text-green-500 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20 pointer-events-none">
-          PnL
-        </div>
-      )}
-      
-      {/* Bar/OHLC indicator */}
-      {pane.isBar && (
-        <div className="absolute top-2 right-3 z-20 text-xs font-medium text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20 pointer-events-none">
-          OHLC
-        </div>
-      )}
-    </div>
-  );
-}

@@ -96,32 +96,45 @@ export function HUD({
   };
 
   return (
-    <div className={cn('hud-panel px-3 py-2 flex items-center gap-4 mono-data text-xs', className)}>
+    <div className={cn('hud-panel px-4 py-2.5 flex items-center gap-4 mono-data text-xs', className)}>
       {/* Status */}
       {getStatusPill()}
 
+      <div className="w-px h-6 bg-border/60" />
+
       {/* Data Clock */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground">Clock:</span>
-        <span className="text-primary font-medium">{formatDataClock(dataClockMs)}</span>
+      <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Clock</span>
+        <span className="text-primary font-semibold">{formatDataClock(dataClockMs)}</span>
       </div>
 
       {/* FPS */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground">FPS:</span>
-        <span className={cn('font-medium', getFpsColor())}>{fps}</span>
+      <div className={cn(
+        'flex items-center gap-2 px-2 py-1 rounded-lg border transition-all',
+        getFpsColor() === 'text-success' ? 'bg-success/10 border-success/30' :
+        getFpsColor() === 'text-warning' ? 'bg-warning/10 border-warning/30' :
+        'bg-destructive/10 border-destructive/30'
+      )}>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">FPS</span>
+        <span className={cn('font-bold', getFpsColor())}>{fps}</span>
       </div>
 
       {/* Rate */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground">Rate:</span>
-        <span className="text-foreground">{rate.toFixed(0)}/s</span>
+      <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Rate</span>
+        <span className="text-foreground font-semibold">{rate.toFixed(0)}/s</span>
       </div>
 
       {/* Heartbeat Lag */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground">Lag:</span>
+      <div className={cn(
+        'flex items-center gap-2 px-2 py-1 rounded-lg border',
+        heartbeatLag !== null && heartbeatLag > 1000 
+          ? 'bg-warning/10 border-warning/30' 
+          : 'bg-muted/20 border-border/30'
+      )}>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Lag</span>
         <span className={cn(
+          'font-semibold',
           heartbeatLag !== null && heartbeatLag > 1000 ? 'text-warning' : 'text-foreground'
         )}>
           {heartbeatLag !== null ? `${heartbeatLag}ms` : '—'}
@@ -129,17 +142,22 @@ export function HUD({
       </div>
 
       {/* Tick Count */}
-      <div className="flex items-center gap-1.5">
-        <span className="text-muted-foreground">Ticks:</span>
-        <span className="text-foreground">{tickCount.toLocaleString()}</span>
+      <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Ticks</span>
+        <span className="text-foreground font-semibold">{tickCount.toLocaleString()}</span>
       </div>
 
       {/* CPU Usage */}
       {cpuUsage > 0 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-muted-foreground">CPU:</span>
+        <div className={cn(
+          'flex items-center gap-2 px-2 py-1 rounded-lg border',
+          cpuUsage > 80 ? 'bg-destructive/10 border-destructive/30' :
+          cpuUsage > 50 ? 'bg-warning/10 border-warning/30' :
+          'bg-success/10 border-success/30'
+        )}>
+          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">CPU</span>
           <span className={cn(
-            'font-medium',
+            'font-bold',
             cpuUsage > 80 ? 'text-destructive' : cpuUsage > 50 ? 'text-warning' : 'text-success'
           )}>
             {cpuUsage.toFixed(0)}%
@@ -149,26 +167,39 @@ export function HUD({
 
       {/* Memory Usage */}
       {memoryUsage > 0 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-muted-foreground">Mem:</span>
-          <span className="text-foreground">{memoryUsage.toFixed(0)}MB</span>
+        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Mem</span>
+          <span className="text-foreground font-semibold">{memoryUsage.toFixed(0)}MB</span>
         </div>
       )}
 
       {/* GPU Draw Calls */}
       {gpuDrawCalls > 0 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-muted-foreground">GPU:</span>
-          <span className="text-foreground">{gpuDrawCalls}</span>
+        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">GPU</span>
+          <span className="text-foreground font-semibold">{gpuDrawCalls}</span>
         </div>
       )}
 
+      <div className="flex-1" />
+
       {/* Live/Paused indicator */}
-      <div className="ml-auto">
+      <div className={cn(
+        'px-3 py-1.5 rounded-lg border font-semibold text-xs transition-all',
+        isLive 
+          ? 'bg-success/20 border-success/40 text-success' 
+          : 'bg-muted/30 border-border/50 text-muted-foreground'
+      )}>
         {isLive ? (
-          <span className="text-success text-xs">● AUTO-SCROLL</span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 bg-success rounded-full animate-pulse glow-success" />
+            AUTO-SCROLL
+          </span>
         ) : (
-          <span className="text-muted-foreground text-xs">○ PAUSED</span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 bg-muted-foreground rounded-full" />
+            PAUSED
+          </span>
         )}
       </div>
     </div>

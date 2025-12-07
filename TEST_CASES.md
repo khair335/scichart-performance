@@ -327,3 +327,6 @@ Before marking as complete, verify:
 - Test tab visibility behavior (minimize/restore)
 - Test with paused/live modes
 
+
+
+

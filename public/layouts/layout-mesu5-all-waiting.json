@@ -1,0 +1,35 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [1, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ohlc_time:3600000",
+      "yField": "close"
+    }
+  },
+  "panes": [
+    {
+      "id": "singlePane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 60min OHLC (Will Wait - Needs 1 Hour of Data)"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ohlc_time:3600000",
+      "pane": "singlePane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": []
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "MESU5 All Waiting Test"
+  }
+}
+

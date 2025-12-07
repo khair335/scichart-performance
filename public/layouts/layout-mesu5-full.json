@@ -1,0 +1,157 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [3, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "price-pane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 Price & SMAs"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC (10s & 30s bars)"
+    },
+    {
+      "id": "pnl-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy PnL"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#F48420",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#26A69A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_30",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#AB47BC",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_40",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FF7043",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_50",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#7E57C2",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:sma_60",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#66BB6A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_70",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#42A5F5",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_80",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#EC407A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_90",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FFCA28",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pnl-pane",
+      "type": "FastMountainRenderableSeries",
+      "style": {
+        "stroke": "#4CAF50",
+        "fill": "#4CAF5044",
+        "strokeThickness": 2
+      }
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["pnl-pane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "MESU5 Full Layout",
+    "description": "Complete layout for MESU5 with ticks, all SMAs (10-90), OHLC bars, and PnL as mountain series"
+  }
+}
+

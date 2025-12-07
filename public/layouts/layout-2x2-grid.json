@@ -1,0 +1,81 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 2],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "topLeft",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price"
+    },
+    {
+      "id": "topRight",
+      "row": 0,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "Indicators"
+    },
+    {
+      "id": "bottomLeft",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 10s"
+    },
+    {
+      "id": "bottomRight",
+      "row": 1,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 30s"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "topLeft",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "topRight",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "topRight",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "bottomLeft",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "bottomRight",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["bottomLeft", "bottomRight"]
+  },
+  "meta": {
+    "version": "1.0"
+  }
+}
+
+
+
+

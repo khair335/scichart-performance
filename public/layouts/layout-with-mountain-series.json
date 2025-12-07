@@ -1,0 +1,88 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 2],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "topLeft",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price (Line)"
+    },
+    {
+      "id": "topRight",
+      "row": 0,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 10 (Mountain)"
+    },
+    {
+      "id": "bottomLeft",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 20 (Mountain)"
+    },
+    {
+      "id": "bottomRight",
+      "row": 1,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Bars"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "topLeft",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "topRight",
+      "type": "FastMountainRenderableSeries",
+      "style": {
+        "stroke": "#F48420",
+        "fill": "#F4842044",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "bottomLeft",
+      "type": "FastMountainRenderableSeries",
+      "style": {
+        "stroke": "#FF9800",
+        "fill": "#FF980044",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "bottomRight",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["bottomRight"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Layout demonstrating FastMountainRenderableSeries (area charts) with custom styling"
+  }
+}
+

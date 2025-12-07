@@ -9,9 +9,161 @@ import { CommandPalette } from './CommandPalette';
 import { defaultChartConfig } from '@/types/chart';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Play } from 'lucide-react';
+import { Play, X, Grid3x3, FileJson } from 'lucide-react';
 import type { Sample, RegistryRow } from '@/lib/wsfeed-client';
 import { parseSeriesType } from '@/lib/series-namespace';
+import { parsePlotLayout, getDefaultLayout, type ParsedLayout } from '@/types/plot-layout';
+import { DynamicPlotGrid } from './DynamicPlotGrid';
+
+interface NoConnectionOverlayProps {
+  wsUrl: string;
+  onStartDemo: () => void;
+  autoReloadEnabled: boolean;
+  onCancelAutoReload: () => void;
+}
+
+interface NoLayoutOverlayProps {
+  onLoadLayout: () => void;
+}
+
+const NoLayoutOverlay = ({ onLoadLayout }: NoLayoutOverlayProps) => {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center z-30">
+      <div className="absolute inset-0 bg-gradient-to-br from-background/95 via-background/90 to-background/95 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
+      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in">
+        {/* Grid Icon */}
+        <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center mx-auto mb-6 border border-primary/30 shadow-lg">
+          <Grid3x3 className="w-12 h-12 text-primary" />
+        </div>
+        
+        {/* Title */}
+        <h3 className="text-3xl font-bold text-foreground mb-3 gradient-text">No Layout Loaded</h3>
+        
+        {/* Description */}
+        <p className="text-sm text-muted-foreground mb-2 leading-relaxed">
+          Load a plot layout JSON file to visualize data. Data is being collected in the background.
+        </p>
+        <p className="text-sm text-muted-foreground mb-8 leading-relaxed">
+          Use the toolbar to load a layout file.
+        </p>
+        
+        {/* Load Layout Button */}
+        <Button 
+          onClick={onLoadLayout}
+          className="bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold px-6 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 btn-modern"
+        >
+          <FileJson className="w-4 h-4 mr-2" />
+          Load Layout File
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const NoConnectionOverlay = ({ wsUrl, onStartDemo, autoReloadEnabled, onCancelAutoReload }: NoConnectionOverlayProps) => {
+  const [countdown, setCountdown] = useState(3);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const reloadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!autoReloadEnabled) {
+      // Clear any pending reloads if auto-reload is disabled
+      if (reloadTimeoutRef.current) {
+        clearTimeout(reloadTimeoutRef.current);
+        reloadTimeoutRef.current = null;
+      }
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+        countdownRef.current = null;
+      }
+      return;
+    }
+
+    // Reset countdown
+    setCountdown(3);
+
+    // Start countdown
+    countdownRef.current = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          if (countdownRef.current) {
+            clearInterval(countdownRef.current);
+            countdownRef.current = null;
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Schedule reload after 3 seconds
+    reloadTimeoutRef.current = setTimeout(() => {
+      window.location.reload();
+    }, 3000);
+
+    // Cleanup
+    return () => {
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+        countdownRef.current = null;
+      }
+      if (reloadTimeoutRef.current) {
+        clearTimeout(reloadTimeoutRef.current);
+        reloadTimeoutRef.current = null;
+      }
+    };
+  }, [autoReloadEnabled]);
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center z-30">
+      <div className="absolute inset-0 bg-gradient-to-br from-background/98 via-background/99 to-background/100 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
+      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in">
+        {/* Cancel button */}
+        {autoReloadEnabled && (
+          <button
+            onClick={onCancelAutoReload}
+            className="absolute top-4 right-4 p-2 rounded-lg hover:bg-destructive/20 transition-colors border border-transparent hover:border-destructive/30"
+            aria-label="Cancel auto-reload"
+          >
+            <X className="w-5 h-5 text-muted-foreground hover:text-destructive" />
+          </button>
+        )}
+
+        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-destructive/30 to-destructive/10 flex items-center justify-center mx-auto mb-6 border border-destructive/40 shadow-lg">
+          <span className="text-destructive text-4xl font-bold">!</span>
+        </div>
+        <h3 className="text-2xl font-bold text-foreground mb-3">No Data Connection</h3>
+        <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+          WebSocket server not available. Start the server or use demo mode.
+        </p>
+        <code className="text-xs text-muted-foreground font-mono bg-muted/50 border border-border/50 px-4 py-2 rounded-lg block mb-4 backdrop-blur-sm">
+          {wsUrl}
+        </code>
+        
+        {autoReloadEnabled && countdown > 0 && (
+          <div className="mb-6 px-4 py-2 rounded-lg bg-warning/10 border border-warning/30">
+            <p className="text-sm text-warning font-semibold">
+              Reloading in <span className="text-2xl font-bold">{countdown}</span> second{countdown !== 1 ? 's' : ''}...
+            </p>
+          </div>
+        )}
+        
+        <div className="flex flex-col gap-3">
+          <Button 
+            onClick={onStartDemo}
+            className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold px-6 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 btn-modern"
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Start Demo Mode
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Or run: <code className="bg-muted/50 border border-border/50 px-2 py-1 rounded font-mono">python server.py</code>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 interface TradingChartProps {
   wsUrl?: string;
@@ -31,6 +183,15 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const [tickCount, setTickCount] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
+  const [autoReloadEnabled, setAutoReloadEnabled] = useState(true);
+  const [hudVisible, setHudVisible] = useState(true);
+  const [zoomMode, setZoomMode] = useState<'box' | 'x-only' | 'y-only'>('box');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  // Plot layout state
+  const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
+  const [currentLayoutName, setCurrentLayoutName] = useState<string | null>(null); // Track loaded layout name/filename
+  const [layoutError, setLayoutError] = useState<string | null>(null); // Track validation errors for UI display
   
   // Performance metrics for HUD
   const [cpuUsage, setCpuUsage] = useState(0);
@@ -50,6 +211,60 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // Use appropriate registry based on mode - must be defined before useMultiPaneChart
   const registry = demoMode ? demoRegistry : wsRegistry;
 
+  // Load default layout from UI config on mount
+  // DISABLED: Default layout loading is deactivated for now
+  // User must explicitly load a layout JSON file
+  // TODO: Re-enable default layout loading in the future if needed
+  useEffect(() => {
+    // Default layout loading is disabled - user must load layout manually
+    // Keeping code commented for future use:
+    /*
+    if (uiConfig?.defaultLayout && !plotLayout) {
+      try {
+        const validationErrors: { errors: string[]; warnings: string[] } = { errors: [], warnings: [] };
+        const parsed = parsePlotLayout(uiConfig.defaultLayout, (errs) => {
+          validationErrors.errors.push(...errs.errors);
+          validationErrors.warnings.push(...errs.warnings);
+        });
+        setPlotLayout(parsed);
+        setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
+        setLayoutError(null);
+        if (validationErrors.warnings.length > 0) {
+          console.warn('[TradingChart] Default layout validation warnings:', validationErrors.warnings);
+        }
+        console.log('[TradingChart] Loaded default layout from UI config:', parsed.layout.grid);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn('[TradingChart] Failed to parse default layout from UI config:', error);
+        setLayoutError(errorMsg);
+        // Fallback to default layout
+        try {
+          const defaultLayout = getDefaultLayout();
+          setPlotLayout(parsePlotLayout(defaultLayout));
+          setCurrentLayoutName('Default Layout');
+          setLayoutError(null);
+        } catch (fallbackError) {
+          const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          setLayoutError(fallbackErrorMsg);
+          setCurrentLayoutName(null);
+        }
+      }
+    } else if (!plotLayout) {
+      // No default layout in config, use built-in default
+      try {
+        const defaultLayout = getDefaultLayout();
+        setPlotLayout(parsePlotLayout(defaultLayout));
+        setCurrentLayoutName('Default Layout');
+        setLayoutError(null);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        setLayoutError(errorMsg);
+        setCurrentLayoutName(null);
+      }
+    }
+    */
+  }, [uiConfig, plotLayout]);
+
   // Initialize multi-pane charts
   const {
     isReady,
@@ -60,7 +275,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   } = useMultiPaneChart({
     tickContainerId: 'tick-chart',
     ohlcContainerId: 'ohlc-chart',
-    overviewContainerId: minimapEnabled ? 'overview-chart' : undefined,
+    overviewContainerId: 'overview-chart', // Always pass the ID, visibility controlled by CSS
     onFpsUpdate: setFps,
     onDataClockUpdate: setDataClockMs,
     onReadyChange: () => {},
@@ -69,6 +284,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     feedStage: demoMode ? 'demo' : feedState.stage,
     uiConfig: uiConfig,
     registry: registry, // Pass registry for global data clock calculation
+    plotLayout: plotLayout, // Pass parsed layout
+    zoomMode: zoomMode, // Pass zoom mode
   });
 
   // Handle samples from any source
@@ -162,18 +379,118 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // Track recently toggled series to prevent useEffect interference (debounce)
   const recentlyToggledRef = useRef<Set<string>>(new Set());
   
-  // Command palette keyboard shortcut (Ctrl/Cmd+K)
+  // Define handlers before useEffect that uses them
+  const handleToggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      document.documentElement.classList.toggle('dark', next === 'dark');
+      document.documentElement.classList.toggle('light', next === 'light');
+      return next;
+    });
+  }, []);
+
+  const handleJumpToLive = useCallback(() => {
+    setIsLive(true);
+    setLiveMode(true);
+    jumpToLive();
+  }, [setLiveMode, jumpToLive]);
+
+  const handleToggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch(err => {
+        console.error('Error entering fullscreen:', err);
+      });
+    } else {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+      }).catch(err => {
+        console.error('Error exiting fullscreen:', err);
+      });
+    }
+  }, []);
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Keyboard shortcuts (hotkeys)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in input/textarea
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
+        return;
+      }
+      
+      // Ctrl/Cmd+K: Command Palette
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         setCommandPaletteOpen(true);
+        return;
+      }
+      
+      // Single key shortcuts (only when not in input)
+      switch (e.key.toLowerCase()) {
+        case 'j':
+          // J: Jump to live
+          e.preventDefault();
+          handleJumpToLive();
+          break;
+        case 'm':
+          // M: Toggle minimap
+          e.preventDefault();
+          setMinimapEnabled(prev => !prev);
+          break;
+        case 'h':
+          // H: Toggle HUD
+          e.preventDefault();
+          setHudVisible(prev => !prev);
+          break;
+        case 't':
+          // T: Toggle theme
+          e.preventDefault();
+          handleToggleTheme();
+          break;
+        case 'f':
+          // F: Fullscreen
+          e.preventDefault();
+          handleToggleFullscreen();
+          break;
+        case 'b':
+          // B: Box zoom mode
+          e.preventDefault();
+          setZoomMode('box');
+          break;
+        case 'x':
+          // X: X-only zoom mode
+          e.preventDefault();
+          setZoomMode('x-only');
+          break;
+        case 'y':
+          // Y: Y-only zoom mode
+          e.preventDefault();
+          setZoomMode('y-only');
+          break;
+        case 'z':
+          // Z: Zoom extents
+          e.preventDefault();
+          zoomExtents();
+          break;
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handleJumpToLive, handleToggleTheme, zoomExtents, zoomMode]);
   
   // Keep visibleSeries in sync with discovered series.
   // - On first load: turn ALL series ON by default.
@@ -233,15 +550,6 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     });
   }, [registry]);
 
-  const handleToggleTheme = useCallback(() => {
-    setTheme(prev => {
-      const next = prev === 'dark' ? 'light' : 'dark';
-      document.documentElement.classList.toggle('dark', next === 'dark');
-      document.documentElement.classList.toggle('light', next === 'light');
-      return next;
-    });
-  }, []);
-
   const handleSelectAllSeries = useCallback(() => {
     const allSeriesIds = registry.map(row => row.id);
     setVisibleSeries(new Set(allSeriesIds));
@@ -267,11 +575,38 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     setLiveMode(newLive);
   }, [isLive, setLiveMode]);
 
-  const handleJumpToLive = useCallback(() => {
-    setIsLive(true);
-    setLiveMode(true);
-    jumpToLive();
-  }, [setLiveMode, jumpToLive]);
+  // Handle moving series between panes
+  const handleMoveSeries = useCallback((seriesId: string, targetPaneId: string) => {
+    if (!plotLayout) {
+      console.warn('[TradingChart] Cannot move series: no layout loaded');
+      return;
+    }
+    
+    // Find the series assignment in the layout
+    const seriesAssignment = plotLayout.layout.series.find(s => s.series_id === seriesId);
+    if (!seriesAssignment) {
+      console.warn(`[TradingChart] Series ${seriesId} not found in layout`);
+      return;
+    }
+    
+    // Check if target pane exists
+    const targetPane = plotLayout.layout.panes.find(p => p.id === targetPaneId);
+    if (!targetPane) {
+      console.warn(`[TradingChart] Target pane ${targetPaneId} not found in layout`);
+      return;
+    }
+    
+    // Update the series assignment
+    seriesAssignment.pane = targetPaneId;
+    
+    // Re-parse the layout to update internal maps
+    const updatedLayout = parsePlotLayout(plotLayout.layout);
+    
+    // Update the layout state - this will trigger MultiPaneChart to move the series
+    setPlotLayout(updatedLayout);
+    
+   
+  }, [plotLayout]);
 
   const handleToggleSeries = useCallback((seriesId: string) => {
     // Mark this series as manually toggled
@@ -310,42 +645,78 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       if (file) {
         try {
           const text = await file.text();
-          const layout = JSON.parse(text);
-          console.log('Layout loaded:', layout);
+          const layoutJson = JSON.parse(text);
+  
           
-          // Apply the layout by activating the specified series
-          if (layout.panes && Array.isArray(layout.panes)) {
-            const seriesToActivate = new Set<string>();
-            
-            for (const pane of layout.panes) {
-              if (pane.series && Array.isArray(pane.series)) {
-                for (const seriesConfig of pane.series) {
-                  if (seriesConfig.visible !== false && seriesConfig.seriesId) {
-                    // Find matching series in registry (partial match)
-                    const matchingSeries = registry.find(r => 
-                      r.id.includes(seriesConfig.seriesId)
-                    );
-                    if (matchingSeries) {
-                      seriesToActivate.add(matchingSeries.id);
-                    }
-                  }
-                }
-              }
-            }
-            
-            if (seriesToActivate.size > 0) {
-              setVisibleSeries(seriesToActivate);
-              console.log(`Applied layout: ${seriesToActivate.size} series activated`);
+          // Enhanced validation with error collection
+          const validationErrors: { errors: string[]; warnings: string[] } = { errors: [], warnings: [] };
+          
+          // Parse and validate the layout
+          const parsed = parsePlotLayout(layoutJson, (errs) => {
+            validationErrors.errors.push(...errs.errors);
+            validationErrors.warnings.push(...errs.warnings);
+          });
+          
+          // Set layout name from meta or filename
+          const layoutName = parsed.layout.meta?.name || file.name.replace('.json', '') || 'Custom Layout';
+          setCurrentLayoutName(layoutName);
+          
+          // Display warnings if any (non-blocking)
+          if (validationErrors.warnings.length > 0) {
+            console.warn('[TradingChart] Layout validation warnings:', validationErrors.warnings);
+            // Could show a toast notification here
+          }
+          
+          setPlotLayout(parsed);
+          setLayoutError(null); // Clear any previous errors
+          
+          // Update visible series based on layout
+          // CRITICAL: Add all series from layout to visibleSeries, even if not in registry yet
+          // They will be created when data arrives and should be visible by default
+          const seriesToActivate = new Set<string>();
+          
+          // First, add all series explicitly defined in the layout
+          for (const seriesAssignment of parsed.layout.series) {
+            seriesToActivate.add(seriesAssignment.series_id);
+          }
+          
+          // Also add any matching series from registry (in case IDs differ slightly)
+          for (const seriesAssignment of parsed.layout.series) {
+            const matchingSeries = registry.find(r => 
+              r.id === seriesAssignment.series_id || 
+              r.id.includes(seriesAssignment.series_id) ||
+              seriesAssignment.series_id.includes(r.id)
+            );
+            if (matchingSeries && matchingSeries.id !== seriesAssignment.series_id) {
+              seriesToActivate.add(matchingSeries.id);
             }
           }
+          
+          if (seriesToActivate.size > 0) {
+            setVisibleSeries(seriesToActivate);
+          
+          } else {
+            console.warn('[TradingChart] No series found in layout to activate');
+          }
         } catch (err) {
-          console.error('Failed to load layout:', err);
-          alert('Failed to load layout: ' + (err instanceof Error ? err.message : String(err)));
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error('[TradingChart] Failed to load layout:', err);
+          setLayoutError(errorMsg);
+          setCurrentLayoutName(null);
+          // Display error in UI (alert for now, could be replaced with toast)
+          alert('Failed to load layout:\n\n' + errorMsg);
         }
       }
     };
     input.click();
   }, [registry]);
+
+  const handleReloadLayout = useCallback(() => {
+    // Reload the current layout by re-triggering the load
+    if (currentLayoutName) {
+      handleLoadLayout();
+    }
+  }, [currentLayoutName, handleLoadLayout]);
 
   const handleStartDemo = useCallback(() => {
     setDemoMode(true);
@@ -357,7 +728,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const currentStage = demoMode ? 'demo' : feedState.stage;
 
   return (
-    <div className={cn('flex flex-col h-screen bg-background overflow-hidden', className)}>
+    <div className={cn('flex flex-col h-screen overflow-hidden relative', className)}>
       {/* Top Toolbar */}
       <Toolbar
         isLive={isLive}
@@ -366,80 +737,84 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         onJumpToLive={handleJumpToLive}
         onToggleLive={handleToggleLive}
         onZoomExtents={zoomExtents}
+        onToggleFullscreen={handleToggleFullscreen}
         onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
         onToggleTheme={handleToggleTheme}
         onLoadLayout={handleLoadLayout}
         onOpenSeriesBrowser={() => setSeriesBrowserOpen(true)}
+        currentLayoutName={currentLayoutName}
+        layoutError={layoutError}
+        onReloadLayout={handleReloadLayout}
+        seriesCount={registry.length}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        onToggleFullscreen={handleToggleFullscreen}
+        isFullscreen={isFullscreen}
         className="shrink-0 border-b border-border"
       />
 
       {/* HUD Status Bar */}
-      <HUD
-        stage={currentStage}
-        rate={demoMode ? 50 : feedState.rate}
-        fps={fps}
-        heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
-        dataClockMs={dataClockMs}
-        isLive={isLive}
-        historyProgress={demoMode ? 100 : feedState.historyProgress}
-        tickCount={tickCount}
-        cpuUsage={cpuUsage}
-        memoryUsage={memoryUsage}
-        gpuDrawCalls={gpuMetrics.drawCalls}
-        className="shrink-0 border-b border-border"
-      />
+      {hudVisible && (
+        <HUD
+          stage={currentStage}
+          rate={demoMode ? 50 : feedState.rate}
+          fps={fps}
+          heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
+          dataClockMs={dataClockMs}
+          isLive={isLive}
+          historyProgress={demoMode ? 100 : feedState.historyProgress}
+          tickCount={tickCount}
+          cpuUsage={cpuUsage}
+          memoryUsage={memoryUsage}
+          gpuDrawCalls={gpuMetrics.drawCalls}
+          currentLayoutName={currentLayoutName}
+          onReloadLayout={handleReloadLayout}
+          seriesCount={registry.length}
+          minimapEnabled={minimapEnabled}
+          onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          onToggleFullscreen={handleToggleFullscreen}
+          isFullscreen={isFullscreen}
+          className="shrink-0 border-b border-border"
+        />
+      )}
 
       {/* Main Chart Area */}
-      <div className="flex-1 min-h-0 flex flex-col relative">
-        {/* Tick/Line Chart Pane */}
-        <div className="relative flex-[6] min-h-0 border-b border-border">
-          <div className="pane-title">Tick Price & Indicators</div>
-          <div id="tick-chart" className="w-full h-full" />
-        </div>
-
-        {/* OHLC Candlestick Pane */}
-        <div className="relative flex-[4] min-h-0">
-          <div className="pane-title">OHLC Candlesticks</div>
-          <div id="ohlc-chart" className="w-full h-full" />
-        </div>
+      <div className="flex-1 min-h-0 flex flex-col relative z-10">
+        {/* Dynamic Plot Grid - renders based on layout */}
+        {/* CRITICAL: UI must not plot any data unless a plot layout JSON is loaded */}
+        {/* Requirement 0.1: Layout-Driven Rendering - no plotting without layout */}
+        <DynamicPlotGrid
+          layout={plotLayout}
+          onPaneReady={(paneId, containerId) => {
+            // Pane container is ready - MultiPaneChart will create surface
+           
+          }}
+          onPaneDestroyed={(paneId) => {
+            // Pane was removed - MultiPaneChart will cleanup
+         
+          }}
+          className="w-full h-full"
+        />
 
         {/* Connection Status Overlay */}
         {!isConnected && feedState.stage !== 'connecting' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-card/95 backdrop-blur-sm z-30">
-            <div className="text-center max-w-md px-6">
-              <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center mx-auto mb-4">
-                <span className="text-destructive text-3xl font-bold">!</span>
-              </div>
-              <h3 className="text-xl font-semibold text-foreground mb-2">No Data Connection</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                WebSocket server not available. Start the server or use demo mode.
-              </p>
-              <code className="text-xs text-muted-foreground font-mono bg-muted px-3 py-1.5 rounded block mb-4">
-                {wsUrl}
-              </code>
-              
-              <div className="flex flex-col gap-3">
-                <Button 
-                  onClick={handleStartDemo}
-                  className="w-full bg-primary hover:bg-primary/90"
-                >
-                  <Play className="w-4 h-4 mr-2" />
-                  Start Demo Mode
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  Or run: <code className="bg-muted px-1.5 py-0.5 rounded">python server.py</code>
-                </p>
-              </div>
-            </div>
-          </div>
+          <NoConnectionOverlay
+            wsUrl={wsUrl}
+            onStartDemo={handleStartDemo}
+            autoReloadEnabled={autoReloadEnabled}
+            onCancelAutoReload={() => setAutoReloadEnabled(false)}
+          />
         )}
 
         {/* Connecting Overlay */}
         {feedState.stage === 'connecting' && !demoMode && (
-          <div className="absolute inset-0 flex items-center justify-center bg-card/95 backdrop-blur-sm z-30">
-            <div className="text-center">
-              <div className="w-16 h-16 border-3 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-foreground mb-2">Connecting...</h3>
+          <div className="absolute inset-0 flex items-center justify-center z-30">
+            <div className="absolute inset-0 bg-gradient-to-br from-background/98 via-background/99 to-background/100 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
+            <div className="relative text-center glass-card px-8 py-10 fade-in">
+              <div className="w-20 h-20 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-6 shadow-lg" />
+              <h3 className="text-2xl font-bold text-foreground mb-2 gradient-text">Connecting...</h3>
               <p className="text-sm text-muted-foreground">
                 Establishing connection to data feed
               </p>
@@ -447,12 +822,18 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
           </div>
         )}
 
-        {/* Chart Loading Overlay */}
-        {!isReady && (
-          <div className="absolute inset-0 flex items-center justify-center bg-card/95 backdrop-blur-sm z-20">
-            <div className="text-center">
-              <div className="w-16 h-16 border-3 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-foreground mb-2">Initializing Chart</h3>
+        {/* No Layout Overlay - Show when connected but no layout loaded (highest priority after connection) */}
+        {isConnected && !plotLayout && (
+          <NoLayoutOverlay onLoadLayout={handleLoadLayout} />
+        )}
+
+        {/* Chart Loading Overlay - Only show if layout is loaded but chart not ready */}
+        {isConnected && plotLayout && !isReady && (
+          <div className="absolute inset-0 flex items-center justify-center z-20">
+            <div className="absolute inset-0 bg-gradient-to-br from-background/98 via-background/99 to-background/100 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
+            <div className="relative text-center glass-card px-8 py-10 fade-in">
+              <div className="w-20 h-20 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-6 shadow-lg" />
+              <h3 className="text-2xl font-bold text-foreground mb-2 gradient-text">Initializing Chart</h3>
               <p className="text-sm text-muted-foreground">
                 Loading SciChart WebAssembly engine...
               </p>
@@ -461,12 +842,23 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         )}
       </div>
 
-      {/* Overview/Minimap (when enabled) */}
-      {minimapEnabled && (
-        <div className="shrink-0 h-16 border-t border-border bg-card">
-          <div id="overview-chart" className="w-full h-full" />
+      {/* Overview/Minimap (always rendered, visibility controlled by CSS) */}
+      <div 
+        className={`shrink-0 border-t border-border/60 relative glass-card transition-all duration-200 ${
+          minimapEnabled 
+            ? 'h-20 opacity-100 overflow-visible' 
+            : 'h-0 opacity-0 overflow-hidden pointer-events-none'
+        }`}
+      >
+        <div id="overview-chart" className="w-full h-full rounded-b-lg" />
+        {/* "Waiting for Data" overlay for minimap */}
+        <div id="overview-chart-waiting" className="absolute inset-0 flex items-center justify-center bg-background/60 backdrop-blur-md z-20 pointer-events-none rounded-b-lg" style={{ display: 'none' }}>
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-primary/50 border-t-primary rounded-full animate-spin mx-auto mb-1"></div>
+            <p className="text-xs text-muted-foreground font-medium">Waiting for Data...</p>
+          </div>
         </div>
-      )}
+      </div>
 
       {/* Series Browser Drawer */}
       <SeriesBrowser
@@ -477,6 +869,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         onToggleSeries={handleToggleSeries}
         onSelectAll={handleSelectAllSeries}
         onSelectNone={handleSelectNoneSeries}
+        plotLayout={plotLayout}
+        onMoveSeries={handleMoveSeries}
       />
 
       {/* Command Palette (Ctrl/Cmd+K) */}

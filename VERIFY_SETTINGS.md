@@ -22,7 +22,7 @@ Run these commands in your browser's DevTools Console to verify the settings:
 ```javascript
 // This will show the downsampling ratio being used
 // The code uses BASE_DOWNSAMPLE_RATIO = 2, so every 2nd point is kept
-console.log('Downsampling Ratio: 2:1 (every 2nd point)');
+
 ```
 
 ### **2. Check Resampling Mode for Tick Series**
@@ -112,4 +112,7 @@ If the wave shape looks different, it might be due to:
 2. **Observe wave shape** - Should be smooth sine waves
 3. **Monitor FPS** - Should be 50-60 FPS
 4. **If issues persist** - Share console logs and describe the wave shape difference
+
+
+
 

@@ -1,0 +1,58 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [1, 2],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "left",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price & Indicators"
+    },
+    {
+      "id": "right",
+      "row": 0,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Bars"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "left",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "left",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "right",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "right",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["right"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "2x1 horizontal layout - side by side panes"
+  }
+}
+

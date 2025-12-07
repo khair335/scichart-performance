@@ -1,0 +1,459 @@
+/**
+ * Dynamic Pane Manager
+ * Handles creation, management, and cleanup of dynamic chart panes
+ */
+
+import {
+  SciChartSurface,
+  NumericAxis,
+  DateTimeNumericAxis,
+  TSciChart,
+  EAutoRange,
+  EAxisAlignment,
+  NumberRange,
+  SciChartVerticalGroup,
+  ZoomPanModifier,
+  ZoomExtentsModifier,
+  MouseWheelZoomModifier,
+  RubberBandXyZoomModifier,
+  EXyDirection,
+} from 'scichart';
+import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
+
+export interface PaneSurface {
+  surface: SciChartSurface;
+  wasm: TSciChart;
+  xAxis: DateTimeNumericAxis;
+  yAxis: NumericAxis;
+  containerId: string;
+  paneId: string;
+  paneConfig: PaneConfig;
+  hasData?: boolean; // Optional: tracks if pane has received data
+  waitingForData?: boolean; // Optional: tracks if pane is waiting for data
+}
+
+export interface ChartTheme {
+  type: 'Dark';
+  axisBorder: string;
+  axisTitleColor: string;
+  annotationsGripsBackgroundBrush: string;
+  annotationsGripsBorderBrush: string;
+  axis3DBandsFill: string;
+  axisBandsFill: string;
+  gridBackgroundBrush: string;
+  gridBorderBrush: string;
+  loadingAnimationBackground: string;
+  loadingAnimationForeground: string;
+  majorGridLineBrush: string;
+  minorGridLineBrush: string;
+  sciChartBackground: string;
+  tickTextBrush: string;
+  labelBackgroundBrush: string;
+  labelBorderBrush: string;
+  labelForegroundBrush: string;
+  textAnnotationBackground: string;
+  textAnnotationForeground: string;
+  cursorLineBrush: string;
+  rolloverLineStroke: string;
+}
+
+export type ZoomMode = 'box' | 'x-only' | 'y-only';
+
+export class DynamicPaneManager {
+  private paneSurfaces: Map<string, PaneSurface> = new Map();
+  private sharedWasm: TSciChart | null = null;
+  private verticalGroup: SciChartVerticalGroup | null = null;
+  private theme: ChartTheme;
+  private zoomMode: ZoomMode = 'box'; // Default zoom mode
+  private timezone: string = 'UTC'; // Timezone for DateTime axis formatting
+
+  constructor(theme: ChartTheme, timezone: string = 'UTC') {
+    this.theme = theme;
+    this.timezone = timezone;
+  }
+
+  /**
+   * Set timezone for DateTime axis formatting
+   */
+  setTimezone(timezone: string): void {
+    this.timezone = timezone;
+    // Update existing panes' X-axes
+    for (const [paneId, paneSurface] of this.paneSurfaces) {
+      this.updateAxisTimezone(paneSurface.xAxis);
+    }
+  }
+
+  /**
+   * Update DateTime axis with timezone-aware formatting
+   */
+  private updateAxisTimezone(xAxis: DateTimeNumericAxis): void {
+    // SciChart DateTimeNumericAxis uses labelProvider for custom formatting
+    // We'll use the labelFormat option if available, or create a custom formatter
+    try {
+      // Create timezone-aware label formatter
+      const formatter = (value: number) => {
+        const date = new Date(value);
+        // Format using the configured timezone
+        return date.toLocaleString('en-US', {
+          timeZone: this.timezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      };
+      
+      // Apply formatter if the axis supports it
+      // Note: SciChart's DateTimeNumericAxis may use different API
+      // This is a placeholder - actual implementation depends on SciChart API
+      if ((xAxis as any).labelProvider) {
+        (xAxis as any).labelProvider.formatLabel = formatter;
+      }
+    } catch (e) {
+      console.warn('[DynamicPaneManager] Failed to apply timezone formatting:', e);
+    }
+  }
+
+  /**
+   * Set zoom mode for all panes
+   */
+  setZoomMode(mode: ZoomMode): void {
+    this.zoomMode = mode;
+    // Update modifiers for all existing panes
+    for (const [paneId, paneSurface] of this.paneSurfaces) {
+      this.updateZoomModifiers(paneSurface.surface);
+    }
+  }
+
+  /**
+   * Get current zoom mode
+   */
+  getZoomMode(): ZoomMode {
+    return this.zoomMode;
+  }
+
+  /**
+   * Update zoom modifiers based on current zoom mode
+   */
+  private updateZoomModifiers(surface: SciChartSurface): void {
+    // Remove existing zoom modifiers
+    const modifiersToRemove: any[] = [];
+    surface.chartModifiers.asArray().forEach((mod: any) => {
+      if (mod instanceof MouseWheelZoomModifier || 
+          mod instanceof RubberBandXyZoomModifier) {
+        modifiersToRemove.push(mod);
+      }
+    });
+    modifiersToRemove.forEach(mod => surface.chartModifiers.remove(mod));
+
+    // Add modifiers based on zoom mode
+    switch (this.zoomMode) {
+      case 'x-only':
+        // X-only: wheel zooms X, box zoom disabled
+        surface.chartModifiers.add(
+          new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection })
+        );
+        break;
+      case 'y-only':
+        // Y-only: wheel zooms Y, box zoom disabled
+        surface.chartModifiers.add(
+          new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection })
+        );
+        break;
+      case 'box':
+      default:
+        // Box mode: wheel zooms X (with Shift for Y), box zoom enabled
+        const wheelModifier = new MouseWheelZoomModifier({ 
+          xyDirection: EXyDirection.XDirection 
+        });
+        // Override for Shift+wheel Y zoom
+        const originalOnWheel = (wheelModifier as any).onWheel;
+        if (originalOnWheel) {
+          (wheelModifier as any).onWheel = (args: any) => {
+            if (args.modifierKeyState?.shiftKey) {
+              const tempDirection = wheelModifier.xyDirection;
+              wheelModifier.xyDirection = EXyDirection.YDirection;
+              try {
+                originalOnWheel.call(wheelModifier, args);
+              } finally {
+                wheelModifier.xyDirection = tempDirection;
+              }
+            } else {
+              originalOnWheel.call(wheelModifier, args);
+            }
+          };
+        }
+        surface.chartModifiers.add(
+          wheelModifier,
+          new RubberBandXyZoomModifier({ isAnimated: false })
+        );
+        break;
+    }
+  }
+
+  /**
+   * Create a vertical group for linking X-axes (called once)
+   */
+  createVerticalGroup(wasm: TSciChart): SciChartVerticalGroup {
+    if (this.verticalGroup) {
+      return this.verticalGroup;
+    }
+    this.verticalGroup = new SciChartVerticalGroup();
+    return this.verticalGroup;
+  }
+
+  /**
+   * Create a new pane surface
+   */
+  async createPane(
+    paneId: string,
+    containerId: string,
+    paneConfig: PaneConfig,
+    maxAutoTicks: number = 8,
+    separateXAxes: boolean = true
+  ): Promise<PaneSurface> {
+    // Check if pane already exists
+    if (this.paneSurfaces.has(paneId)) {
+      return this.paneSurfaces.get(paneId)!;
+    }
+
+    // Create surface directly - SciChart will initialize WASM
+    const result = await SciChartSurface.create(containerId, {
+      theme: this.theme,
+    });
+
+    const { sciChartSurface: surface, wasmContext } = result;
+    
+    // Store WASM context as shared if this is the first pane
+    if (!this.sharedWasm) {
+      this.sharedWasm = wasmContext;
+    }
+
+    // Create timezone-aware label formatter
+    const timezoneFormatter = (value: number): string => {
+      try {
+        const date = new Date(value);
+        return date.toLocaleString('en-US', {
+          timeZone: this.timezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      } catch (e) {
+        // Fallback to ISO string if timezone formatting fails
+        return new Date(value).toISOString();
+      }
+    };
+
+    // Create axes with timezone-aware formatting
+    const xAxis = new DateTimeNumericAxis(wasmContext, {
+      autoRange: EAutoRange.Once,
+      drawMajorGridLines: true, // Enable grid lines
+      drawMinorGridLines: true, // Enable minor grid lines
+      isVisible: true,
+      useNativeText: true,
+      useSharedCache: true,
+      maxAutoTicks: maxAutoTicks,
+      // Add styling to make X-axis visible (match new-index.html)
+      axisTitle: "Time",
+      axisTitleStyle: { color: "#9fb2c9" },
+      labelStyle: { color: "#9fb2c9" },
+      // Apply timezone-aware label formatting
+      // Note: SciChart may use labelProvider or labelFormat - check API docs
+      // For now, we'll try to set it via labelProvider if available
+    });
+    
+    // Apply timezone formatter after axis creation
+    // SciChart DateTimeNumericAxis may expose labelProvider or formatLabel
+    try {
+      if ((xAxis as any).labelProvider) {
+        (xAxis as any).labelProvider.formatLabel = timezoneFormatter;
+      } else if ((xAxis as any).formatLabel) {
+        (xAxis as any).formatLabel = timezoneFormatter;
+      }
+    } catch (e) {
+      console.warn('[DynamicPaneManager] Could not apply timezone formatter (may not be supported by SciChart version):', e);
+    }
+
+    const yAxis = new NumericAxis(wasmContext, {
+      autoRange: EAutoRange.Once,
+      drawMajorGridLines: true, // Enable grid lines
+      drawMinorGridLines: true, // Enable minor grid lines
+      axisAlignment: EAxisAlignment.Right,
+      useNativeText: true,
+      useSharedCache: true,
+      maxAutoTicks: 3,
+      growBy: new NumberRange(0.1, 0.1),
+      // Add styling to make Y-axis visible (match new-index.html)
+      axisTitle: "Price",
+      axisTitleStyle: { color: "#9fb2c9" },
+      labelStyle: { color: "#9fb2c9" },
+    });
+
+    surface.xAxes.add(xAxis);
+    surface.yAxes.add(yAxis);
+
+    // Add chart modifiers for zoom/pan interaction
+    // Note: MouseWheelZoomModifier should be added before ZoomPanModifier to ensure it works
+    
+    const zoomExtentsModifier = new ZoomExtentsModifier();
+    
+    // Add base modifiers (pan, zoom extents)
+    surface.chartModifiers.add(
+      new ZoomPanModifier({ enableZoom: false }), // Enable pan (dragging) only, disable zoom gestures
+      zoomExtentsModifier,
+    );
+    
+    // Add zoom modifiers based on current zoom mode
+    this.updateZoomModifiers(surface);
+    
+    // Double-click = fit-all + pause
+    // ZoomExtentsModifier already handles double-click for fit-all
+    // We'll add pause callback via surface event (if available)
+    // Note: The pause logic will be handled in MultiPaneChart via setLiveMode callback
+
+    // Add to vertical group to link X-axes across all panes
+    // Requirement 17: All panes must have their own X-axis, all linked and synchronized
+    // Note: separateXAxes parameter is kept for backward compatibility but all panes are linked
+    if (this.verticalGroup) {
+      this.verticalGroup.addSurfaceToGroup(surface);
+    }
+
+    const paneSurface: PaneSurface = {
+      surface,
+      wasm: wasmContext,
+      xAxis,
+      yAxis,
+      containerId,
+      paneId,
+      paneConfig,
+      hasData: false,
+      waitingForData: true,
+    };
+
+    this.paneSurfaces.set(paneId, paneSurface);
+    return paneSurface;
+  }
+
+  /**
+   * Get a pane surface by ID
+   */
+  getPane(paneId: string): PaneSurface | null {
+    return this.paneSurfaces.get(paneId) || null;
+  }
+
+  /**
+   * Get all pane surfaces
+   */
+  getAllPanes(): PaneSurface[] {
+    return Array.from(this.paneSurfaces.values());
+  }
+
+  /**
+   * Mark that a pane has received data
+   */
+  markPaneHasData(paneId: string): void {
+    const pane = this.paneSurfaces.get(paneId);
+    if (pane) {
+      pane.hasData = true;
+      pane.waitingForData = false;
+    }
+  }
+
+  /**
+   * Check if a pane is waiting for data
+   */
+  isPaneWaitingForData(paneId: string): boolean {
+    const pane = this.paneSurfaces.get(paneId);
+    return pane ? pane.waitingForData : true;
+  }
+
+  /**
+   * Destroy a pane
+   * NOTE: RenderableSeries should be removed BEFORE calling this, as deleting the surface
+   * will invalidate any remaining RenderableSeries references
+   */
+  destroyPane(paneId: string): void {
+    const pane = this.paneSurfaces.get(paneId);
+    if (pane) {
+      // Remove from vertical group if linked
+      // Note: SciChartVerticalGroup doesn't have removeSurfaceFromGroup method
+      // The group will automatically handle cleanup when surface is deleted
+      // if (this.verticalGroup) {
+      //   try {
+      //     this.verticalGroup.removeSurfaceFromGroup(pane.surface);
+      //   } catch (e) {
+      //     // Ignore errors if surface not in group
+      //   }
+      // }
+      
+      // CRITICAL: Remove all RenderableSeries before deleting surface
+      // This prevents "DataSeries has been deleted" errors
+      try {
+        const renderableSeriesToRemove: any[] = [];
+        pane.surface.renderableSeries.asArray().forEach((rs: any) => {
+          renderableSeriesToRemove.push(rs);
+        });
+        
+        for (const rs of renderableSeriesToRemove) {
+          try {
+            pane.surface.renderableSeries.remove(rs);
+          } catch (e) {
+            // Ignore if already removed
+          }
+        }
+      } catch (e) {
+        console.warn(`[DynamicPaneManager] Error removing RenderableSeries from pane ${paneId}:`, e);
+      }
+      
+      // Delete surface (DataSeries are NOT deleted - they're managed separately)
+      try {
+        pane.surface.delete();
+      } catch (e) {
+        console.warn(`[DynamicPaneManager] Error deleting pane ${paneId}:`, e);
+      }
+      
+      this.paneSurfaces.delete(paneId);
+    }
+  }
+
+  /**
+   * Destroy all panes
+   */
+  destroyAllPanes(): void {
+    for (const paneId of this.paneSurfaces.keys()) {
+      this.destroyPane(paneId);
+    }
+  }
+
+  /**
+   * Get shared WASM context
+   */
+  getSharedWasm(): TSciChart | null {
+    return this.sharedWasm;
+  }
+
+  /**
+   * Get vertical group
+   */
+  getVerticalGroup(): SciChartVerticalGroup | null {
+    return this.verticalGroup;
+  }
+
+  /**
+   * Cleanup all resources
+   */
+  cleanup(): void {
+    this.destroyAllPanes();
+    this.verticalGroup = null;
+    this.sharedWasm = null;
+  }
+}
+

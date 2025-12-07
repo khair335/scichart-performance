@@ -1,0 +1,58 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "pricePane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 Price & Indicators"
+    },
+    {
+      "id": "pnlPane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 Strategy PnL (May Wait for Data)"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "pricePane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "pricePane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pnlPane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:strategy:beta:pnl",
+      "pane": "pnlPane",
+      "type": "FastLineRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["pnlPane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "MESU5 PnL Waiting Test"
+  }
+}
+

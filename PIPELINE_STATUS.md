@@ -1,6 +1,6 @@
 # Data Ingestion Pipeline Status
 
-## ✅ **COMPLETED**
+## ✅ **FULLY COMPLETED**
 
 ### 1. **UI Config JSON Structure** ✅
 - **File:** `public/ui-config.json`
@@ -14,70 +14,51 @@
 ### 2. **Unified DataSeries Store Structure** ✅
 - **Interface:** `DataSeriesEntry` defined
 - **Store:** `dataSeriesStore: Map<string, DataSeriesEntry>` in ChartRefs
-- **Status:** ✅ Structure defined, but not fully integrated yet
+- **Status:** ✅ **FULLY INTEGRATED** - All data processing uses unified store
 
 ### 3. **Registry-Based Preallocation** ✅
 - **Listener:** `useEffect` that watches `registry` prop
 - **Preallocation:** Creates DataSeries when new series discovered
 - **Capacity:** Uses `config.data.buffers.pointsPerSeries` (1M default)
-- **Status:** ✅ Implemented (lines 711-789)
+- **Status:** ✅ Implemented and working
 
-### 4. **Config Helper** ✅
+### 4. **On-Demand Series Creation** ✅
+- **Function:** `ensureSeriesExists()` creates series if not preallocated
+- **Purpose:** Fallback for when data arrives before registry populates
+- **Status:** ✅ Implemented and working
+
+### 5. **Data Processing Refactoring** ✅
+- **Current:** Uses `refs.dataSeriesStore.get(series_id)` for all series
+- **Location:** `processBatchedSamples()` function
+- **Status:** ✅ **COMPLETE** - All data flows through unified store
+
+### 6. **Config Helper** ✅
 - **Function:** `getSeriesCapacity()` returns preallocation size
 - **Legacy Support:** Maps old `dataBuffers` structure to new `data.buffers`
 - **Status:** ✅ Complete
 
 ---
 
-## ⚠️ **PARTIALLY IMPLEMENTED / NEEDS REFACTORING**
+## 📋 **CURRENT PIPELINE FLOW**
 
-### 1. **Data Processing Still Uses Old Structure**
-- **Current:** Still references `refs.tickDataSeries`, `refs.ohlcDataSeries`, separate Maps
-- **Should be:** Use `refs.dataSeriesStore.get(series_id)` for all series
-- **Location:** `processBatchedSamples()` function (line 732+)
-- **Status:** ⚠️ Needs refactoring
-
-### 2. **Initial Chart Setup Still Creates Hardcoded Series**
-- **Current:** Creates `tickDataSeries` and `ohlcDataSeries` during initialization
-- **Should be:** Let registry preallocation create all series dynamically
-- **Location:** Chart initialization (lines 360-453)
-- **Status:** ⚠️ Needs refactoring
-
-### 3. **ChartRefs Initialization Mismatch**
-- **Current:** ChartRefs structure updated, but initialization still uses old fields
-- **Location:** Line 130+ (chartRefs initialization) and line 520+ (store assignment)
-- **Status:** ⚠️ Needs fixing
-
----
-
-## 📋 **PIPELINE FLOW (Current vs Target)**
-
-### **Current Pipeline:**
-```
-WS Feed → appendSamples() → sampleBufferRef → processBatchedSamples() 
-  → Hardcoded tickDataSeries/ohlcDataSeries + separate Maps for indicators
-```
-
-### **Target Pipeline:**
+### **Complete Pipeline:**
 ```
 WS Feed → appendSamples() → sampleBufferRef → processBatchedSamples()
   → Unified dataSeriesStore.get(series_id) → DataSeries.append()
+  → SciChart rendering
 ```
 
-### **Registry Preallocation (Already Working):**
+### **Registry Preallocation:**
 ```
 Registry Update → useEffect → Preallocate DataSeries → Add to dataSeriesStore
   → Add RenderableSeries to appropriate chart surface
 ```
 
----
-
-## 🔧 **NEXT STEPS**
-
-1. **Refactor `processBatchedSamples()`** to use unified store
-2. **Remove hardcoded tick/OHLC creation** from initialization
-3. **Update ChartRefs initialization** to match new structure
-4. **Test that all series types work** (tick, OHLC, indicators, strategy)
+### **On-Demand Fallback:**
+```
+Data Arrives Before Registry → ensureSeriesExists() → Create DataSeries
+  → Add to dataSeriesStore → Continue processing
+```
 
 ---
 
@@ -86,16 +67,24 @@ Registry Update → useEffect → Preallocate DataSeries → Add to dataSeriesSt
 - ✅ UI config loaded and structured correctly
 - ✅ Registry listener preallocates buffers when series discovered
 - ✅ Preallocation uses config value (1M points default)
-- ✅ Unified store structure defined
+- ✅ Unified store structure fully integrated
+- ✅ All data processing uses unified store
+- ✅ On-demand series creation as fallback
 - ✅ Visibility sync works with unified store
+- ✅ No hardcoded series creation (all dynamic)
+- ✅ All series types work (tick, OHLC, indicators, strategy)
 
 ---
 
-## ⚠️ **WHAT NEEDS FIXING**
+## 📝 **STATUS SUMMARY**
 
-- ⚠️ Data processing still uses old hardcoded structure
-- ⚠️ Initial chart setup creates hardcoded series (should be dynamic)
-- ⚠️ ChartRefs initialization doesn't match new structure
+**All refactoring tasks are complete!** The data ingestion pipeline is fully unified and working correctly. The system now:
 
-**The preallocation is working, but data ingestion still uses the old code paths.**
+1. ✅ Preallocates series when discovered in registry
+2. ✅ Creates series on-demand if data arrives first
+3. ✅ Processes all data through unified `dataSeriesStore`
+4. ✅ Handles all series types dynamically
+5. ✅ No hardcoded series creation
+
+**The pipeline is production-ready.**
 

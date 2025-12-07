@@ -5,6 +5,7 @@ import {
   DateTimeNumericAxis,
   FastLineRenderableSeries,
   FastCandlestickRenderableSeries,
+  FastMountainRenderableSeries,
   XyDataSeries,
   OhlcDataSeries,
   ZoomPanModifier,
@@ -29,6 +30,80 @@ import {
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
 import { parseSeriesType, isTickChartSeries, isOhlcChartSeries } from '@/lib/series-namespace';
+import { PlotLayoutManager } from '@/lib/plot-layout-manager';
+import type { ParsedLayout } from '@/types/plot-layout';
+import { DynamicPaneManager, type PaneSurface as DynamicPaneSurface } from '@/lib/dynamic-pane-manager';
+import { renderHorizontalLines, renderVerticalLines } from '@/lib/overlay-renderer';
+import { groupStrategyMarkers, getConsolidatedSeriesId, type MarkerGroup } from '@/lib/strategy-marker-consolidator';
+
+/**
+ * Update the "Waiting for Data" overlay for a pane based on assigned series data status
+ * Shows spinner and count of pending series when some assigned series don't have data yet
+ */
+function updatePaneWaitingOverlay(
+  refs: ChartRefs,
+  layoutManager: PlotLayoutManager,
+  paneId: string,
+  plotLayout: ParsedLayout | null
+): void {
+  if (!plotLayout) return;
+  
+  // Get all series assigned to this pane from the layout
+  const assignedSeries = layoutManager.getSeriesForPane(paneId);
+  
+  // If no series assigned, don't show waiting (pane might be empty by design)
+  if (assignedSeries.length === 0) {
+    const waitingOverlay = document.getElementById(`pane-${paneId}-waiting`);
+    if (waitingOverlay) {
+      waitingOverlay.style.display = 'none';
+    }
+    return;
+  }
+  
+  // Check which assigned series have data
+  let pendingCount = 0;
+  let hasAnyData = false;
+  
+  for (const seriesId of assignedSeries) {
+    const seriesEntry = refs.dataSeriesStore.get(seriesId);
+    if (seriesEntry && seriesEntry.dataSeries) {
+      // Check if series has data
+      const count = seriesEntry.dataSeries.count();
+      if (count > 0) {
+        hasAnyData = true;
+      } else {
+        pendingCount++;
+      }
+    } else {
+      // Series not created yet or not in store
+      pendingCount++;
+    }
+  }
+  
+  // Get the waiting overlay element
+  const waitingOverlay = document.getElementById(`pane-${paneId}-waiting`);
+  if (!waitingOverlay) {
+    console.warn(`[updatePaneWaitingOverlay] Waiting overlay not found for pane ${paneId} (looking for pane-${paneId}-waiting)`);
+    return;
+  }
+  
+  // Get the count element
+  const countElement = document.getElementById(`pane-${paneId}-waiting-count`);
+  
+  if (pendingCount > 0) {
+    // Show overlay with pending count
+    waitingOverlay.style.display = 'flex';
+    if (countElement) {
+      countElement.textContent = `${pendingCount} ${pendingCount === 1 ? 'series' : 'series'} pending`;
+    }
+  } else {
+    // All assigned series have data - hide overlay
+    waitingOverlay.style.display = 'none';
+    if (countElement) {
+      countElement.textContent = '';
+    }
+  }
+}
 
 interface UIConfig {
   // New structure (matches requirements)
@@ -79,85 +154,47 @@ interface MultiPaneChartProps {
   uiConfig?: UIConfig;
   feedStage?: string; // 'history' | 'delta' | 'live' | 'idle'
   registry?: Array<{ id: string; lastMs: number }>; // Data registry for global data clock
+  plotLayout?: ParsedLayout | null; // Plot layout for dynamic pane assignment
+  zoomMode?: 'box' | 'x-only' | 'y-only'; // Zoom mode for chart interactions
 }
 
 // Unified DataSeries Store Entry
 interface DataSeriesEntry {
   dataSeries: XyDataSeries | OhlcDataSeries;
-  renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries;
-  chartTarget: 'tick' | 'ohlc'; // Which chart surface this series belongs to
+  renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
+  chartTarget: 'tick' | 'ohlc'; // Legacy: Which chart surface this series belongs to (for backward compatibility)
+  paneId?: string; // New: Which pane this series belongs to (for dynamic layouts)
   seriesType: 'tick' | 'ohlc-bar' | 'tick-indicator' | 'bar-indicator' | 'strategy-marker' | 'strategy-signal' | 'strategy-pnl' | 'other';
+  renderableSeriesType?: 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries'; // Type from layout JSON
+}
+
+interface PaneSurface {
+  surface: SciChartSurface;
+  wasm: TSciChart;
+  xAxis: DateTimeNumericAxis;
+  yAxis: NumericAxis;
+  containerId: string;
+  paneId: string;
+  hasData?: boolean; // Optional: tracks if pane has received data
+  waitingForData?: boolean; // Optional: tracks if pane is waiting for data
 }
 
 interface ChartRefs {
-  tickSurface: SciChartSurface | null;
-  ohlcSurface: SciChartSurface | null;
-  tickWasm: TSciChart | null;
-  ohlcWasm: TSciChart | null;
+  tickSurface: SciChartSurface | null; // Legacy - for backward compatibility
+  ohlcSurface: SciChartSurface | null; // Legacy - for backward compatibility
+  tickWasm: TSciChart | null; // Legacy
+  ohlcWasm: TSciChart | null; // Legacy
+  // Dynamic pane registry: paneId → PaneSurface
+  paneSurfaces: Map<string, PaneSurface>;
   // Unified DataSeries Store: series_id → DataSeriesEntry
   // This replaces separate Maps and allows dynamic discovery
   dataSeriesStore: Map<string, DataSeriesEntry>;
   verticalGroup: SciChartVerticalGroup | null;
   overview: SciChartOverview | null;
-}
-
-// Helper function to get Y range from any data series type
-function getDataSeriesYRange(dataSeries: XyDataSeries | OhlcDataSeries, xMin?: number, xMax?: number): { min: number; max: number } | null {
-  try {
-    if (dataSeries.count() === 0) return null;
-    
-    let yMin = Infinity;
-    let yMax = -Infinity;
-    const count = dataSeries.count();
-    
-    // Check if it's an OHLC series (has high/low values)
-    if ('getNativeHighValues' in dataSeries) {
-      const ohlcDs = dataSeries as OhlcDataSeries;
-      const xValues = ohlcDs.getNativeXValues();
-      const highValues = ohlcDs.getNativeHighValues();
-      const lowValues = ohlcDs.getNativeLowValues();
-      
-      for (let i = 0; i < count; i++) {
-        const x = xValues.get(i);
-        // Skip if outside X range (if specified)
-        if (xMin !== undefined && xMax !== undefined) {
-          if (x < xMin || x > xMax) continue;
-        }
-        const high = highValues.get(i);
-        const low = lowValues.get(i);
-        if (isFinite(high) && isFinite(low)) {
-          yMin = Math.min(yMin, low);
-          yMax = Math.max(yMax, high);
-        }
-      }
-    } else {
-      // XyDataSeries - use getNativeXValues and getNativeYValues
-      const xyDs = dataSeries as XyDataSeries;
-      const xValues = xyDs.getNativeXValues();
-      const yValues = xyDs.getNativeYValues();
-      
-      for (let i = 0; i < count; i++) {
-        const x = xValues.get(i);
-        // Skip if outside X range (if specified)
-        if (xMin !== undefined && xMax !== undefined) {
-          if (x < xMin || x > xMax) continue;
-        }
-        const y = yValues.get(i);
-        if (isFinite(y)) {
-          yMin = Math.min(yMin, y);
-          yMax = Math.max(yMax, y);
-        }
-      }
-    }
-    
-    if (isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
-      return { min: yMin, max: yMax };
-    }
-    
-    return null;
-  } catch (e) {
-    return null;
-  }
+  // Shared WASM context for all panes (created once)
+  sharedWasm: TSciChart | null;
+  
+  updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
 }
 
 export function useMultiPaneChart({
@@ -172,6 +209,8 @@ export function useMultiPaneChart({
   uiConfig,
   feedStage = 'idle',
   registry = [],
+  plotLayout = null,
+  zoomMode = 'box',
 }: MultiPaneChartProps) {
   // Default UI config if not provided
   const defaultUIConfig: UIConfig = {
@@ -217,6 +256,30 @@ export function useMultiPaneChart({
     },
   } : defaultUIConfig;
   
+  // Layout manager instance (created once)
+  const layoutManagerRef = useRef<PlotLayoutManager | null>(null);
+  if (!layoutManagerRef.current) {
+    layoutManagerRef.current = new PlotLayoutManager();
+  }
+  const layoutManager = layoutManagerRef.current;
+
+  // Dynamic pane manager instance (will be initialized after chartTheme is defined)
+  const paneManagerRef = useRef<DynamicPaneManager | null>(null);
+  
+  // Track which panes are being created to avoid duplicates
+  const creatingPanesRef = useRef<Set<string>>(new Set());
+  
+  // Track which series have been preallocated to prevent re-running
+  const preallocatedSeriesRef = useRef<Set<string>>(new Set());
+
+  // Update layout manager when plotLayout changes
+  useEffect(() => {
+    if (plotLayout) {
+      // Layout is already parsed, just update the manager's internal state
+      layoutManagerRef.current?.loadLayout(plotLayout.layout);
+    }
+  }, [plotLayout]);
+
   // Helper to get preallocation capacity for any series
   const getSeriesCapacity = (): number => {
     return config.data?.buffers.pointsPerSeries ?? 1_000_000;
@@ -231,9 +294,130 @@ export function useMultiPaneChart({
     }
     return null;
   };
+
+  /**
+   * Get the renderable series type from layout, or infer from series type
+   */
+  const getRenderableSeriesType = (seriesId: string): 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries' => {
+    // Check layout for explicit type
+    if (plotLayout) {
+      const seriesAssignment = plotLayout.layout.series.find(s => s.series_id === seriesId);
+      if (seriesAssignment) {
+        return seriesAssignment.type;
+      }
+    }
+    
+    // Fallback: infer from series type
+    const seriesInfo = parseSeriesType(seriesId);
+    if (seriesInfo.type === 'ohlc-bar') {
+      return 'FastCandlestickRenderableSeries';
+    }
+    
+    // Default to line series (can be overridden by layout)
+    return 'FastLineRenderableSeries';
+  };
+
+  /**
+   * Get the pane ID for a series based on layout or fallback to namespace-based routing
+   */
+  // Helper function to calculate Y-range from DataSeries manually
+  // getYRange() doesn't exist on DataSeries, so we calculate it by iterating through data
+  const calculateYRange = (
+    dataSeries: XyDataSeries | OhlcDataSeries,
+    xMin?: number,
+    xMax?: number
+  ): { min: number; max: number } | null => {
+    try {
+      if (dataSeries.count() === 0) return null;
+      
+      const xValues = dataSeries.getNativeXValues();
+      const yValues = dataSeries.getNativeYValues();
+      
+      if (!xValues || !yValues || xValues.size() === 0) return null;
+      
+      let yMin = Infinity;
+      let yMax = -Infinity;
+      let foundData = false;
+      
+      for (let i = 0; i < xValues.size(); i++) {
+        const x = xValues.get(i);
+        const y = yValues.get(i);
+        
+        // If X-range filter is provided, only include data within that range
+        if (xMin !== undefined && xMax !== undefined) {
+          if (x < xMin || x > xMax) continue;
+        }
+        
+        if (isFinite(y)) {
+          yMin = Math.min(yMin, y);
+          yMax = Math.max(yMax, y);
+          foundData = true;
+        }
+      }
+      
+      if (foundData && yMax > yMin) {
+        return { min: yMin, max: yMax };
+      }
+      
+      return null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const getPaneForSeries = (seriesId: string): { paneId: string | null; surface: SciChartSurface | null; wasm: TSciChart | null } => {
+    const refs = chartRefs.current;
+    
+    // If layout is provided, use layout manager to get the correct pane
+    if (plotLayout && layoutManager) {
+      const paneId = layoutManager.getPaneForSeries(seriesId);
+      if (paneId) {
+        // Get the surface from dynamic panes
+        const paneSurface = refs.paneSurfaces.get(paneId);
+        if (paneSurface) {
+          return { paneId, surface: paneSurface.surface, wasm: paneSurface.wasm };
+        }
+        
+        // Fallback: if pane not found in dynamic panes, try legacy surfaces
+        // This handles the case where layout specifies a pane that doesn't exist yet
+        console.warn(`[MultiPaneChart] Pane ${paneId} not found in dynamic panes, trying legacy fallback`);
+        if (paneId.includes('tick') || paneId.includes('price') || paneId.includes('indicator')) {
+          return { paneId, surface: refs.tickSurface, wasm: refs.tickWasm };
+        } else if (paneId.includes('ohlc') || paneId.includes('candlestick') || paneId.includes('bar')) {
+          return { paneId, surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
+        }
+      }
+    }
+    
+    // Fallback to namespace-based routing (backward compatibility for legacy mode)
+    const seriesInfo = parseSeriesType(seriesId);
+    if (seriesInfo.chartTarget === 'tick') {
+      // Try dynamic pane first, then legacy
+      const tickPane = refs.paneSurfaces.get('tick-pane');
+      if (tickPane) {
+        return { paneId: 'tick-pane', surface: tickPane.surface, wasm: tickPane.wasm };
+      }
+      return { paneId: 'tick-pane', surface: refs.tickSurface, wasm: refs.tickWasm };
+    } else if (seriesInfo.chartTarget === 'ohlc') {
+      // Try dynamic pane first, then legacy
+      const ohlcPane = refs.paneSurfaces.get('ohlc-pane');
+      if (ohlcPane) {
+        return { paneId: 'ohlc-pane', surface: ohlcPane.surface, wasm: ohlcPane.wasm };
+      }
+      return { paneId: 'ohlc-pane', surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
+    }
+    
+    return { paneId: null, surface: null, wasm: null };
+  };
   
-  // Helper to create a series on-demand if it doesn't exist (fallback for when registry preallocation hasn't run yet)
+  // DISABLED: Helper to create a series on-demand - causes WASM abort errors
+  // Series should only be created via preallocation when surfaces are ready
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const ensureSeriesExists = (seriesId: string): DataSeriesEntry | null => {
+    // This function is disabled to prevent WASM abort errors
+    // All series creation should happen via preallocation
+    console.warn(`[MultiPaneChart] ensureSeriesExists called for ${seriesId} - this should not happen!`);
+    return null;
     const refs = chartRefs.current;
     
     // Check if already exists
@@ -241,8 +425,54 @@ export function useMultiPaneChart({
       return refs.dataSeriesStore.get(seriesId)!;
     }
     
+    // CRITICAL: Don't create series on-demand if layout is loaded but panes aren't ready yet
+    // This prevents WASM abort errors when trying to create series before panes exist
+    if (plotLayout && refs.paneSurfaces.size === 0) {
+      // Layout is loaded but panes aren't created yet - wait for panes to be ready
+      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: layout loaded but panes not ready yet`, {
+        seriesId,
+        plotLayoutPanes: plotLayout.layout.panes.length,
+        paneSurfacesCount: refs.paneSurfaces.size,
+        isReady
+      });
+      return null;
+    }
+    
     // Can't create if charts aren't ready
-    if (!refs.tickSurface || !refs.ohlcSurface || !refs.tickWasm || !refs.ohlcWasm) {
+    // CRITICAL: For dynamic panes, we don't need legacy surfaces - check for panes instead
+    const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface && refs.tickWasm && refs.ohlcWasm;
+    const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
+    
+    if (!hasLegacySurfaces && !hasDynamicPanes) {
+      console.warn(`[MultiPaneChart] Cannot create series ${seriesId}: no surfaces available`, {
+        hasLegacySurfaces,
+        hasDynamicPanes,
+        paneCount: refs.paneSurfaces.size,
+        plotLayout: !!plotLayout,
+        isReady
+      });
+      return null;
+    }
+    
+    // CRITICAL: Ensure we have a valid WASM context before creating DataSeries
+    // This prevents WASM abort errors
+    const { paneId, surface, wasm } = getPaneForSeries(seriesId);
+    if (!wasm || !surface || !paneId) {
+      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: invalid pane/surface/WASM`, {
+        seriesId,
+        paneId,
+        hasSurface: !!surface,
+        hasWasm: !!wasm,
+        availablePanes: Array.from(refs.paneSurfaces.keys()),
+        hasLegacySurfaces
+      });
+      return null;
+    }
+    
+    // CRITICAL: Ensure sharedWasm is available for DataSeries creation
+    // DataSeries must use sharedWasm to prevent sharing issues
+    if (!refs.sharedWasm && !wasm) {
+      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: no WASM context available`);
       return null;
     }
     
@@ -256,19 +486,34 @@ export function useMultiPaneChart({
     try {
       const capacity = getSeriesCapacity();
       
-      // Determine which WASM context and surface to use
-      const wasm = seriesInfo.chartTarget === 'tick' ? refs.tickWasm : refs.ohlcWasm;
-      const surface = seriesInfo.chartTarget === 'tick' ? refs.tickSurface : refs.ohlcSurface;
+      // paneId, surface, wasm already validated above
       
-      if (!wasm || !surface) return null;
+      // Get renderable series type from layout or infer from series type
+      const renderableSeriesType = getRenderableSeriesType(seriesId);
+      
+      // CRITICAL: Use sharedWasm for DataSeries to prevent sharing issues
+      // But ensure WASM is actually valid before using it
+      const dataSeriesWasm = refs.sharedWasm || wasm;
+      
+      // CRITICAL: Validate WASM context before creating DataSeries
+      // WASM abort errors occur when WASM context is invalid or not properly initialized
+      if (!dataSeriesWasm || !wasm) {
+        console.error(`[MultiPaneChart] Cannot create series ${seriesId}: invalid WASM context`, {
+          seriesId,
+          hasSharedWasm: !!refs.sharedWasm,
+          hasWasm: !!wasm,
+          dataSeriesWasm: !!dataSeriesWasm
+        });
+        return null;
+      }
       
       // Create DataSeries with preallocated circular buffer
       let dataSeries: XyDataSeries | OhlcDataSeries;
-      let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries;
+      let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
       
-      if (seriesInfo.type === 'ohlc-bar') {
-        // OHLC bar series
-        dataSeries = new OhlcDataSeries(wasm, {
+      if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
+          // OHLC bar series - must use OhlcDataSeries
+          dataSeries = new OhlcDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: capacity,
           capacity: capacity,
@@ -287,7 +532,7 @@ export function useMultiPaneChart({
         });
       } else {
         // All other series (tick, indicators, strategy) use XyDataSeries
-        dataSeries = new XyDataSeries(wasm, {
+        dataSeries = new XyDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: capacity,
           capacity: capacity,
@@ -296,31 +541,64 @@ export function useMultiPaneChart({
           dataEvenlySpacedInX: false,
         });
         
-        // Determine stroke color based on type
-        let stroke = '#50C7E0'; // Default tick color
-        if (seriesInfo.isIndicator) {
-          stroke = '#F48420'; // Orange for indicators
-        } else if (seriesInfo.type === 'strategy-pnl') {
-          stroke = '#4CAF50'; // Green for PnL
-        } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-          stroke = '#FF9800'; // Orange for markers/signals
+        // Get series assignment from layout for styling
+        const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
+        
+        // Determine stroke color based on type or layout style
+        let stroke = seriesAssignment?.style?.stroke; // Use layout style if provided
+        if (!stroke) {
+          // Fallback to default colors based on type
+          stroke = '#50C7E0'; // Default tick color
+          if (seriesInfo.isIndicator) {
+            stroke = '#F48420'; // Orange for indicators
+          } else if (seriesInfo.type === 'strategy-pnl') {
+            stroke = '#4CAF50'; // Green for PnL
+          } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
+            stroke = '#FF9800'; // Orange for markers/signals
+          }
         }
         
-        renderableSeries = new FastLineRenderableSeries(wasm, {
-          dataSeries: dataSeries as XyDataSeries,
-          stroke: stroke,
-          strokeThickness: 1,
-          pointMarker: undefined,
-          resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
-        });
+        // Get stroke thickness from layout or use default
+        const strokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
+        
+        // Get fill color for mountain series from layout or use default
+        const fill = seriesAssignment?.style?.fill ?? (stroke + '44'); // Add transparency for fill
+        
+        // Get point marker setting from layout
+        const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined; // TODO: Implement point markers if needed
+        
+        // Create renderable series based on layout type
+        if (renderableSeriesType === 'FastMountainRenderableSeries') {
+          renderableSeries = new FastMountainRenderableSeries(wasm, {
+            dataSeries: dataSeries as XyDataSeries,
+            stroke: stroke,
+            fill: fill,
+            strokeThickness: strokeThickness,
+            pointMarker: pointMarker,
+            resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+          });
+        } else {
+          // Default to FastLineRenderableSeries
+          renderableSeries = new FastLineRenderableSeries(wasm, {
+            dataSeries: dataSeries as XyDataSeries,
+            stroke: stroke,
+            strokeThickness: strokeThickness,
+            pointMarker: pointMarker,
+            resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+          });
+        }
       }
       
       // Add to store
+      // Note: chartTarget is 'tick' | 'ohlc' but seriesInfo.chartTarget can be 'none'
+      // We only create entries for series that should be plotted (chartTarget !== 'none'), so safe to cast
       const entry: DataSeriesEntry = {
         dataSeries,
         renderableSeries,
-        chartTarget: seriesInfo.chartTarget,
-        seriesType: seriesInfo.type,
+        chartTarget: (seriesInfo.chartTarget === 'none' ? 'tick' : seriesInfo.chartTarget) as 'tick' | 'ohlc', // Safe cast: we only create for plotted series
+        paneId: paneId, // New: pane-based routing
+        seriesType: seriesInfo.type, // Now allows 'other' in type definition
+        renderableSeriesType: renderableSeriesType, // Store the type from layout
       };
       refs.dataSeriesStore.set(seriesId, entry);
       
@@ -328,15 +606,32 @@ export function useMultiPaneChart({
       surface.renderableSeries.add(renderableSeries);
       
       // Set initial visibility based on visibleSeries prop
+      // CRITICAL: If series is in layout, make it visible by default (even if not in visibleSeries yet)
+      const isInLayout = plotLayout?.layout.series.some(s => s.series_id === seriesId);
       if (visibleSeries) {
-        renderableSeries.isVisible = visibleSeries.has(seriesId);
+        renderableSeries.isVisible = visibleSeries.has(seriesId) || isInLayout;
+      } else {
+        // If no visibleSeries set, default to visible if in layout
+        renderableSeries.isVisible = isInLayout !== false;
       }
       
-      console.log(`[MultiPaneChart] Created DataSeries on-demand for ${seriesId} (${seriesInfo.type}) on ${seriesInfo.chartTarget} chart with capacity ${capacity}, resamplingMode: ${seriesInfo.type === 'tick' ? 'None' : 'Auto'}`);
-      
+    
       // Invalidate surfaces to ensure new series are rendered
-      refs.tickSurface.invalidateElement();
-      refs.ohlcSurface.invalidateElement();
+      // CRITICAL: Invalidate the correct surface (legacy or dynamic pane)
+      if (paneId && refs.paneSurfaces.has(paneId)) {
+        // Dynamic pane - invalidate the specific pane
+        const paneSurface = refs.paneSurfaces.get(paneId);
+        if (paneSurface) {
+          paneSurface.surface.invalidateElement();
+        }
+      } else {
+        // Legacy surface - invalidate tick or ohlc
+        if (seriesInfo.chartTarget === 'tick' && refs.tickSurface) {
+          refs.tickSurface.invalidateElement();
+        } else if (seriesInfo.chartTarget === 'ohlc' && refs.ohlcSurface) {
+          refs.ohlcSurface.invalidateElement();
+        }
+      }
       
       return entry;
     } catch (e) {
@@ -345,19 +640,70 @@ export function useMultiPaneChart({
     }
   };
   const chartRefs = useRef<ChartRefs>({
-    tickSurface: null,
-    ohlcSurface: null,
-    tickWasm: null,
-    ohlcWasm: null,
+    tickSurface: null, // Legacy - for backward compatibility
+    ohlcSurface: null, // Legacy - for backward compatibility
+    tickWasm: null, // Legacy
+    ohlcWasm: null, // Legacy
+    paneSurfaces: new Map<string, PaneSurface>(), // Dynamic pane registry
     // Unified DataSeries Store: series_id → DataSeriesEntry
     // All series (tick, OHLC, indicators) are stored here
     dataSeriesStore: new Map<string, DataSeriesEntry>(),
     verticalGroup: null,
     overview: null,
+    sharedWasm: null, // Shared WASM context for all dynamic panes
   });
 
   const [isReady, setIsReady] = useState(false);
   const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
+  
+  // FPS tracking using requestAnimationFrame to count actual browser frames
+  // This is more accurate than counting surface renders (which can fire multiple times per frame)
+  useEffect(() => {
+    let rafId: number | null = null;
+    let lastFrameTime = performance.now();
+    
+    const measureFPS = () => {
+      const now = performance.now();
+      fpsCounter.current.frameCount++;
+      const elapsed = now - fpsCounter.current.lastTime;
+      
+      if (elapsed >= 1000) {
+        const fps = Math.round((fpsCounter.current.frameCount * 1000) / elapsed);
+        fpsCounter.current.frameCount = 0;
+        fpsCounter.current.lastTime = now;
+        onFpsUpdate?.(fps);
+        
+        // Get GPU metrics from SciChart's WebGL rendering context
+        // Estimate draw calls from renderableSeries count (each series = multiple draw calls)
+        let totalSeriesCount = 0;
+        if (chartRefs.current.tickSurface) {
+          totalSeriesCount += chartRefs.current.tickSurface.renderableSeries.size();
+        }
+        if (chartRefs.current.ohlcSurface) {
+          totalSeriesCount += chartRefs.current.ohlcSurface.renderableSeries.size();
+        }
+        // Also count series from dynamic panes
+        chartRefs.current.paneSurfaces.forEach((paneSurface) => {
+          totalSeriesCount += paneSurface.surface.renderableSeries.size();
+        });
+        const estimatedDrawCalls = totalSeriesCount * 2; // ~2 calls per series
+        onGpuUpdate?.(estimatedDrawCalls);
+      }
+      
+      // Continue measuring
+      rafId = requestAnimationFrame(measureFPS);
+    };
+    
+    // Start FPS measurement
+    rafId = requestAnimationFrame(measureFPS);
+    
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [onFpsUpdate, onGpuUpdate]);
+  
   const isLiveRef = useRef(true);
   const feedStageRef = useRef<string>(feedStage);
   const historyLoadedRef = useRef(false);
@@ -429,22 +775,47 @@ export function useMultiPaneChart({
 
   // Initialize charts
   useEffect(() => {
+    // Skip legacy initialization if layout is loaded (dynamic panes will be created separately)
+    if (plotLayout) {
+     
+      return;
+    }
+
     let isMounted = true;
+    let cancelled = false;
 
     const initCharts = async () => {
       try {
-        console.log('[MultiPaneChart] Starting initialization...');
+      
+        
+        // Wait a bit for layout to potentially load (in case it's loading asynchronously)
+        // Check multiple times to catch layout loading
+        for (let i = 0; i < 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          
+          // Check if layout was loaded during the wait (check current value, not closure)
+          // We need to check the actual DOM or use a different approach
+          // For now, just check if containers exist - if they don't, we're using dynamic layout
+          const tickContainer = document.getElementById(tickContainerId);
+          if (!tickContainer) {
+            
+            cancelled = true;
+            return;
+          }
+        }
+        
+        if (cancelled || !isMounted) return;
         
         // Check if containers exist and have dimensions
         const tickContainer = document.getElementById(tickContainerId);
         const ohlcContainer = document.getElementById(ohlcContainerId);
         
         if (!tickContainer) {
-          console.error(`[MultiPaneChart] Container not found: ${tickContainerId}`);
+          console.warn(`[MultiPaneChart] Container not found: ${tickContainerId} - may be using dynamic layout, skipping legacy initialization`);
           return;
         }
         if (!ohlcContainer) {
-          console.error(`[MultiPaneChart] Container not found: ${ohlcContainerId}`);
+          console.warn(`[MultiPaneChart] Container not found: ${ohlcContainerId} - may be using dynamic layout, skipping legacy initialization`);
           return;
         }
 
@@ -464,7 +835,7 @@ export function useMultiPaneChart({
           await new Promise(resolve => setTimeout(resolve, 100));
         }
         
-        console.log('[MultiPaneChart] Loading WebAssembly from CDN...');
+       
         SciChartSurface.useWasmFromCDN();
 
         // Disable DPI scaling for better performance on Retina/High-DPI displays
@@ -483,7 +854,7 @@ export function useMultiPaneChart({
         await new Promise(resolve => requestAnimationFrame(resolve));
         await new Promise(resolve => requestAnimationFrame(resolve));
 
-        console.log('[MultiPaneChart] Creating tick surface...');
+       
         // Create tick/line surface with performance optimizations
         const tickResult = await SciChartSurface.create(tickContainerId, { 
           theme: chartTheme,
@@ -498,6 +869,27 @@ export function useMultiPaneChart({
         // Don't suspend updates initially - let the surface render once to initialize fonts
         // We'll suspend later when adding series
 
+        // Create timezone-aware label formatter for legacy axes
+        const timezone = config.chart.timezone || 'UTC';
+        const timezoneFormatter = (value: number): string => {
+          try {
+            const date = new Date(value);
+            return date.toLocaleString('en-US', {
+              timeZone: timezone,
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false,
+            });
+          } catch (e) {
+            // Fallback to ISO string if timezone formatting fails
+            return new Date(value).toISOString();
+          }
+        };
+
         // Configure tick axes - each pane has its own X-axis
         const tickXAxis = new DateTimeNumericAxis(tickWasm, {
           autoRange: EAutoRange.Once,
@@ -507,7 +899,22 @@ export function useMultiPaneChart({
           useNativeText: true,
           useSharedCache: true,
           maxAutoTicks: config.performance.maxAutoTicks,
+          // Add styling to make X-axis visible (match new-index.html)
+          axisTitle: "Time",
+          axisTitleStyle: { color: "#9fb2c9" },
+          labelStyle: { color: "#9fb2c9" },
         });
+        
+        // Apply timezone formatter to legacy tick X-axis
+        try {
+          if ((tickXAxis as any).labelProvider) {
+            (tickXAxis as any).labelProvider.formatLabel = timezoneFormatter;
+          } else if ((tickXAxis as any).formatLabel) {
+            (tickXAxis as any).formatLabel = timezoneFormatter;
+          }
+        } catch (e) {
+          console.warn('[MultiPaneChart] Could not apply timezone formatter to tick X-axis:', e);
+        }
 
         const tickYAxis = new NumericAxis(tickWasm, {
           autoRange: EAutoRange.Once, // Changed from Always to Once to prevent Y-axis jumping
@@ -518,6 +925,10 @@ export function useMultiPaneChart({
           useSharedCache: true, // Share label cache
           maxAutoTicks: 3, // Ultra-reduced label count (3 labels max) for maximum performance
           growBy: new NumberRange(0.1, 0.1), // Add 10% padding above and below
+          // Add styling to make Y-axis visible (match new-index.html)
+          axisTitle: "Price",
+          axisTitleStyle: { color: "#9fb2c9" },
+          labelStyle: { color: "#9fb2c9" },
         });
 
         tickSurface.xAxes.add(tickXAxis);
@@ -541,7 +952,7 @@ export function useMultiPaneChart({
         await new Promise(resolve => setTimeout(resolve, 150));
 
         // Create OHLC surface with performance optimizations
-        console.log('[MultiPaneChart] Creating OHLC surface...');
+        
         const ohlcResult = await SciChartSurface.create(ohlcContainerId, { 
           theme: chartTheme,
         });
@@ -566,7 +977,22 @@ export function useMultiPaneChart({
           useSharedCache: true, // Share label cache
           maxAutoTicks: config.performance.maxAutoTicks, // Allow more ticks for adaptive zoom-based labels
           // Don't set majorDelta/minorDelta - let SciChart adapt based on zoom level!
+          // Add styling to make X-axis visible (match new-index.html)
+          axisTitle: "Time",
+          axisTitleStyle: { color: "#9fb2c9" },
+          labelStyle: { color: "#9fb2c9" },
         });
+        
+        // Apply timezone formatter to OHLC X-axis
+        try {
+          if ((ohlcXAxis as any).labelProvider) {
+            (ohlcXAxis as any).labelProvider.formatLabel = timezoneFormatter;
+          } else if ((ohlcXAxis as any).formatLabel) {
+            (ohlcXAxis as any).formatLabel = timezoneFormatter;
+          }
+        } catch (e) {
+          console.warn('[MultiPaneChart] Could not apply timezone formatter to OHLC X-axis:', e);
+        }
 
         const ohlcYAxis = new NumericAxis(ohlcWasm, {
           autoRange: EAutoRange.Once, // Changed from Always to Once to prevent Y-axis jumping
@@ -577,6 +1003,10 @@ export function useMultiPaneChart({
           useSharedCache: true, // Share label cache
           maxAutoTicks: 3, // Ultra-reduced label count (3 labels max) for maximum performance
           growBy: new NumberRange(0.1, 0.1), // Add 10% padding above and below
+          // Add styling to make Y-axis visible (match new-index.html)
+          axisTitle: "Price",
+          axisTitleStyle: { color: "#9fb2c9" },
+          labelStyle: { color: "#9fb2c9" },
         });
 
         ohlcSurface.xAxes.add(ohlcXAxis);
@@ -611,26 +1041,8 @@ export function useMultiPaneChart({
         verticalGroup.addSurfaceToGroup(ohlcSurface);
         }
 
-        // FPS and GPU tracking
-        const updateFps = () => {
-          fpsCounter.current.frameCount++;
-          const now = performance.now();
-          const elapsed = now - fpsCounter.current.lastTime;
-          if (elapsed >= 1000) {
-            const fps = Math.round((fpsCounter.current.frameCount * 1000) / elapsed);
-            fpsCounter.current.frameCount = 0;
-            fpsCounter.current.lastTime = now;
-            onFpsUpdate?.(fps);
-            
-            // Get GPU metrics from SciChart's WebGL rendering context
-            // Estimate draw calls from renderableSeries count (each series = multiple draw calls)
-            const tickSeriesCount = tickSurface.renderableSeries.size();
-            const ohlcSeriesCount = ohlcSurface.renderableSeries.size();
-            const estimatedDrawCalls = (tickSeriesCount + ohlcSeriesCount) * 2; // ~2 calls per series
-            onGpuUpdate?.(estimatedDrawCalls);
-          }
-        };
-        tickSurface.rendered.subscribe(updateFps);
+        // FPS tracking is now handled by requestAnimationFrame at the top level
+        // No need to subscribe to surface rendered events
 
         // User interaction detection
         const markInteracted = () => {
@@ -669,6 +1081,10 @@ export function useMultiPaneChart({
           dataSeriesStore: new Map<string, DataSeriesEntry>(),
           verticalGroup,
           overview,
+          // Dynamic pane surfaces (empty initially, populated when layout is loaded)
+          paneSurfaces: new Map<string, PaneSurface>(),
+          // Shared WASM context (will be set from first pane when dynamic panes are created)
+          sharedWasm: null,
         };
 
         // Note: Axis titles are intentionally omitted during initialization
@@ -678,7 +1094,7 @@ export function useMultiPaneChart({
 
         setIsReady(true);
         onReadyChange?.(true);
-        console.log('[MultiPaneChart] Initialization complete!');
+       
 
       } catch (error) {
         console.error('[MultiPaneChart] Initialization error:', error);
@@ -714,75 +1130,121 @@ export function useMultiPaneChart({
       // This ensures the main chart's DataSeries are cleaned up first
       chartRefs.current.overview?.delete();
     };
-  }, [tickContainerId, ohlcContainerId]);
+  }, [tickContainerId, ohlcContainerId, plotLayout]);
 
   // Handle overview/minimap creation/destruction when toggled
   // IMPORTANT: We use a separate useEffect for hide/show that doesn't trigger cleanup
   useEffect(() => {
     const refs = chartRefs.current;
-    if (!refs.tickSurface || !isReady) return;
+    // For dynamic layouts, we don't need tickSurface - we'll find the correct surface from the layout
+    // For legacy layouts, we need tickSurface
+    const hasLegacySurface = !!refs.tickSurface;
+    const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
+    
+    if (!hasLegacySurface && !hasDynamicPanes) {
+      // No surfaces available yet
+      return;
+    }
+    
+    if (!isReady) return;
 
     let isCancelled = false;
 
     const handleOverview = async () => {
-      // Hide/show overview instead of creating/deleting to avoid DataSeries deletion issues
-      // SciChartOverview shares DataSeries with the main chart, so deleting it breaks the main chart
+      // Always create/keep overview alive - use CSS to control visibility
+      // SciChartOverview shares DataSeries with the main chart, so we never delete it
       if (!overviewContainerId) {
-        // Hide the overview container but keep the overview object alive
-        if (refs.overview && overviewContainerIdRef.current) {
-          const overviewContainer = document.getElementById(overviewContainerIdRef.current);
-          if (overviewContainer) {
-            overviewContainer.style.display = 'none';
-            // Note: We can't suspend SciChartOverview's internal surface directly
-            // The overview will continue to sync, but hiding the container prevents rendering
-            // This is acceptable - the sync won't cause errors if the container is hidden
-            console.log('[MultiPaneChart] Overview hidden (not deleted to preserve DataSeries)');
-          }
-        }
         return;
       }
+      
+      try {
+        // Wait a bit to ensure the container is rendered
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        if (isCancelled) return;
+        
+        const overviewContainer = document.getElementById(overviewContainerId);
+        
+        // Determine which surface to use for overview
+        // For dynamic layouts, use the surface that contains the minimap source series
+        // For legacy layouts, use tickSurface
+        let sourceSurface: SciChartSurface | null = null;
+        let minimapSourceSeriesId: string | undefined = undefined;
+        
+        if (plotLayout?.minimapSourceSeries) {
+          // Dynamic layout with minimap - find the surface that contains the source series
+          minimapSourceSeriesId = plotLayout.minimapSourceSeries;
+          const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+          if (sourceSeriesEntry?.paneId) {
+            const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
+            if (paneSurface) {
+              sourceSurface = paneSurface.surface;
+            
+            }
+          }
+        }
+        
+        // Fallback to legacy tickSurface if no dynamic pane found
+        if (!sourceSurface && refs.tickSurface) {
+          sourceSurface = refs.tickSurface;
 
-      // Create or show overview
-      if (overviewContainerId) {
-        try {
-          // Wait a bit to ensure the container is rendered
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
-          if (isCancelled) return;
-          
-          const overviewContainer = document.getElementById(overviewContainerId);
-          if (overviewContainer && refs.tickSurface) {
-            // If overview already exists, just show it
-            if (refs.overview) {
-              overviewContainer.style.display = '';
-              console.log('[MultiPaneChart] Overview shown (reused existing)');
-            } else {
-              // Create new overview
-              overviewContainer.style.display = '';
+        }
+        
+        if (!sourceSurface) {
+          console.warn('[MultiPaneChart] Cannot create overview: no source surface available', {
+            hasTickSurface: !!refs.tickSurface,
+            hasDynamicPanes: refs.paneSurfaces.size > 0,
+            minimapSourceSeries: minimapSourceSeriesId,
+            plotLayout: !!plotLayout
+          });
+          return;
+        }
+        
+        if (overviewContainer) {
+          // If overview already exists, reuse it (visibility controlled by CSS in parent component)
+          if (refs.overview) {
+            
+          } else {
+            // Create new overview (only once, then keep it alive)
+            const overview = await SciChartOverview.create(sourceSurface, overviewContainerId, {
+              theme: chartTheme,
+            });
+            
+            if (!isCancelled) {
+              refs.overview = overview;
+              overviewContainerIdRef.current = overviewContainerId; // Store the ID used
               
-              const overview = await SciChartOverview.create(refs.tickSurface, overviewContainerId, {
-                theme: chartTheme,
-              });
-              
-              if (!isCancelled) {
-                refs.overview = overview;
-                overviewContainerIdRef.current = overviewContainerId; // Store the ID used
-                console.log('[MultiPaneChart] Overview created successfully');
-              } else {
-                // Cleanup if cancelled during creation
-                try {
-                  overview.delete();
-                } catch (e) {
-                  // Ignore cleanup errors
+              // Check if minimap source series has data and show/hide "Waiting for Data" overlay
+              if (minimapSourceSeriesId) {
+                const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+                const hasData = sourceSeriesEntry?.dataSeries && 
+                  (sourceSeriesEntry.dataSeries.count() > 0 || 
+                   (sourceSeriesEntry.dataSeries as any).xValues?.length > 0);
+                
+                const waitingOverlay = document.getElementById('overview-chart-waiting');
+                if (waitingOverlay) {
+                  waitingOverlay.style.display = hasData ? 'none' : 'flex';
                 }
               }
+              
+              // Note: SciChartOverview automatically shows all series on the source surface
+              // If minimapSourceSeries is specified, we've already selected the correct surface
+              // that contains that series, so it will be shown automatically
+             
+            } else {
+              // Cleanup if cancelled during creation
+              try {
+                overview.delete();
+              } catch (e) {
+                // Ignore cleanup errors
+              }
             }
-          } else if (!overviewContainer) {
-            console.warn(`[MultiPaneChart] Overview container not found: ${overviewContainerId}`);
           }
-        } catch (e) {
-          console.warn('[MultiPaneChart] Failed to create/show overview:', e);
+        } else {
+          console.warn(`[MultiPaneChart] Overview container not found: ${overviewContainerId}`);
         }
+      } catch (e) {
+        console.warn('[MultiPaneChart] Failed to create/show overview:', e);
       }
     };
 
@@ -841,37 +1303,201 @@ export function useMultiPaneChart({
   // This ensures buffers are ready before data arrives (proactive preallocation)
   useEffect(() => {
     const refs = chartRefs.current;
-    if (!refs.tickSurface || !refs.ohlcSurface || !refs.tickWasm || !refs.ohlcWasm) return;
-    if (!registry || registry.length === 0) return;
-    if (!isReady) return; // Wait for charts to be initialized
+    
+    // Throttle logging to avoid console spam
+    const lastLogTime = (window as any).__lastPreallocTriggerLogTime || 0;
+    const now = performance.now();
+    if (now - lastLogTime > 5000) { // Log at most once every 5 seconds
+ 
+      (window as any).__lastPreallocTriggerLogTime = now;
+    }
+    
+    // Check if we have either legacy surfaces OR dynamic panes
+    const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface && refs.tickWasm && refs.ohlcWasm;
+    const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
+    
+    if (!hasLegacySurfaces && !hasDynamicPanes) {
+ 
+      return;
+    }
+    if (!registry || registry.length === 0) {
+     
+      return;
+    }
+    
+    // CRITICAL: For dynamic panes, ensure panes are created before preallocating
+    if (plotLayout && refs.paneSurfaces.size === 0) {
+      console.warn('[MultiPaneChart] Preallocation skipped: dynamic panes not created yet', {
+        registryLength: registry.length,
+        plotLayoutPanes: plotLayout.layout.panes.length,
+        paneSurfacesCount: refs.paneSurfaces.size
+      });
+      return;
+    }
+    if (!isReady) {
+    
+      return; // Wait for charts to be initialized
+    }
+    
+    // Early return: Check if all series in registry are already preallocated
+    // This prevents unnecessary re-runs when nothing has changed
+    const registrySeriesIds = new Set(registry.map(r => r.id));
+    const preallocatedSeriesIds = new Set(Array.from(refs.dataSeriesStore.keys()).filter(id => {
+      const entry = refs.dataSeriesStore.get(id);
+      return entry && entry.renderableSeries && entry.paneId; // Fully created series
+    }));
+    
+    // Check if all registry series are already preallocated
+    const allPreallocated = registry.every(regEntry => {
+      const seriesId = regEntry.id;
+      const seriesInfo = parseSeriesType(seriesId);
+      if (seriesInfo.chartTarget === 'none') return true; // Skip non-chart series
+      return preallocatedSeriesIds.has(seriesId);
+    });
+    
+    if (allPreallocated && registry.length > 0) {
+      // All series are already preallocated, skip this run
+      return;
+    }
     
     const capacity = getSeriesCapacity();
+    
+    // Count how many series need preallocation
+    let newSeriesCount = 0;
+    const newSeriesIds: string[] = [];
+    for (const regEntry of registry) {
+      if (!refs.dataSeriesStore.has(regEntry.id)) {
+        newSeriesCount++;
+        newSeriesIds.push(regEntry.id);
+      }
+    }
+    
+    // Only log if there are new series to preallocate (throttled to avoid spam)
+    if (newSeriesCount > 0) {
+      const lastPreallocLogTime = (window as any).__lastPreallocLogTime || 0;
+      const now = performance.now();
+      if (now - lastPreallocLogTime > 2000) { // Log at most once every 2 seconds
+      
+        (window as any).__lastPreallocLogTime = now;
+      }
+    }
+    
+    // Requirement 11.2: Group strategy markers by instrument/strategy/type for consolidation
+    // First, collect all strategy marker series IDs
+    const strategyMarkerSeriesIds = registry
+      .map(reg => reg.id)
+      .filter(id => {
+        const info = parseSeriesType(id);
+        return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+      });
+    
+    // Group strategy markers by instrument/strategy/type
+    const markerGroups = groupStrategyMarkers(strategyMarkerSeriesIds);
+    
+    // Track which series IDs have been processed (to avoid duplicates)
+    const processedSeriesIds = new Set<string>();
     
     registry.forEach(regEntry => {
       const seriesId = regEntry.id;
       
-      // Skip if already in store (already preallocated)
-      if (refs.dataSeriesStore.has(seriesId)) return;
+      // Check if series exists but is orphaned (has DataSeries but no renderableSeries or paneId)
+      const existingEntry = refs.dataSeriesStore.get(seriesId);
+      if (existingEntry) {
+        // If series exists but is orphaned (no renderableSeries or paneId), we need to recreate it
+        if (!existingEntry.renderableSeries || !existingEntry.paneId) {
+        
+          // Clear from preallocated set so it can be recreated
+          preallocatedSeriesRef.current.delete(seriesId);
+          // Don't return - continue to recreate the renderableSeries
+        } else {
+          // Series is already fully created and assigned to a pane
+          return;
+        }
+      } else if (preallocatedSeriesRef.current.has(seriesId)) {
+        // Series is marked as preallocated but doesn't exist in store - clear the flag
+        preallocatedSeriesRef.current.delete(seriesId);
+        // Continue to create it
+      }
       
       const seriesInfo = parseSeriesType(seriesId);
+      
+      // Requirement 11.2: For strategy markers, use consolidated group key instead of individual series ID
+      // This ensures one annotation per group (instrument/strategy/type)
+      let effectiveSeriesId = seriesId;
+      if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
+        // Find the group this series belongs to
+        for (const [groupKey, group] of markerGroups) {
+          if (group.seriesIds.includes(seriesId)) {
+            // Use consolidated series ID for the group
+            effectiveSeriesId = getConsolidatedSeriesId(group);
+            
+            // If we've already processed this group, skip individual series
+            if (processedSeriesIds.has(effectiveSeriesId)) {
+            
+              return;
+            }
+            
+            processedSeriesIds.add(effectiveSeriesId);
+      
+            break;
+          }
+        }
+      }
       
       // Only preallocate series that should be plotted on charts
       if (seriesInfo.chartTarget === 'none') return;
       
       try {
-        // Determine which WASM context and surface to use
-        const wasm = seriesInfo.chartTarget === 'tick' ? refs.tickWasm : refs.ohlcWasm;
-        const surface = seriesInfo.chartTarget === 'tick' ? refs.tickSurface : refs.ohlcSurface;
+        // Get pane and surface using layout manager or fallback
+        const { paneId, surface, wasm } = getPaneForSeries(seriesId);
         
-        if (!wasm || !surface) return;
+        if (!wasm || !surface || !paneId) {
+          console.error(`[MultiPaneChart] Cannot preallocate ${seriesId}: pane/surface not found`, {
+            seriesId,
+            paneId,
+            hasSurface: !!surface,
+            hasWasm: !!wasm,
+            availablePanes: Array.from(refs.paneSurfaces.keys()),
+            plotLayout: plotLayout ? { 
+              seriesCount: plotLayout.layout.series.length,
+              panes: plotLayout.layout.panes.map(p => p.id),
+              seriesAssignments: plotLayout.layout.series.map(s => ({ id: s.series_id, pane: s.pane }))
+            } : null,
+            isReady,
+            hasLegacySurfaces: !!(refs.tickSurface && refs.ohlcSurface)
+          });
+          return;
+        }
+        
+        // Mark as preallocated to prevent duplicate creation
+        preallocatedSeriesRef.current.add(seriesId);
+        
+        // Only log preallocation for new series (not on every registry update)
+        // The "Preallocated DataSeries" log below will show when it's actually created
+        
+        // Get renderable series type from layout or infer from series type
+        const renderableSeriesType = getRenderableSeriesType(seriesId);
+        
+        // CRITICAL: Use sharedWasm for DataSeries to prevent sharing issues
+        const dataSeriesWasm = refs.sharedWasm || wasm;
+        
+        // Check if we should reuse existing DataSeries (for orphaned series)
+        const existingEntry = refs.dataSeriesStore.get(seriesId);
+        const shouldReuseDataSeries = existingEntry && existingEntry.dataSeries && (!existingEntry.renderableSeries || !existingEntry.paneId);
         
         // Create DataSeries with preallocated circular buffer (same logic as ensureSeriesExists)
         let dataSeries: XyDataSeries | OhlcDataSeries;
-        let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries;
+        let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
         
-        if (seriesInfo.type === 'ohlc-bar') {
-          // OHLC bar series
-          dataSeries = new OhlcDataSeries(wasm, {
+        // Reuse existing DataSeries if available (for orphaned series)
+        if (shouldReuseDataSeries && existingEntry.dataSeries) {
+          dataSeries = existingEntry.dataSeries;
+       
+        } else {
+          // Create new DataSeries
+          if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
+            // OHLC bar series - must use OhlcDataSeries
+            dataSeries = new OhlcDataSeries(dataSeriesWasm, {
             dataSeriesName: seriesId,
             fifoCapacity: capacity,
             capacity: capacity,
@@ -879,7 +1505,21 @@ export function useMultiPaneChart({
             dataIsSortedInX: true,
             dataEvenlySpacedInX: false,
           });
-          
+          } else {
+            // All other series (tick, indicators, strategy) use XyDataSeries
+            dataSeries = new XyDataSeries(dataSeriesWasm, {
+            dataSeriesName: seriesId,
+            fifoCapacity: capacity,
+            capacity: capacity,
+            containsNaN: false,
+            dataIsSortedInX: true,
+            dataEvenlySpacedInX: false,
+          });
+          }
+        }
+        
+        // Create renderableSeries (always create new, even if reusing DataSeries)
+        if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
           renderableSeries = new FastCandlestickRenderableSeries(wasm, {
             dataSeries: dataSeries as OhlcDataSeries,
             strokeUp: '#26a69a',
@@ -889,61 +1529,788 @@ export function useMultiPaneChart({
             strokeThickness: 1,
           });
         } else {
-          // All other series (tick, indicators, strategy) use XyDataSeries
-          dataSeries = new XyDataSeries(wasm, {
-            dataSeriesName: seriesId,
-            fifoCapacity: capacity,
-            capacity: capacity,
-            containsNaN: false,
-            dataIsSortedInX: true,
-            dataEvenlySpacedInX: false,
-          });
+          // Get series assignment from layout for styling
+          const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
           
-          // Determine stroke color based on type
-          let stroke = '#50C7E0'; // Default tick color
-          if (seriesInfo.isIndicator) {
-            stroke = '#F48420'; // Orange for indicators
-          } else if (seriesInfo.type === 'strategy-pnl') {
-            stroke = '#4CAF50'; // Green for PnL
-          } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-            stroke = '#FF9800'; // Orange for markers/signals
+          // Determine stroke color based on type or layout style
+          let stroke = seriesAssignment?.style?.stroke; // Use layout style if provided
+          if (!stroke) {
+            // Fallback to default colors based on type
+            stroke = '#50C7E0'; // Default tick color
+            if (seriesInfo.isIndicator) {
+              stroke = '#F48420'; // Orange for indicators
+            } else if (seriesInfo.type === 'strategy-pnl') {
+              stroke = '#4CAF50'; // Green for PnL
+            } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
+              stroke = '#FF9800'; // Orange for markers/signals
+            }
           }
           
-          renderableSeries = new FastLineRenderableSeries(wasm, {
-            dataSeries: dataSeries as XyDataSeries,
-            stroke: stroke,
-            strokeThickness: 1,
-            pointMarker: undefined,
-            resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
-          });
+          // Get stroke thickness from layout or use default
+          const strokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
+          
+          // Get fill color for mountain series from layout or use default
+          const fill = seriesAssignment?.style?.fill ?? (stroke + '44'); // Add transparency for fill
+          
+          // Get point marker setting from layout
+          const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined; // TODO: Implement point markers if needed
+          
+          // Create renderable series based on layout type
+          if (renderableSeriesType === 'FastMountainRenderableSeries') {
+            renderableSeries = new FastMountainRenderableSeries(wasm, {
+              dataSeries: dataSeries as XyDataSeries,
+              stroke: stroke,
+              fill: fill,
+              strokeThickness: strokeThickness,
+              pointMarker: pointMarker,
+              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+            });
+          } else {
+            // Default to FastLineRenderableSeries
+            renderableSeries = new FastLineRenderableSeries(wasm, {
+              dataSeries: dataSeries as XyDataSeries,
+              stroke: stroke,
+              strokeThickness: strokeThickness,
+              pointMarker: pointMarker,
+              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+            });
+          }
         }
         
-        // Add to store
-        refs.dataSeriesStore.set(seriesId, {
+        // Add to store - use effectiveSeriesId for consolidated markers
+        const storeKey = effectiveSeriesId !== seriesId ? effectiveSeriesId : seriesId;
+        
+        // For consolidated markers, check if we already have a consolidated entry
+        // If so, we need to merge data instead of creating a new entry
+        if (effectiveSeriesId !== seriesId) {
+          const existingConsolidated = refs.dataSeriesStore.get(storeKey);
+          if (existingConsolidated && existingConsolidated.dataSeries) {
+            // Merge data from this series into the consolidated DataSeries
+            try {
+              if (dataSeries.count() > 0) {
+                const xValues = dataSeries.getNativeXValues();
+                const yValues = dataSeries.getNativeYValues();
+                if (xValues && yValues && xValues.size() > 0) {
+                  const xArray = new Float64Array(xValues.size());
+                  const yArray = new Float64Array(yValues.size());
+                  for (let i = 0; i < xValues.size(); i++) {
+                    xArray[i] = xValues.get(i);
+                    yArray[i] = yValues.get(i);
+                  }
+                  (existingConsolidated.dataSeries as XyDataSeries).appendRange(xArray, yArray);
+                 
+                }
+              }
+              // Don't create a new entry - use the existing consolidated one
+              return;
+            } catch (mergeError) {
+              console.warn(`[MultiPaneChart] Failed to merge ${seriesId} into consolidated group ${storeKey}:`, mergeError);
+              // Fall through to create new entry if merge fails
+            }
+          }
+        }
+        
+        refs.dataSeriesStore.set(storeKey, {
           dataSeries,
           renderableSeries,
-          chartTarget: seriesInfo.chartTarget,
+          chartTarget: seriesInfo.chartTarget, // Keep for backward compatibility
+          paneId: paneId, // New: pane-based routing
           seriesType: seriesInfo.type,
+          renderableSeriesType: renderableSeriesType, // Store the type from layout
         });
         
         // Add to appropriate chart surface
         surface.renderableSeries.add(renderableSeries);
         
         // Set initial visibility based on visibleSeries prop
+        // CRITICAL: If series is in layout, make it visible by default (even if not in visibleSeries yet)
+        // This ensures series show up when layout is loaded before data arrives
+        // For consolidated markers, check visibility of any series in the group
+        const isInLayout = plotLayout?.layout.series.some(s => {
+          if (effectiveSeriesId !== seriesId) {
+            // For consolidated markers, check if any series in the group is in layout
+            const group = Array.from(markerGroups.values()).find(g => g.groupKey === effectiveSeriesId.split(':strategy:')[0] + ':strategy:' + effectiveSeriesId.split(':strategy:')[1]);
+            return group ? group.seriesIds.some(id => plotLayout.layout.series.some(s => s.series_id === id)) : false;
+          }
+          return s.series_id === seriesId;
+        });
+        
+        // Check visibility - for consolidated markers, visible if any series in group is visible
+        let shouldBeVisible = false;
         if (visibleSeries) {
-          renderableSeries.isVisible = visibleSeries.has(seriesId);
+          if (effectiveSeriesId !== seriesId) {
+            // Check if any series in the consolidated group is visible
+            const group = Array.from(markerGroups.values()).find(g => {
+              const consolidatedId = getConsolidatedSeriesId(g);
+              return consolidatedId === effectiveSeriesId;
+            });
+            shouldBeVisible = group ? group.seriesIds.some(id => visibleSeries.has(id)) : visibleSeries.has(seriesId);
+          } else {
+            shouldBeVisible = visibleSeries.has(seriesId);
+          }
+          renderableSeries.isVisible = shouldBeVisible || isInLayout;
+        } else {
+          // If no visibleSeries set, default to visible if in layout
+          renderableSeries.isVisible = isInLayout !== false; // Default to true if in layout, or true if no layout
         }
         
-        console.log(`[MultiPaneChart] Preallocated DataSeries for ${seriesId} (${seriesInfo.type}) on ${seriesInfo.chartTarget} chart with capacity ${capacity}, resamplingMode: ${seriesInfo.type === 'tick' ? 'None' : 'Auto'}`);
+        const logSeriesId = effectiveSeriesId !== seriesId ? `${seriesId} (consolidated as ${effectiveSeriesId})` : seriesId;
+       
+        
+        // Requirement 0.4: Strategy markers must appear on all eligible panes (except PnL and bar plots)
+        // Requirement 11.2: Use consolidated series ID for duplication
+        // Create separate DataSeries and RenderableSeries for each eligible pane to avoid DataSeries sharing
+        if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
+          const eligiblePanes = Array.from(plotLayout.strategyMarkerPanes);
+          
+          for (const eligiblePaneId of eligiblePanes) {
+            // Skip if this is the primary pane (already created above)
+            if (eligiblePaneId === paneId) continue;
+            
+            // Get the pane surface
+            const eligiblePaneSurface = refs.paneSurfaces.get(eligiblePaneId);
+            if (!eligiblePaneSurface) {
+              console.warn(`[MultiPaneChart] Cannot duplicate strategy marker ${seriesId} to pane ${eligiblePaneId}: pane not found`);
+              continue;
+            }
+            
+            try {
+              // Create a separate DataSeries for this pane (to avoid sharing issues)
+              // Use consolidated series ID for naming
+              const duplicateDataSeries = new XyDataSeries(dataSeriesWasm, {
+                dataSeriesName: `${effectiveSeriesId}:${eligiblePaneId}`, // Unique name per pane (using consolidated ID)
+                fifoCapacity: capacity,
+                capacity: capacity,
+                containsNaN: false,
+                dataIsSortedInX: true,
+                dataEvenlySpacedInX: false,
+              });
+              
+              // Copy existing data from primary DataSeries to duplicate
+              // This ensures the duplicate starts with the same data
+              if (dataSeries.count() > 0) {
+                try {
+                  const xValues = dataSeries.getNativeXValues();
+                  const yValues = dataSeries.getNativeYValues();
+                  if (xValues && yValues && xValues.size() > 0) {
+                    // Convert SCRTDoubleVector to Float64Array
+                    const xArray = new Float64Array(xValues.size());
+                    const yArray = new Float64Array(yValues.size());
+                    for (let i = 0; i < xValues.size(); i++) {
+                      xArray[i] = xValues.get(i);
+                      yArray[i] = yValues.get(i);
+                    }
+                    duplicateDataSeries.appendRange(xArray, yArray);
+                  }
+                } catch (copyError) {
+                  console.warn(`[MultiPaneChart] Failed to copy existing data for strategy marker duplicate:`, copyError);
+                  // Continue anyway - data will be synced when new data arrives
+                }
+              }
+              
+              // Get style from layout if available
+              const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
+              const markerStroke = seriesAssignment?.style?.stroke ?? '#FF9800';
+              const markerStrokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
+              
+              // Create renderable series for this pane
+              const duplicateRenderableSeries = new FastLineRenderableSeries(eligiblePaneSurface.wasm, {
+                dataSeries: duplicateDataSeries,
+                stroke: markerStroke,
+                strokeThickness: markerStrokeThickness,
+                pointMarker: undefined,
+                resamplingMode: EResamplingMode.Auto,
+              });
+              
+              // Set visibility to match primary series
+              duplicateRenderableSeries.isVisible = renderableSeries.isVisible;
+              
+              // Add to pane surface
+              eligiblePaneSurface.surface.renderableSeries.add(duplicateRenderableSeries);
+              
+              // Store with unique key to track duplicates (use consolidated ID)
+              const duplicateKey = `${effectiveSeriesId}:${eligiblePaneId}`;
+              refs.dataSeriesStore.set(duplicateKey, {
+                dataSeries: duplicateDataSeries,
+                renderableSeries: duplicateRenderableSeries,
+                chartTarget: seriesInfo.chartTarget,
+                paneId: eligiblePaneId,
+                seriesType: seriesInfo.type,
+                renderableSeriesType: 'FastLineRenderableSeries',
+              });
+              
+            
+            } catch (duplicateError) {
+              console.warn(`[MultiPaneChart] Failed to duplicate strategy marker ${seriesId} to pane ${eligiblePaneId}:`, duplicateError);
+            }
+          }
+        }
       } catch (e) {
         console.warn(`[MultiPaneChart] Failed to preallocate DataSeries for ${seriesId}:`, e);
       }
     });
     
     // Invalidate surfaces to ensure new series are rendered
-    refs.tickSurface.invalidateElement();
-    refs.ohlcSurface.invalidateElement();
-  }, [registry, visibleSeries, isReady]);
+    // CRITICAL: Only invalidate if we actually created new series to prevent unnecessary rerenders
+    if (newSeriesCount > 0) {
+      if (refs.tickSurface) {
+        refs.tickSurface.invalidateElement();
+      }
+      if (refs.ohlcSurface) {
+        refs.ohlcSurface.invalidateElement();
+      }
+      // Invalidate all dynamic panes
+      for (const [paneId, paneSurface] of refs.paneSurfaces) {
+        paneSurface.surface.invalidateElement();
+      }
+    }
+  }, [registry, visibleSeries, isReady, plotLayout]);
+
+  // Track if dynamic panes have been initialized to prevent re-initialization
+  const dynamicPanesInitializedRef = useRef<boolean>(false);
+  const currentLayoutIdRef = useRef<string | null>(null);
+
+  // Dynamic pane creation and management based on layout
+  // CRITICAL: Requirement 0.1 - UI must not plot any data unless a plot layout JSON is loaded
+  useEffect(() => {
+    const refs = chartRefs.current;
+    if (!plotLayout) {
+      // No layout - do NOT create any surfaces
+      // Requirement 0.1: UI continues collecting data in background but shows message
+      // No SciChart panes are created automatically without a layout
+      dynamicPanesInitializedRef.current = false;
+      currentLayoutIdRef.current = null;
+      
+      // Clean up any existing dynamic panes if layout was removed
+      if (refs.paneSurfaces.size > 0) {
+       
+        refs.paneSurfaces.forEach((paneSurface, paneId) => {
+          try {
+            // Detach renderableSeries before destroying surface
+            const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
+            renderableSeries.forEach(rs => {
+              try {
+                rs.dataSeries = null; // Detach DataSeries to prevent deletion
+                paneSurface.surface.renderableSeries.remove(rs);
+              } catch (e) {
+                // Ignore errors
+              }
+            });
+            paneSurface.surface.delete();
+          } catch (e) {
+            console.warn(`[MultiPaneChart] Error destroying pane ${paneId}:`, e);
+          }
+        });
+        refs.paneSurfaces.clear();
+      }
+      
+      return;
+    }
+
+    // Create a stable layout ID to detect actual layout changes
+    const layoutId = JSON.stringify(plotLayout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })));
+    
+    // If this is the same layout and already initialized, skip
+    if (dynamicPanesInitializedRef.current && currentLayoutIdRef.current === layoutId) {
+     
+      return;
+    }
+
+    // Initialize pane manager with theme and timezone (theme is defined above)
+    if (!paneManagerRef.current) {
+      paneManagerRef.current = new DynamicPaneManager(chartTheme, config.chart.timezone || 'UTC');
+    }
+    const paneManager = paneManagerRef.current;
+    
+    // Update zoom mode when it changes
+    paneManager.setZoomMode(zoomMode);
+    
+    // Update timezone when it changes
+    paneManager.setTimezone(config.chart.timezone || 'UTC');
+
+    // For dynamic layouts, we don't need to wait for legacy isReady
+    // We'll set isReady after creating the first pane
+
+    let isMounted = true;
+
+    const createDynamicPanes = async () => {
+      try {
+        // Only initialize WASM once globally (not on every layout change)
+        if (!refs.sharedWasm) {
+        
+          SciChartSurface.useWasmFromCDN();
+
+          // Disable DPI scaling for better performance on Retina/High-DPI displays
+          DpiHelper.IsDpiScaleEnabled = false;
+          
+          // Enable performance optimizations globally
+          SciChartDefaults.useNativeText = true;
+          SciChartDefaults.useSharedCache = true;
+          
+          // Wait for WASM to be fully loaded and initialized
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Also wait for a couple of animation frames to ensure everything is ready
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+
+        // Check if all panes already exist (prevent re-creation)
+        const allPanesExist = plotLayout.layout.panes.every(paneConfig => {
+          const existingPane = refs.paneSurfaces.get(paneConfig.id);
+          return existingPane !== undefined;
+        });
+
+        if (allPanesExist && dynamicPanesInitializedRef.current) {
+         
+          currentLayoutIdRef.current = layoutId;
+          return;
+        }
+
+        // Create panes for each pane config in layout
+        const panePromises: Promise<void>[] = [];
+        
+        for (const paneConfig of plotLayout.layout.panes) {
+          if (creatingPanesRef.current.has(paneConfig.id)) {
+            continue; // Already creating this pane
+          }
+
+          // Check if pane already exists before adding to creating set
+          const existingPane = refs.paneSurfaces.get(paneConfig.id);
+          if (existingPane) {
+            continue; // Already exists, skip
+          }
+
+          creatingPanesRef.current.add(paneConfig.id);
+
+          const createPane = async () => {
+            try {
+              const containerId = `pane-${paneConfig.id}-chart`;
+              const container = document.getElementById(containerId);
+              
+              if (!container) {
+                console.warn(`[MultiPaneChart] Container not found for pane ${paneConfig.id}: ${containerId}`);
+                creatingPanesRef.current.delete(paneConfig.id);
+                return;
+              }
+
+              // Check if pane already exists
+              const existingPane = refs.paneSurfaces.get(paneConfig.id);
+              if (existingPane) {
+                creatingPanesRef.current.delete(paneConfig.id);
+                return; // Already exists
+              }
+
+              // Create pane surface
+              
+              const paneSurface = await paneManager.createPane(
+                paneConfig.id,
+                containerId,
+                paneConfig,
+                config.performance.maxAutoTicks,
+                config.chart.separateXAxes
+              );
+
+              if (!isMounted) {
+                paneManager.destroyPane(paneConfig.id);
+                return;
+              }
+
+              // Store in refs
+              refs.paneSurfaces.set(paneConfig.id, paneSurface);
+              
+              // FPS tracking is now handled by requestAnimationFrame at the top level
+              // No need to subscribe to surface rendered events
+              
+              // Add double-click handler for fit-all + pause
+              // Requirement 22.1: Double-click = fit-all + pause
+              const surfaceElement = paneSurface.surface.domCanvas2D;
+              if (surfaceElement) {
+                let doubleClickTimer: NodeJS.Timeout | null = null;
+                surfaceElement.addEventListener('dblclick', () => {
+                  // Zoom extents is already handled by ZoomExtentsModifier
+                  // Just pause auto-scroll
+                  isLiveRef.current = false;
+                  userInteractedRef.current = true;
+                  
+                  // Clear any existing timer
+                  if (doubleClickTimer) {
+                    clearTimeout(doubleClickTimer);
+                  }
+                  
+                  // Resume auto-scroll after 5 seconds (optional - can be removed if not desired)
+                  // doubleClickTimer = setTimeout(() => {
+                  //   isLiveRef.current = true;
+                  //   userInteractedRef.current = false;
+                  // }, 5000);
+                });
+              }
+              
+              // Store shared WASM from first pane and create vertical group
+              if (!refs.sharedWasm) {
+                refs.sharedWasm = paneSurface.wasm;
+                
+                
+                // Create vertical group if needed
+                if (!refs.verticalGroup && !config.chart.separateXAxes) {
+                  const vGroup = paneManager.createVerticalGroup(paneSurface.wasm);
+                  refs.verticalGroup = vGroup;
+                }
+              }
+              
+              // Add to vertical group to link X-axes across all panes
+              // Requirement 17: All panes must have their own X-axis, all linked and synchronized
+              // Note: separateXAxes config is kept for backward compatibility but all panes are linked
+              if (refs.verticalGroup) {
+                try {
+                  refs.verticalGroup.addSurfaceToGroup(paneSurface.surface);
+                } catch (e) {
+                  // Ignore if already in group
+                }
+              }
+              
+              // Requirement 0.3: PnL pane must have proper Y-axis scaling for negative/positive values
+              // Check if this is a PnL pane by checking if it contains PnL series
+              const isPnLPane = plotLayout.layout.series.some(s => {
+                const seriesInfo = parseSeriesType(s.series_id);
+                return seriesInfo.type === 'strategy-pnl' && s.pane === paneConfig.id;
+              }) || paneConfig.id.toLowerCase().includes('pnl') || paneConfig.title?.toLowerCase().includes('pnl');
+              
+              if (isPnLPane) {
+                // Configure Y-axis for PnL: ensure it can handle both positive and negative values
+                // Use Once instead of Always to prevent constant re-scaling that causes zoom issues
+                // The manual Y-axis scaling in processBatchedSamples will handle updates
+                paneSurface.yAxis.autoRange = EAutoRange.Once;
+                // Set growBy to 10% (same as other panes) to show more area/view more data
+                paneSurface.yAxis.growBy = new NumberRange(0.1, 0.1);
+   
+              }
+              
+           
+              // Register with layout manager
+              layoutManager.registerPane(paneConfig.id, {
+                paneId: paneConfig.id,
+                surface: paneSurface.surface,
+                wasm: paneSurface.wasm,
+                xAxis: paneSurface.xAxis,
+                yAxis: paneSurface.yAxis,
+                containerId: containerId,
+                hasData: false,
+                waitingForData: true,
+              });
+              
+              // Initialize waiting overlay for this pane
+              // Check which assigned series have data and show pending count
+              updatePaneWaitingOverlay(refs, layoutManager, paneConfig.id, plotLayout);
+
+              // Requirement 0.4: Strategy markers must appear on all eligible panes (except PnL and bar plots)
+              // Create strategy marker copies for this pane if it's eligible
+              // We'll create these during preallocation to avoid DataSeries sharing issues
+              // This is just a placeholder - actual duplication happens in preallocation useEffect
+
+              // Add overlays (hlines/vlines) if specified
+              if (paneConfig.overlays) {
+                // Render horizontal lines
+                if (paneConfig.overlays.hline && paneConfig.overlays.hline.length > 0) {
+                  renderHorizontalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.hline, paneConfig.id);
+                }
+                
+                // Render vertical lines
+                if (paneConfig.overlays.vline && paneConfig.overlays.vline.length > 0) {
+                  renderVerticalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.vline, paneConfig.id);
+                }
+              }
+
+            
+              
+            } catch (error) {
+              console.error(`[MultiPaneChart] Failed to create pane ${paneConfig.id}:`, error);
+            } finally {
+              creatingPanesRef.current.delete(paneConfig.id);
+            }
+          };
+
+          panePromises.push(createPane());
+        }
+
+        await Promise.all(panePromises);
+
+        // Mark as initialized after successful creation
+        dynamicPanesInitializedRef.current = true;
+        currentLayoutIdRef.current = layoutId;
+
+        // Set isReady after creating at least one pane (for dynamic layouts)
+        if (refs.paneSurfaces.size > 0 && !isReady) {
+        
+          setIsReady(true);
+          onReadyChange?.(true);
+        }
+        
+        // CRITICAL: After all panes are created, manually trigger preallocation for any series in registry
+        // This ensures series are created immediately when panes are ready, even if the useEffect hasn't run yet
+       
+        
+        // Always try to trigger preallocation after panes are created, even if registry is empty
+        // The registry might populate later, and we want to be ready
+        if (refs.paneSurfaces.size === plotLayout.layout.panes.length) {
+          if (registry.length > 0) {
+           
+          } else {
+           
+          }
+          
+          // Always set up the trigger, even if registry is empty (it will run when registry populates)
+          if (registry.length > 0) {
+          
+          // Use setTimeout to ensure this runs after the current execution context
+          setTimeout(() => {
+            const refs = chartRefs.current;
+            const capacity = getSeriesCapacity();
+            let createdCount = 0;
+            
+            registry.forEach(regEntry => {
+              const seriesId = regEntry.id;
+              
+              // Check if series exists but is orphaned (has DataSeries but no renderableSeries or paneId)
+              const existingEntry = refs.dataSeriesStore.get(seriesId);
+              if (existingEntry) {
+                // If series exists but is orphaned (no renderableSeries or paneId), we need to recreate it
+                if (!existingEntry.renderableSeries || !existingEntry.paneId) {
+               
+                  // Clear from preallocated set so it can be recreated
+                  preallocatedSeriesRef.current.delete(seriesId);
+                  // Don't return - continue to recreate the renderableSeries
+                } else {
+                  // Series is already fully created and assigned to a pane
+                  return;
+                }
+              } else if (preallocatedSeriesRef.current.has(seriesId)) {
+                // Series is marked as preallocated but doesn't exist in store - clear the flag
+                preallocatedSeriesRef.current.delete(seriesId);
+                // Continue to create it
+              }
+              
+              const seriesInfo = parseSeriesType(seriesId);
+              if (seriesInfo.chartTarget === 'none') return;
+              
+              try {
+                const { paneId, surface, wasm } = getPaneForSeries(seriesId);
+                if (!wasm || !surface || !paneId) {
+                  console.warn(`[MultiPaneChart] Cannot preallocate ${seriesId} after pane creation: pane/surface not found`, {
+                    seriesId,
+                    paneId,
+                    availablePanes: Array.from(refs.paneSurfaces.keys())
+                  });
+                  return;
+                }
+                
+                // Mark as preallocated
+                preallocatedSeriesRef.current.add(seriesId);
+                
+                // Check if we should reuse existing DataSeries (for orphaned series)
+                const existingEntryForReuse = refs.dataSeriesStore.get(seriesId);
+                const shouldReuseDataSeries = existingEntryForReuse && existingEntryForReuse.dataSeries && (!existingEntryForReuse.renderableSeries || !existingEntryForReuse.paneId);
+                
+                // Create series using the same logic as preallocation useEffect
+                const renderableSeriesType = getRenderableSeriesType(seriesId);
+                const dataSeriesWasm = refs.sharedWasm || wasm;
+                
+                let dataSeries: XyDataSeries | OhlcDataSeries;
+                let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
+                
+                // Reuse existing DataSeries if available (for orphaned series)
+                if (shouldReuseDataSeries && existingEntryForReuse.dataSeries) {
+                  dataSeries = existingEntryForReuse.dataSeries;
+                
+                } else {
+                  // Create new DataSeries
+                  if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
+                    dataSeries = new OhlcDataSeries(dataSeriesWasm, {
+                      dataSeriesName: seriesId,
+                      fifoCapacity: capacity,
+                      capacity: capacity,
+                      containsNaN: false,
+                      dataIsSortedInX: true,
+                      dataEvenlySpacedInX: false,
+                    });
+                  } else {
+                    dataSeries = new XyDataSeries(dataSeriesWasm, {
+                      dataSeriesName: seriesId,
+                      fifoCapacity: capacity,
+                      capacity: capacity,
+                      containsNaN: false,
+                      dataIsSortedInX: true,
+                      dataEvenlySpacedInX: false,
+                    });
+                  }
+                }
+                
+                // Create renderableSeries (always create new, even if reusing DataSeries)
+                if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
+                  renderableSeries = new FastCandlestickRenderableSeries(wasm, {
+                    dataSeries: dataSeries as OhlcDataSeries,
+                    strokeUp: '#26a69a',
+                    brushUp: '#26a69a88',
+                    strokeDown: '#ef5350',
+                    brushDown: '#ef535088',
+                    strokeThickness: 1,
+                  });
+                } else {
+                  const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
+                  let stroke = seriesAssignment?.style?.stroke;
+                  if (!stroke) {
+                    stroke = '#50C7E0';
+                    if (seriesInfo.isIndicator) {
+                      stroke = '#F48420';
+                    } else if (seriesInfo.type === 'strategy-pnl') {
+                      stroke = '#4CAF50';
+                    } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
+                      stroke = '#FF9800';
+                    }
+                  }
+                  
+                  const strokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
+                  const fill = seriesAssignment?.style?.fill ?? (stroke + '44');
+                  const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined;
+                  
+                  if (renderableSeriesType === 'FastMountainRenderableSeries') {
+                    renderableSeries = new FastMountainRenderableSeries(wasm, {
+                      dataSeries: dataSeries as XyDataSeries,
+                      stroke: stroke,
+                      fill: fill,
+                      strokeThickness: strokeThickness,
+                      pointMarker: pointMarker,
+                      resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+                    });
+                  } else {
+                    renderableSeries = new FastLineRenderableSeries(wasm, {
+                      dataSeries: dataSeries as XyDataSeries,
+                      stroke: stroke,
+                      strokeThickness: strokeThickness,
+                      pointMarker: pointMarker,
+                      resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+                    });
+                  }
+                }
+                
+                const entry: DataSeriesEntry = {
+                  dataSeries,
+                  renderableSeries,
+                  chartTarget: seriesInfo.chartTarget,
+                  paneId: paneId,
+                  seriesType: seriesInfo.type,
+                  renderableSeriesType: renderableSeriesType,
+                };
+                refs.dataSeriesStore.set(seriesId, entry);
+                surface.renderableSeries.add(renderableSeries);
+                
+                const isInLayout = plotLayout?.layout.series.some(s => s.series_id === seriesId);
+                if (visibleSeries) {
+                  renderableSeries.isVisible = visibleSeries.has(seriesId) || isInLayout;
+                } else {
+                  renderableSeries.isVisible = isInLayout !== false;
+                }
+                
+                
+                surface.invalidateElement();
+                createdCount++;
+              } catch (e) {
+                console.warn(`[MultiPaneChart] Failed to preallocate ${seriesId} after pane creation:`, e);
+                preallocatedSeriesRef.current.delete(seriesId);
+              }
+            });
+            
+            if (createdCount > 0) {
+        
+            } else if (registry.length > 0) {
+              console.warn(`[MultiPaneChart] ⚠️ No series were created after pane creation (registry has ${registry.length} series, dataSeriesStore has ${refs.dataSeriesStore.size} series)`);
+            }
+          }, 100); // Small delay to ensure all panes are registered
+          }
+        } else {
+         
+        }
+
+        // Cleanup panes that are no longer in layout
+        const currentPaneIds = new Set(plotLayout.layout.panes.map(p => p.id));
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          if (!currentPaneIds.has(paneId)) {
+          
+            
+            // CRITICAL: Remove ALL RenderableSeries from this pane before destroying it
+            // This prevents "DataSeries has been deleted" errors
+            // CRITICAL: Detach dataSeries reference before removing to prevent it from being deleted
+            try {
+              const renderableSeriesToRemove: any[] = [];
+              paneSurface.surface.renderableSeries.asArray().forEach((rs: any) => {
+                renderableSeriesToRemove.push(rs);
+              });
+              
+              for (const rs of renderableSeriesToRemove) {
+                try {
+                  // CRITICAL: Detach dataSeries before removing to prevent it from being deleted
+                  // This prevents "DataSeries has been deleted" errors when the surface is destroyed
+                  if (rs.dataSeries) {
+                    rs.dataSeries = null;
+                  }
+                  paneSurface.surface.renderableSeries.remove(rs);
+                } catch (e) {
+                  // Ignore if already removed
+                }
+              }
+            } catch (e) {
+              console.warn(`[MultiPaneChart] Error removing RenderableSeries from pane ${paneId}:`, e);
+            }
+            
+            // Orphan series from this pane - they will be recreated with new DataSeries when new panes are ready
+            // CRITICAL: Do NOT migrate series by sharing DataSeries - this causes "DataSeries has been deleted" errors
+            // Instead, orphan the entries and let them be recreated when the new layout is applied
+            for (const [seriesId, entry] of refs.dataSeriesStore) {
+              if (entry.paneId === paneId) {
+                // Just orphan the entry - it will be recreated with new DataSeries when the new pane is ready
+                entry.paneId = undefined;
+                // Mark renderableSeries as null to indicate it needs recreation
+                // The DataSeries will be preserved but a new RenderableSeries will be created
+                entry.renderableSeries = null as any; // Mark for recreation
+         
+              }
+            }
+            
+            // Destroy the pane (this will delete the surface, but DataSeries are preserved)
+            paneManager.destroyPane(paneId);
+            refs.paneSurfaces.delete(paneId);
+          }
+        }
+
+      } catch (error) {
+        console.error('[MultiPaneChart] Error in dynamic pane creation:', error);
+      }
+    };
+
+    createDynamicPanes();
+
+    // Cleanup on unmount or layout change
+    return () => {
+      isMounted = false;
+      // Don't destroy panes here - let the layout change handler do it
+    };
+  }, [plotLayout, config.performance.maxAutoTicks, config.chart.separateXAxes, zoomMode]); // Added zoomMode to update modifiers when mode changes
+  
+  // Update zoom mode for all surfaces (legacy and dynamic)
+  useEffect(() => {
+    const refs = chartRefs.current;
+    const paneManager = paneManagerRef.current;
+    
+    if (paneManager) {
+      // Update zoom mode in pane manager (this updates all dynamic panes)
+      paneManager.setZoomMode(zoomMode);
+    }
+    
+    // Update legacy surfaces if they exist
+    // Note: Legacy surfaces use simpler modifiers, but we can update them too
+    // For now, legacy surfaces keep their existing modifiers (X-direction wheel zoom)
+    // Dynamic panes will use the zoom mode system
+  }, [zoomMode]);
   
   // Keep renderableSeries visibility in sync with UI toggles
   useEffect(() => {
@@ -958,13 +2325,31 @@ export function useMultiPaneChart({
 
     // Update visibility for all series in unified store
     // Use suspendUpdates/resumeUpdates to prevent Y-axis auto-scaling when visibility changes
-    refs.tickSurface.suspendUpdates();
-    refs.ohlcSurface.suspendUpdates();
+    if (refs.tickSurface) refs.tickSurface.suspendUpdates();
+    if (refs.ohlcSurface) refs.ohlcSurface.suspendUpdates();
+    
+    // Also suspend dynamic panes
+    const suspendedPanes = new Map<string, boolean>();
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      try {
+        paneSurface.surface.suspendUpdates();
+        suspendedPanes.set(paneId, true);
+      } catch (e) {
+        // Ignore
+      }
+    }
     
     try {
       refs.dataSeriesStore.forEach((entry, seriesId) => {
         if (entry.renderableSeries) {
-          entry.renderableSeries.isVisible = visibleSeries ? visibleSeries.has(seriesId) : true;
+          // CRITICAL: If series is in layout, make it visible by default
+          const isInLayout = plotLayout?.layout.series.some(s => s.series_id === seriesId);
+          if (visibleSeries) {
+            entry.renderableSeries.isVisible = visibleSeries.has(seriesId) || isInLayout;
+          } else {
+            // If no visibleSeries set, default to visible if in layout
+            entry.renderableSeries.isVisible = isInLayout !== false;
+          }
           
           // Set resampling mode for tick series (None for pure sine waves)
           if (entry.seriesType === 'tick' && entry.renderableSeries instanceof FastLineRenderableSeries) {
@@ -982,8 +2367,20 @@ export function useMultiPaneChart({
       }
       
       // Resume updates and invalidate - Y-axis range is preserved
-      refs.tickSurface.resumeUpdates();
-      refs.ohlcSurface.resumeUpdates();
+      if (refs.tickSurface) refs.tickSurface.resumeUpdates();
+      if (refs.ohlcSurface) refs.ohlcSurface.resumeUpdates();
+      
+      // Resume and invalidate dynamic panes
+      for (const [paneId, paneSurface] of refs.paneSurfaces) {
+        if (suspendedPanes.get(paneId)) {
+          try {
+            paneSurface.surface.resumeUpdates();
+            paneSurface.surface.invalidateElement();
+          } catch (e) {
+            // Ignore
+          }
+        }
+      }
       
       // Invalidate to show visibility changes, but Y-axis range is already preserved
       requestAnimationFrame(() => {
@@ -996,23 +2393,55 @@ export function useMultiPaneChart({
   // Process accumulated samples and update chart
   const processBatchedSamples = useCallback(() => {
     const refs = chartRefs.current;
-    if (!refs.tickSurface || !refs.ohlcSurface) return;
+    const isTabHidden = document.hidden;
+    
+    // Check if we have either legacy surfaces OR dynamic panes
+    const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface;
+    const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
+    
+    if (!hasLegacySurfaces && !hasDynamicPanes) {
+      if (isTabHidden && sampleBufferRef.current.length > 0) {
+        console.warn(`[MultiPaneChart] Background processing: Surfaces not ready, ${sampleBufferRef.current.length} samples pending`);
+      }
+      return;
+    }
     
     // Don't process if overview is being cleaned up (prevents race conditions)
     if (isCleaningUpOverviewRef.current) {
+      if (isTabHidden && sampleBufferRef.current.length > 0) {
+        console.warn(`[MultiPaneChart] Background processing: Overview cleanup in progress, ${sampleBufferRef.current.length} samples pending`);
+      }
       return;
     }
     
     // Skip chart updates during range restoration to prevent shaking
     // But still update time tracking for clock display
-    const skipChartUpdates = isRestoringRangeRef.current;
+    // CRITICAL: Don't skip processing when tab is hidden - match new-index.html behavior
+    // Range restoration should not block background data processing
+    const skipChartUpdates = isRestoringRangeRef.current && !document.hidden;
     
     const allSamples = sampleBufferRef.current;
     if (allSamples.length === 0) return;
     
+    // Log when processing in background - more frequent logging to diagnose issues
+    if (isTabHidden && allSamples.length > 100) {
+     
+    }
+    
     // Batch sizing: allow reasonably large batches for smooth auto-scroll without overloading WASM.
     // Batch size from UI config
-    const MAX_BATCH_SIZE = config.performance.batchSize;
+    // CRITICAL: When tab is hidden, use larger batches to process data faster
+    // This ensures we keep up with incoming data even when tab is hidden
+    const baseBatchSize = config.performance.batchSize;
+    // When tab is hidden, use much larger batches to catch up faster
+    // If there's a large backlog (>10000 samples), process even larger batches
+    const backlogSize = allSamples.length;
+    const MAX_BATCH_SIZE = isTabHidden 
+      ? (backlogSize > 10000 
+          ? Math.min(10000, backlogSize) // Process up to 10k at once for large backlogs
+          : Math.min(baseBatchSize * 5, 5000)) // 5x batch size when hidden, max 5000
+      : baseBatchSize;
+    
     const samples = allSamples.length > MAX_BATCH_SIZE
       ? allSamples.slice(0, MAX_BATCH_SIZE)
       : allSamples;
@@ -1047,19 +2476,40 @@ export function useMultiPaneChart({
         latestTime = t_ms;
       }
 
-      // Get series entry from unified store (preallocated by registry listener)
-      // If not found, create it on-demand as a fallback
-      let seriesEntry = refs.dataSeriesStore.get(series_id);
-      if (!seriesEntry) {
-        // Series not preallocated yet - create on-demand (fallback for when registry hasn't populated yet)
-        seriesEntry = ensureSeriesExists(series_id);
-        if (!seriesEntry) {
-          // Still can't create - skip this sample
-          continue;
+      // Requirement 11.2: For strategy markers, check if this series is part of a consolidated group
+      // If so, route data to the consolidated series instead
+      let effectiveSeriesId = series_id;
+      const seriesInfo = parseSeriesType(series_id);
+      if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
+        // Find the consolidated series ID for this marker
+        // Get all strategy marker series IDs from the registry
+        const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
+          .filter(id => {
+            const info = parseSeriesType(id);
+            return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+          });
+        const markerGroups = groupStrategyMarkers([series_id, ...allMarkerIds]);
+        for (const [groupKey, group] of markerGroups) {
+          if (group.seriesIds.includes(series_id)) {
+            effectiveSeriesId = getConsolidatedSeriesId(group);
+            break;
+          }
         }
       }
-
-      const seriesInfo = parseSeriesType(series_id);
+      
+      // Get series entry from unified store (preallocated by registry listener)
+      // Use consolidated series ID for strategy markers
+      let seriesEntry = refs.dataSeriesStore.get(effectiveSeriesId);
+      if (!seriesEntry && effectiveSeriesId !== series_id) {
+        // Try original series ID as fallback
+        seriesEntry = refs.dataSeriesStore.get(series_id);
+      }
+      if (!seriesEntry) {
+        // Series not preallocated yet - create on-demand (fallback for when registry hasn't populated yet)
+        // DISABLED: On-demand creation causes WASM abort errors
+        // Skip this sample - series will be created via preallocation when surfaces are ready
+        continue;
+      }
 
       // OHLC bar data - special handling for OHLC format
       if (seriesInfo.type === 'ohlc-bar') {
@@ -1114,6 +2564,41 @@ export function useMultiPaneChart({
 
     lastDataTimeRef.current = latestTime;
     onDataClockUpdate?.(latestTime);
+    
+    // Requirement 15.2: Minimap window logic - live mode: right edge should track dataClockMs
+    // Update minimap window position in live mode
+    if (latestTime > 0 && refs.overview && isLiveRef.current && feedStageRef.current === 'live') {
+      try {
+        const overviewSurface = (refs.overview as any).sciChartSurface;
+        if (overviewSurface) {
+          // Get the overview's X-axis
+          const overviewXAxis = overviewSurface.xAxes.get(0);
+          if (overviewXAxis) {
+            // Get the main chart's X-axis visible range to sync minimap window
+            const mainXAxis = refs.tickSurface?.xAxes.get(0) || 
+              (plotLayout ? Array.from(refs.paneSurfaces.values())[0]?.xAxis : null);
+            
+            if (mainXAxis && mainXAxis.visibleRange) {
+              // Sync minimap window to main chart's visible range
+              // In live mode, the main chart auto-scrolls, so the minimap window will track it
+              const mainRange = mainXAxis.visibleRange;
+              
+              // Update overview's visible range to match main chart
+              // Only update if significantly different to avoid constant updates
+              if (overviewXAxis.visibleRange) {
+                const currentRange = overviewXAxis.visibleRange;
+                const diff = Math.abs(currentRange.max - mainRange.max) + Math.abs(currentRange.min - mainRange.min);
+                if (diff > 1000) { // 1 second threshold
+                  overviewXAxis.visibleRange = new NumberRange(mainRange.min, mainRange.max);
+                }
+              }
+            }
+          }
+        }
+      } catch (minimapError) {
+        // Silently handle minimap update errors - not critical
+      }
+    }
 
     // CRITICAL: During history/delta loading, DO NOT update X-axis range
     // This prevents unwanted scrolling during history loading
@@ -1130,24 +2615,46 @@ export function useMultiPaneChart({
       }
     }
     if (!hasData) {
+      // No data to append, but ensure we continue processing if there are more samples in buffer
+      // This is critical for background processing when tab is hidden
+      if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
+        const isTabHidden = document.hidden;
+        if (isTabHidden) {
+          isUsingTimeoutRef.current = true;
+          pendingUpdateRef.current = setTimeout(() => {
+            pendingUpdateRef.current = null;
+            processBatchedSamples();
+          }, 16);
+        } else {
+          isUsingTimeoutRef.current = false;
+          pendingUpdateRef.current = requestAnimationFrame(() => {
+            pendingUpdateRef.current = null;
+            processBatchedSamples();
+          });
+        }
+      }
       return; // No data to append, skip chart updates but time is already updated
     }
 
     // During range restoration: append data to DataSeries but skip chart rendering
     // This allows us to get actual data range while preventing visual updates that cause shaking
-    const skipChartRendering = isRestoringRangeRef.current;
+    // CRITICAL: When tab is hidden, always process data (match new-index.html behavior)
+    // Range restoration only blocks rendering when tab is visible
+    const skipChartRendering = isRestoringRangeRef.current && !document.hidden;
     
     // Batch updates with proper error handling to prevent WASM crashes
     let tickSuspended = false;
     let ohlcSuspended = false;
+    const suspendedPanes = new Map<string, boolean>(); // Track which dynamic panes are suspended
     
     try {
       // Only suspend if not already suspended and not skipping rendering
       // During restoration, we append data but don't render to prevent shaking
       if (!skipChartRendering) {
+        // Suspend legacy surfaces
         try {
           if (refs.tickSurface) {
-    refs.tickSurface.suspendUpdates();
+            refs.tickSurface.suspendUpdates();
             tickSuspended = true;
           }
         } catch (suspendError) {
@@ -1157,22 +2664,57 @@ export function useMultiPaneChart({
 
         try {
           if (refs.ohlcSurface) {
-    refs.ohlcSurface.suspendUpdates();
+            refs.ohlcSurface.suspendUpdates();
             ohlcSuspended = true;
           }
         } catch (suspendError) {
           console.warn('[MultiPaneChart] Error suspending ohlc surface:', suspendError);
           // Continue anyway - surface might already be suspended
         }
+        
+        // Suspend all dynamic panes
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          try {
+            paneSurface.surface.suspendUpdates();
+            suspendedPanes.set(paneId, true);
+          } catch (suspendError) {
+            console.warn(`[MultiPaneChart] Error suspending pane ${paneId}:`, suspendError);
+            // Continue anyway
+          }
+        }
       }
 
       // Append data to all series using unified store
       // All series (tick, OHLC, indicators, strategy) go through the same code path
+      let totalAppended = 0;
+      let skippedCount = 0;
+      const seriesDebugInfo: Array<{seriesId: string; paneId?: string; hasData: boolean; isVisible?: boolean; count: number; hasRenderableSeries: boolean}> = [];
+      
       for (const [seriesId, buf] of seriesBuffers) {
         const seriesEntry = refs.dataSeriesStore.get(seriesId);
         if (!seriesEntry) {
-          // Series not in store - skip (shouldn't happen if registry preallocation is working)
-          console.warn(`[MultiPaneChart] Series ${seriesId} not found in dataSeriesStore - skipping append`);
+          // Series not in store - try to create it on-demand ONLY if surfaces are ready
+          // CRITICAL: Don't try to create series if:
+          // 1. Layout is loaded but panes aren't ready yet (prevents WASM abort)
+          // 2. No layout and legacy surfaces aren't ready (prevents WASM abort)
+          const hasLayoutButNoPanes = plotLayout && refs.paneSurfaces.size === 0;
+          const noLayoutAndNoLegacy = !plotLayout && (!refs.tickSurface || !refs.ohlcSurface || !refs.tickWasm || !refs.ohlcWasm);
+          const canCreateOnDemand = !hasLayoutButNoPanes && !noLayoutAndNoLegacy;
+          
+          // DISABLED: On-demand creation causes WASM abort errors
+          // Instead, wait for preallocation to create series when surfaces are ready
+          // Data will be buffered and processed once series are created via preallocation
+          skippedCount++;
+          
+          // Only log once per series to avoid spam
+          const lastSkipLog = (window as any).__lastSkipLog || new Map();
+          const now = performance.now();
+          const lastLogTime = lastSkipLog.get(seriesId) || 0;
+          if (now - lastLogTime > 5000) { // Log at most once every 5 seconds per series
+            console.warn(`[MultiPaneChart] Series ${seriesId} not found - skipping ${buf.x.length} samples (will be created via preallocation when surfaces are ready)`);
+            lastSkipLog.set(seriesId, now);
+            (window as any).__lastSkipLog = lastSkipLog;
+          }
           continue;
         }
 
@@ -1187,6 +2729,36 @@ export function useMultiPaneChart({
                 Float64Array.from(buf.l),
                 Float64Array.from(buf.c)
               );
+              totalAppended += buf.x.length;
+              
+              // Mark pane as having data and update waiting overlay
+              if (seriesEntry.paneId) {
+                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
+                if (paneSurface) {
+                  // Update optional properties
+                  paneSurface.hasData = true;
+                  paneSurface.waitingForData = false;
+                }
+              }
+              
+              // Update minimap "Waiting for Data" overlay if this is the minimap source series
+              if (plotLayout?.minimapSourceSeries === seriesId) {
+                const waitingOverlay = document.getElementById('overview-chart-waiting');
+                if (waitingOverlay) {
+                  waitingOverlay.style.display = 'none';
+                }
+              }
+              
+              // Debug info
+              seriesDebugInfo.push({
+                seriesId,
+                paneId: seriesEntry.paneId,
+                hasData: true,
+                isVisible: seriesEntry.renderableSeries?.isVisible ?? false,
+                count: buf.x.length,
+                hasRenderableSeries: !!seriesEntry.renderableSeries
+              });
             }
           } else {
             // All other series (tick, indicators, strategy) use XyDataSeries.appendRange
@@ -1195,11 +2767,119 @@ export function useMultiPaneChart({
                 Float64Array.from(buf.x),
                 Float64Array.from(buf.y)
               );
+              totalAppended += buf.x.length;
+              
+              // Mark pane as having data and update waiting overlay
+              if (seriesEntry.paneId) {
+                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
+                if (paneSurface) {
+                  paneSurface.hasData = true;
+                  paneSurface.waitingForData = false;
+                }
+              }
+              
+              // Update minimap "Waiting for Data" overlay if this is the minimap source series
+              if (plotLayout?.minimapSourceSeries === seriesId) {
+                const waitingOverlay = document.getElementById('overview-chart-waiting');
+                if (waitingOverlay) {
+                  waitingOverlay.style.display = 'none';
+                }
+              }
+              
+              // Requirement 0.4: Sync data to duplicate strategy marker series on other panes
+              // Requirement 11.2: Use consolidated series ID for syncing
+              // Find all duplicate series for this strategy marker (format: consolidatedSeriesId:paneId)
+              const seriesInfo = parseSeriesType(seriesId);
+              if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
+                // Find the consolidated series ID for this marker
+                let consolidatedSeriesId = seriesId;
+                const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
+                  .filter(id => {
+                    const info = parseSeriesType(id);
+                    return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+                  });
+                const markerGroups = groupStrategyMarkers([seriesId, ...allMarkerIds]);
+                for (const [groupKey, group] of markerGroups) {
+                  if (group.seriesIds.includes(seriesId)) {
+                    consolidatedSeriesId = getConsolidatedSeriesId(group);
+                    break;
+                  }
+                }
+                
+                // Find all duplicate entries for this consolidated series
+                for (const [duplicateKey, duplicateEntry] of refs.dataSeriesStore) {
+                  if (duplicateKey.startsWith(`${consolidatedSeriesId}:`) && duplicateKey !== consolidatedSeriesId) {
+                    // This is a duplicate - sync the data
+                    try {
+                      (duplicateEntry.dataSeries as XyDataSeries).appendRange(
+                        Float64Array.from(buf.x),
+                        Float64Array.from(buf.y)
+                      );
+                      totalAppended += buf.x.length; // Count duplicate appends too
+                      
+                      // Mark duplicate pane as having data and update waiting overlay
+                      if (duplicateEntry.paneId) {
+                        updatePaneWaitingOverlay(refs, layoutManager, duplicateEntry.paneId, plotLayout);
+                        const duplicatePaneSurface = refs.paneSurfaces.get(duplicateEntry.paneId);
+                        if (duplicatePaneSurface) {
+                          duplicatePaneSurface.hasData = true;
+                          duplicatePaneSurface.waitingForData = false;
+                        }
+                      }
+                    } catch (syncError) {
+                      console.warn(`[MultiPaneChart] Failed to sync data to duplicate consolidated strategy marker ${duplicateKey}:`, syncError);
+                    }
+                  }
+                }
+              }
+              
+              // Mark pane as having data and update waiting overlay
+              if (seriesEntry.paneId) {
+                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
+                if (paneSurface) {
+                  // Update optional properties
+                  paneSurface.hasData = true;
+                  paneSurface.waitingForData = false;
+                }
+              }
+              
+              // Debug info
+              seriesDebugInfo.push({
+                seriesId,
+                paneId: seriesEntry.paneId,
+                hasData: true,
+                isVisible: seriesEntry.renderableSeries?.isVisible ?? false,
+                count: buf.x.length,
+                hasRenderableSeries: !!seriesEntry.renderableSeries
+              });
             }
           }
         } catch (error) {
           console.error(`[MultiPaneChart] Error appending data to ${seriesId}:`, error);
           // Continue with other series even if one fails
+        }
+      }
+      
+      // Log batch processing summary (throttled)
+      if (totalAppended > 0 || skippedCount > 0) {
+        const lastLogTime = (window as any).__lastBatchLogTime || 0;
+        const now = performance.now();
+        if (now - lastLogTime > 2000) { // Log at most once every 2 seconds
+         
+          
+          // Debug: Show which series have data and their visibility status
+          if (seriesDebugInfo.length > 0) {
+            const hiddenSeries = seriesDebugInfo.filter(s => s.isVisible === false);
+            const visibleSeries = seriesDebugInfo.filter(s => s.isVisible === true);
+            const noPaneSeries = seriesDebugInfo.filter(s => !s.paneId);
+            const noRenderableSeries = seriesDebugInfo.filter(s => !s.hasRenderableSeries);
+            
+           
+          }
+          
+          (window as any).__lastBatchLogTime = now;
         }
       }
     } catch (error) {
@@ -1221,7 +2901,7 @@ export function useMultiPaneChart({
             surface.resumeUpdates();
             // Success - chart will resume rendering
             if (retries < 3) {
-              console.log(`[MultiPaneChart] Successfully resumed ${surfaceName} after retry`);
+             
             }
             return;
           } catch (e) {
@@ -1247,14 +2927,41 @@ export function useMultiPaneChart({
 
       // Only resume if we actually suspended (skip rendering during restoration)
       if (!skipChartRendering) {
+        // Resume legacy surfaces
         resumeWithRetry(refs.tickSurface, 'tickSurface', tickSuspended);
         resumeWithRetry(refs.ohlcSurface, 'ohlcSurface', ohlcSuspended);
+        
+        // Resume all dynamic panes
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          if (suspendedPanes.get(paneId)) {
+            resumeWithRetry(paneSurface.surface, `pane-${paneId}`, true);
+          }
+        }
       }
     }
 
     // Skip auto-scroll and Y-axis updates during restoration to prevent shaking
     if (skipChartRendering) {
-      return; // Data is appended, but no chart updates during restoration
+      // Data is appended, but no chart updates during restoration
+      // CRITICAL: Still continue processing if there are more samples in buffer
+      // This ensures background processing continues even during range restoration
+      if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
+        const isTabHidden = document.hidden;
+        if (isTabHidden) {
+          isUsingTimeoutRef.current = true;
+          pendingUpdateRef.current = setTimeout(() => {
+            pendingUpdateRef.current = null;
+            processBatchedSamples();
+          }, 16);
+        } else {
+          isUsingTimeoutRef.current = false;
+          pendingUpdateRef.current = requestAnimationFrame(() => {
+            pendingUpdateRef.current = null;
+            processBatchedSamples();
+          });
+        }
+      }
+      return; // Skip chart rendering but data is already appended
     }
     
     // CRITICAL: If Y-axis scaling was requested (e.g., on live transition), do it now after data is processed
@@ -1280,7 +2987,7 @@ export function useMultiPaneChart({
                 try {
                   refs.tickSurface.zoomExtentsY();
                   refs.tickSurface.invalidateElement();
-                  console.log('[MultiPaneChart] Y-axis auto-scaled (tick) using zoomExtentsY from data processing loop');
+                
                 } catch (e) {
                   // Fallback: manual calculation if zoomExtentsY fails
                   // But we need to filter to visible X-range to avoid scaling to full history
@@ -1293,12 +3000,17 @@ export function useMultiPaneChart({
                   
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
                     if (entry.chartTarget === 'tick' && entry.dataSeries.count() > 0) {
-                      // Get Y-range for data within visible X-axis range only
-                      const yRange = getDataSeriesYRange(entry.dataSeries, visibleXMin, visibleXMax);
-                      if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                        yMin = Math.min(yMin, yRange.min);
-                        yMax = Math.max(yMax, yRange.max);
-                        hasYData = true;
+                      try {
+                        // Calculate Y-range manually using helper function
+                        const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                        if (yRange) {
+                          yMin = Math.min(yMin, yRange.min);
+                          yMax = Math.max(yMax, yRange.max);
+                          hasYData = true;
+                        }
+                      } catch (err) {
+                        // If manual calculation fails, try to use zoomExtentsY as fallback
+                        console.warn(`[MultiPaneChart] Failed to calculate Y-range for ${seriesId}:`, err);
                       }
                     }
                   }
@@ -1308,7 +3020,7 @@ export function useMultiPaneChart({
                     const padding = (yMax - yMin) * 0.1;
                     tickYAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
                     refs.tickSurface.invalidateElement();
-                    console.log(`[MultiPaneChart] Y-axis auto-scaled (tick) manually: ${yMin.toFixed(2)} to ${yMax.toFixed(2)} from data processing loop`);
+                   
                   } else {
                     console.warn('[MultiPaneChart] Manual Y-range calculation failed - no valid Y-data found');
                   }
@@ -1330,7 +3042,7 @@ export function useMultiPaneChart({
                 try {
                   refs.ohlcSurface.zoomExtentsY();
                   refs.ohlcSurface.invalidateElement();
-                  console.log('[MultiPaneChart] Y-axis auto-scaled (ohlc) using zoomExtentsY from data processing loop');
+                
                 } catch (e) {
                   // Fallback: manual calculation if zoomExtentsY fails
                   // But we need to filter to visible X-range to avoid scaling to full history
@@ -1343,12 +3055,26 @@ export function useMultiPaneChart({
                   
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
                     if (entry.chartTarget === 'ohlc' && entry.dataSeries.count() > 0) {
-                      // Get Y-range for data within visible X-axis range only
-                      const yRange = getDataSeriesYRange(entry.dataSeries, visibleXMin, visibleXMax);
-                      if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                        yMin = Math.min(yMin, yRange.min);
-                        yMax = Math.max(yMax, yRange.max);
-                        hasYData = true;
+                      try {
+                        // Calculate Y-range manually using helper function
+                        const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                        if (yRange) {
+                          yMin = Math.min(yMin, yRange.min);
+                          yMax = Math.max(yMax, yRange.max);
+                          hasYData = true;
+                        }
+                      } catch (err) {
+                        // If filtered range fails, try full range as fallback
+                        try {
+                          const yRange = calculateYRange(entry.dataSeries);
+                          if (yRange) {
+                            yMin = Math.min(yMin, yRange.min);
+                            yMax = Math.max(yMax, yRange.max);
+                            hasYData = true;
+                          }
+                        } catch (err2) {
+                          // Ignore
+                        }
                       }
                     }
                   }
@@ -1358,7 +3084,7 @@ export function useMultiPaneChart({
                     const padding = (yMax - yMin) * 0.1;
                     ohlcYAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
                     refs.ohlcSurface.invalidateElement();
-                    console.log(`[MultiPaneChart] Y-axis auto-scaled (ohlc) manually: ${yMin.toFixed(2)} to ${yMax.toFixed(2)} from data processing loop`);
+                   
                   } else {
                     console.warn('[MultiPaneChart] Manual Y-range calculation failed - no valid Y-data found');
                   }
@@ -1394,8 +3120,15 @@ export function useMultiPaneChart({
       // CRITICAL: In live mode, always show the latest data with a small, focused window
       // Use a fixed 2-minute window to ensure latest data is always visible
       const windowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-      const tickXAxis = refs.tickSurface.xAxes.get(0);
-      const ohlcXAxis = refs.ohlcSurface.xAxes.get(0);
+      
+      // Get X-axes from legacy surfaces or dynamic panes
+      const tickXAxis = refs.tickSurface?.xAxes.get(0) || 
+        (plotLayout ? Array.from(refs.paneSurfaces.values())[0]?.xAxis : null);
+      const ohlcXAxis = refs.ohlcSurface?.xAxes.get(0) || 
+        (plotLayout ? Array.from(refs.paneSurfaces.values()).find(p => p.paneId.includes('ohlc'))?.xAxis : null);
+      
+      // Skip if no axes available
+      if (!tickXAxis && !ohlcXAxis) return;
       
       // CRITICAL: Get actual data range from DataSeries, not just latestTime timestamp
       // The latestTime might be March but data might be in February
@@ -1450,13 +3183,14 @@ export function useMultiPaneChart({
       const padding = 10 * 1000; // 10 seconds padding after latest data
       const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
       
-      // Log for debugging
+      // Log for debugging (throttled to avoid spam)
       if (hasActualData && actualDataMax < latestTime - 60 * 1000) { // More than 1 minute behind
-        console.log('[MultiPaneChart] Auto-scroll using actual data (older than latestTime):', {
-          actualDataMax: new Date(actualDataMax).toISOString(),
-          latestTime: new Date(latestTime).toISOString(),
-          diffMinutes: Math.round((latestTime - actualDataMax) / 1000 / 60),
-        });
+        const now = performance.now();
+        const lastLogTime = (window as any).__lastAutoScrollLogTime || 0;
+        if (now - lastLogTime > 5000) { // Log at most once every 5 seconds
+       
+          (window as any).__lastAutoScrollLogTime = now;
+        }
       }
       
       // Update X-axis scroll - always update in live mode to keep data visible
@@ -1466,21 +3200,44 @@ export function useMultiPaneChart({
         ? (document.getElementById(overviewContainerIdRef.current)?.style.display !== 'none')
         : false;
       
-      if (tickXAxis) {
-        if (!tickXAxis.visibleRange) {
+      // Update all X-axes (legacy or dynamic panes)
+      const axesToUpdate: Array<{ axis: any; surface: any }> = [];
+      
+      // Add legacy axes if they exist
+      if (tickXAxis && refs.tickSurface) {
+        axesToUpdate.push({ axis: tickXAxis, surface: refs.tickSurface });
+      }
+      if (ohlcXAxis && refs.ohlcSurface) {
+        axesToUpdate.push({ axis: ohlcXAxis, surface: refs.ohlcSurface });
+      }
+      
+      // Add dynamic pane axes
+      if (plotLayout) {
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          if (paneSurface.xAxis && !axesToUpdate.find(a => a.axis === paneSurface.xAxis)) {
+            axesToUpdate.push({ axis: paneSurface.xAxis, surface: paneSurface.surface });
+          }
+        }
+      }
+      
+      // Update all axes
+      for (const { axis, surface } of axesToUpdate) {
+        if (!axis) continue;
+        
+        if (!axis.visibleRange) {
           // No range set - set it immediately to show latest data
           try {
-            tickXAxis.visibleRange = newRange;
-            if (isTabHidden) {
-              refs.tickSurface.invalidateElement(); // Force update when hidden
+            axis.visibleRange = newRange;
+            if (isTabHidden && surface) {
+              surface.invalidateElement(); // Force update when hidden
             }
           } catch (e) {
-            console.warn('[MultiPaneChart] Error setting initial tickXAxis visibleRange:', e);
+            console.warn('[MultiPaneChart] Error setting initial X-axis visibleRange:', e);
           }
         } else {
           // Range exists - check if we need to update it
-          const currentMax = tickXAxis.visibleRange.max;
-          const currentMin = tickXAxis.visibleRange.min;
+          const currentMax = axis.visibleRange.max;
+          const currentMin = axis.visibleRange.min;
           const diff = Math.abs(currentMax - newRange.max);
           
           // Always update if:
@@ -1489,76 +3246,8 @@ export function useMultiPaneChart({
           // 3. Or diff is significant (smooth scrolling threshold)
           // 4. Or current range is too wide (showing old history instead of recent data)
           const isDataOutsideRange = actualDataMax > currentMax || actualDataMax < currentMin;
-          const isDataAhead = actualDataMax > currentMax; // Data is ahead of visible range
           const currentRangeWidth = currentMax - currentMin;
           const isRangeTooWide = currentRangeWidth > windowMs * 1.5; // If range is > 15 minutes, it's too wide
-          
-          // When hidden, always update if there's any difference (no threshold)
-          // When visible, use threshold for smooth scrolling
-          const shouldUpdate = isTabHidden 
-            ? (diff > 0) // Any difference when hidden
-            : (isDataOutsideRange || diff > X_SCROLL_THRESHOLD_MS || isRangeTooWide);
-          
-          if (shouldUpdate) {
-            try {
-              const oldMax = tickXAxis.visibleRange?.max;
-              tickXAxis.visibleRange = newRange;
-              
-              // Log update reason for debugging
-              if (isDataOutsideRange || isDataAhead) {
-                console.log('[MultiPaneChart] Auto-scroll FORCED update - data outside range:', {
-                  oldMax: oldMax ? new Date(oldMax).toISOString() : 'none',
-                  newMax: new Date(newRange.max).toISOString(),
-                  actualDataMax: new Date(actualDataMax).toISOString(),
-                  isDataOutsideRange,
-                  isDataAhead,
-                  currentRange: `${new Date(currentMin).toISOString()} to ${new Date(currentMax).toISOString()}`,
-                });
-              }
-              
-              if (isTabHidden) {
-                refs.tickSurface.invalidateElement(); // Force update when hidden
-              } else {
-                refs.tickSurface.invalidateElement(); // Always invalidate to ensure update
-              }
-            } catch (e) {
-              // If overview is in invalid state or hidden, ignore the error silently
-              if (!overviewContainerVisible && refs.overview) {
-                // Overview is hidden but still trying to sync - this is expected, ignore
-              } else {
-                console.warn('[MultiPaneChart] Error updating tickXAxis visibleRange:', e);
-              }
-            }
-          }
-        }
-      }
-      
-      if (ohlcXAxis) {
-        if (!ohlcXAxis.visibleRange) {
-          // No range set - set it immediately to show latest data
-          try {
-            ohlcXAxis.visibleRange = newRange;
-            if (isTabHidden) {
-              refs.ohlcSurface.invalidateElement(); // Force update when hidden
-            }
-          } catch (e) {
-            console.warn('[MultiPaneChart] Error setting initial ohlcXAxis visibleRange:', e);
-          }
-        } else {
-          // Range exists - check if we need to update it
-          const currentMax = ohlcXAxis.visibleRange.max;
-          const currentMin = ohlcXAxis.visibleRange.min;
-          const diff = Math.abs(currentMax - newRange.max);
-          
-          // Always update if:
-          // 1. Tab is hidden (force update to keep X-axis current in background)
-          // 2. Actual data is outside current range (data is not visible) - CRITICAL: Always update if data is outside
-          // 3. Or diff is significant (smooth scrolling threshold)
-          // 4. Or current range is too wide (showing old history instead of recent data)
-          // 5. Or latest data is significantly ahead of current range max (user zoomed out too much)
-          const isDataOutsideRange = actualDataMax > currentMax || actualDataMax < currentMin;
-          const currentRangeWidth = currentMax - currentMin;
-          const isRangeTooWide = currentRangeWidth > windowMs * 1.5; // If range is > 3 minutes (2min * 1.5), it's too wide
           const isDataAhead = actualDataMax > currentMax + windowMs; // Latest data is more than window size ahead
           
           // CRITICAL: If data is outside range or significantly ahead, ALWAYS update regardless of threshold
@@ -1571,32 +3260,27 @@ export function useMultiPaneChart({
           
           if (shouldUpdate) {
             try {
-              const oldMax = ohlcXAxis.visibleRange?.max;
-              ohlcXAxis.visibleRange = newRange;
+              const oldMax = axis.visibleRange?.max;
+              axis.visibleRange = newRange;
               
-              // Log update reason for debugging
-              if (isDataOutsideRange || isDataAhead) {
-                console.log('[MultiPaneChart] Auto-scroll FORCED update (OHLC) - data outside range:', {
-                  oldMax: oldMax ? new Date(oldMax).toISOString() : 'none',
-                  newMax: new Date(newRange.max).toISOString(),
-                  actualDataMax: new Date(actualDataMax).toISOString(),
-                  isDataOutsideRange,
-                  isDataAhead,
-                  currentRange: `${new Date(currentMin).toISOString()} to ${new Date(currentMax).toISOString()}`,
-                });
+              // Log update reason for debugging (only log once, not for every axis)
+              if (axis === axesToUpdate[0]?.axis && (isDataOutsideRange || isDataAhead)) {
+              
               }
               
-              if (isTabHidden) {
-                refs.ohlcSurface.invalidateElement(); // Force update when hidden
-              } else {
-                refs.ohlcSurface.invalidateElement(); // Always invalidate to ensure update
+              if (surface) {
+                if (isTabHidden) {
+                  surface.invalidateElement(); // Force update when hidden
+                } else {
+                  surface.invalidateElement(); // Always invalidate to ensure update
+                }
               }
             } catch (e) {
               // If overview is in invalid state or hidden, ignore the error silently
               if (!overviewContainerVisible && refs.overview) {
                 // Overview is hidden but still trying to sync - this is expected, ignore
               } else {
-                console.warn('[MultiPaneChart] Error updating ohlcXAxis visibleRange:', e);
+                console.warn('[MultiPaneChart] Error updating X-axis visibleRange:', e);
               }
             }
           }
@@ -1650,6 +3334,103 @@ export function useMultiPaneChart({
             }
           } catch (e) {
             // Ignore errors
+          }
+        }
+        
+        // CRITICAL: Scale Y-axis for dynamic panes (if using layout)
+        // This ensures series are visible when data arrives
+        if (plotLayout && refs.paneSurfaces.size > 0) {
+          for (const [paneId, paneSurface] of refs.paneSurfaces) {
+            try {
+              const xAxis = paneSurface.xAxis;
+              const yAxis = paneSurface.yAxis;
+              
+              if (!xAxis || !yAxis || !xAxis.visibleRange) continue;
+              
+              const xRange = xAxis.visibleRange.max - xAxis.visibleRange.min;
+              if (xRange < 2 * 60 * 1000) continue; // Skip if X-axis range is too narrow
+              
+              // Find all series assigned to this pane
+              let yMin = Infinity;
+              let yMax = -Infinity;
+              let hasYData = false;
+              const visibleXMin = xAxis.visibleRange.min;
+              const visibleXMax = xAxis.visibleRange.max;
+              
+              for (const [seriesId, entry] of refs.dataSeriesStore) {
+                // Check if this series belongs to this pane
+                if (entry.paneId === paneId && entry.dataSeries.count() > 0) {
+                  try {
+                    // Calculate Y-range manually using helper function
+                    const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                    if (yRange) {
+                      yMin = Math.min(yMin, yRange.min);
+                      yMax = Math.max(yMax, yRange.max);
+                      hasYData = true;
+                    }
+                  } catch (err) {
+                    // Try full range as fallback
+                    try {
+                      const yRange = calculateYRange(entry.dataSeries);
+                      if (yRange) {
+                        yMin = Math.min(yMin, yRange.min);
+                        yMax = Math.max(yMax, yRange.max);
+                        hasYData = true;
+                      }
+                    } catch (err2) {
+                      // Ignore
+                    }
+                  }
+                }
+              }
+              
+              if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
+                // Requirement 0.3: PnL pane must handle both positive and negative values
+                // Check if this is a PnL pane
+                const paneConfig = plotLayout?.layout.panes.find(p => p.id === paneId);
+                const isPnLPane = plotLayout?.layout.series.some(s => {
+                  const seriesInfo = parseSeriesType(s.series_id);
+                  return seriesInfo.type === 'strategy-pnl' && s.pane === paneId;
+                }) || paneId.toLowerCase().includes('pnl') || paneConfig?.title?.toLowerCase().includes('pnl');
+                
+                if (isPnLPane) {
+                  // For PnL: use standard 10% padding (same as other panes) for consistent scaling
+                  // This shows more area/view more data range
+                  const dataRange = yMax - yMin;
+                  const padding = dataRange * 0.1; // 10% padding - same as other panes
+                  
+                  let finalMin = yMin - padding;
+                  let finalMax = yMax + padding;
+                  
+                  // If data crosses zero, ensure zero is in the visible range
+                  if (yMin < 0 && yMax > 0) {
+                    // Ensure zero is visible with minimal padding
+                    const zeroPadding = Math.max(Math.abs(yMin), Math.abs(yMax)) * 0.05; // Small padding around zero
+                    finalMin = Math.min(finalMin, -zeroPadding);
+                    finalMax = Math.max(finalMax, zeroPadding);
+                  } else if (yMin >= 0 && yMax > 0) {
+                    // All positive: show down to zero if data is close to zero
+                    if (yMin < dataRange * 0.2) {
+                      finalMin = Math.min(finalMin, -dataRange * 0.02); // Show a small bit below zero
+                    }
+                  } else if (yMin < 0 && yMax <= 0) {
+                    // All negative: show up to zero if data is close to zero
+                    if (Math.abs(yMax) < dataRange * 0.2) {
+                      finalMax = Math.max(finalMax, dataRange * 0.02); // Show a small bit above zero
+                    }
+                  }
+                  
+                  yAxis.visibleRange = new NumberRange(finalMin, finalMax);
+                } else {
+                  // For non-PnL panes: standard 10% padding
+                  const padding = (yMax - yMin) * 0.1;
+                  yAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
+                }
+                paneSurface.surface.invalidateElement();
+              }
+            } catch (error) {
+              console.warn(`[MultiPaneChart] Error scaling Y-axis for pane ${paneId}:`, error);
+            }
           }
         }
         
@@ -1726,7 +3507,7 @@ export function useMultiPaneChart({
                 
                 // Log if we had to wait
                 if (attempt > 0) {
-                  console.log(`[MultiPaneChart] Waited ${attempt * 50}ms for data processing to complete before setting X-axis range`);
+                
                 }
                 
                 // Now get the actual data range from DataSeries
@@ -1780,21 +3561,27 @@ export function useMultiPaneChart({
                     const padding = 10 * 1000; // 10 seconds padding after latest data
                     liveRange = new NumberRange(latestDataTime - windowMs, latestDataTime + padding);
                     
-                    console.log('[MultiPaneChart] Setting X-axis range based on ACTUAL data in DataSeries:', {
-                      dataMin: new Date(dataMin).toISOString(),
-                      dataMax: new Date(dataMax).toISOString(),
-                      rangeMin: new Date(liveRange.min).toISOString(),
-                      rangeMax: new Date(liveRange.max).toISOString(),
-                      dataPointCount: totalDataPoints,
-                      historySpanMinutes: Math.round((dataMax - dataMin) / 1000 / 60),
-                      windowMinutes: Math.round(windowMs / 1000 / 60),
-                      lastDataTimeRef: new Date(lastDataTimeRef.current).toISOString(),
-                    });
+                
                     
                     // Verify: if dataMax is much older than lastDataTimeRef, there's a mismatch
                     const timeDiff = lastDataTimeRef.current - dataMax;
                     if (timeDiff > 60 * 60 * 1000) { // More than 1 hour difference
                       console.warn(`[MultiPaneChart] WARNING: Data timestamp mismatch! DataSeries max (${new Date(dataMax).toISOString()}) is ${Math.round(timeDiff / 1000 / 60)} minutes behind lastDataTimeRef (${new Date(lastDataTimeRef.current).toISOString()})`);
+                    }
+                    
+                    // CRITICAL: Set X-axis range for dynamic panes if using layout
+                    if (plotLayout && refs.paneSurfaces.size > 0) {
+                      for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                        try {
+                          if (paneSurface.xAxis) {
+                            paneSurface.xAxis.visibleRange = liveRange;
+                            paneSurface.surface.invalidateElement();
+                         
+                          }
+                        } catch (e) {
+                          console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId}:`, e);
+                        }
+                      }
                     }
                   } else {
                     // CRITICAL: If no data in DataSeries, wait for data to arrive
@@ -1835,12 +3622,86 @@ export function useMultiPaneChart({
                             ohlcXAxis.visibleRange = retryRange;
                             refs.tickSurface.invalidateElement();
                             refs.ohlcSurface.invalidateElement();
-                            console.log('[MultiPaneChart] Set X-axis range on retry based on actual data:', {
-                              rangeMin: new Date(retryRange.min).toISOString(),
-                              rangeMax: new Date(retryRange.max).toISOString(),
-                              dataMax: new Date(retryDataMax).toISOString(),
-                            });
+                            
                           }
+                          
+                          // CRITICAL: Also set X-axis range for dynamic panes on retry
+                          if (plotLayout && refs.paneSurfaces.size > 0) {
+                            for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                              try {
+                                if (paneSurface.xAxis) {
+                                  paneSurface.xAxis.visibleRange = retryRange;
+                                  paneSurface.surface.invalidateElement();
+                                }
+                              } catch (e) {
+                                console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId} on retry:`, e);
+                              }
+                            }
+                          }
+                          
+                          // Force Y-axis scaling after X-axis is set
+                          setTimeout(() => {
+                            // Scale Y-axis for legacy surfaces
+                            try {
+                              if (refs.tickSurface) refs.tickSurface.zoomExtentsY();
+                              if (refs.ohlcSurface) refs.ohlcSurface.zoomExtentsY();
+                            } catch (e) {
+                              // Ignore
+                            }
+                            
+                            // Scale Y-axis for dynamic panes
+                            if (plotLayout && refs.paneSurfaces.size > 0) {
+                              for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                                try {
+                                  const xAxis = paneSurface.xAxis;
+                                  const yAxis = paneSurface.yAxis;
+                                  
+                                  if (!xAxis || !yAxis || !xAxis.visibleRange) continue;
+                                  
+                                  // Find all series assigned to this pane and scale Y-axis
+                                  let yMin = Infinity;
+                                  let yMax = -Infinity;
+                                  let hasYData = false;
+                                  const visibleXMin = xAxis.visibleRange.min;
+                                  const visibleXMax = xAxis.visibleRange.max;
+                                  
+                                  for (const [seriesId, entry] of refs.dataSeriesStore) {
+                                    if (entry.paneId === paneId && entry.dataSeries.count() > 0) {
+                                      try {
+                                        // Calculate Y-range manually using helper function
+                                        const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                                        if (yRange) {
+                                          yMin = Math.min(yMin, yRange.min);
+                                          yMax = Math.max(yMax, yRange.max);
+                                          hasYData = true;
+                                        }
+                                      } catch (err) {
+                                        // Try full range as fallback
+                                        try {
+                                          const yRange = calculateYRange(entry.dataSeries);
+                                          if (yRange) {
+                                            yMin = Math.min(yMin, yRange.min);
+                                            yMax = Math.max(yMax, yRange.max);
+                                            hasYData = true;
+                                          }
+                                        } catch (err2) {
+                                          // Ignore
+                                        }
+                                      }
+                                    }
+                                  }
+                                  
+                                  if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
+                                    const padding = (yMax - yMin) * 0.1;
+                                    yAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
+                                    paneSurface.surface.invalidateElement();
+                                  }
+                                } catch (e) {
+                                  console.warn(`[MultiPaneChart] Error scaling Y-axis for pane ${paneId} on retry:`, e);
+                                }
+                              }
+                            }
+                          }, 100);
                         } else {
                           console.warn('[MultiPaneChart] Still no data after retry - X-axis range not set');
                         }
@@ -1861,6 +3722,86 @@ export function useMultiPaneChart({
                     ohlcXAxis.visibleRange = liveRange;
                     refs.ohlcSurface.invalidateElement();
                   }
+                  
+                  // CRITICAL: Also set X-axis range for dynamic panes
+                  if (plotLayout && refs.paneSurfaces.size > 0 && liveRange) {
+                    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                      try {
+                        if (paneSurface.xAxis) {
+                          paneSurface.xAxis.visibleRange = liveRange;
+                          paneSurface.surface.invalidateElement();
+                        }
+                      } catch (e) {
+                        console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId}:`, e);
+                      }
+                    }
+                  }
+                  
+                  // CRITICAL: Force Y-axis scaling for all panes after X-axis is set
+                  // This ensures series are visible immediately
+                  setTimeout(() => {
+                    // Scale Y-axis for legacy surfaces
+                    try {
+                      if (refs.tickSurface) refs.tickSurface.zoomExtentsY();
+                      if (refs.ohlcSurface) refs.ohlcSurface.zoomExtentsY();
+                    } catch (e) {
+                      // Ignore
+                    }
+                    
+                    // Scale Y-axis for dynamic panes
+                    if (plotLayout && refs.paneSurfaces.size > 0) {
+                      for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                        try {
+                          const xAxis = paneSurface.xAxis;
+                          const yAxis = paneSurface.yAxis;
+                          
+                          if (!xAxis || !yAxis || !xAxis.visibleRange) continue;
+                          
+                          // Find all series assigned to this pane and scale Y-axis
+                          let yMin = Infinity;
+                          let yMax = -Infinity;
+                          let hasYData = false;
+                          const visibleXMin = xAxis.visibleRange.min;
+                          const visibleXMax = xAxis.visibleRange.max;
+                          
+                          for (const [seriesId, entry] of refs.dataSeriesStore) {
+                            if (entry.paneId === paneId && entry.dataSeries.count() > 0) {
+                              try {
+                                // Calculate Y-range manually using helper function
+                                const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
+                                if (yRange) {
+                                  yMin = Math.min(yMin, yRange.min);
+                                  yMax = Math.max(yMax, yRange.max);
+                                  hasYData = true;
+                                }
+                              } catch (err) {
+                                // Try full range as fallback
+                                try {
+                                  const yRange = calculateYRange(entry.dataSeries);
+                                  if (yRange) {
+                                    yMin = Math.min(yMin, yRange.min);
+                                    yMax = Math.max(yMax, yRange.max);
+                                    hasYData = true;
+                                  }
+                                } catch (err2) {
+                                  // Ignore
+                                }
+                              }
+                            }
+                          }
+                          
+                          if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
+                            const padding = (yMax - yMin) * 0.1;
+                            yAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
+                            paneSurface.surface.invalidateElement();
+                       
+                          }
+                        } catch (e) {
+                          console.warn(`[MultiPaneChart] Error scaling Y-axis for pane ${paneId} on live transition:`, e);
+                        }
+                      }
+                    }
+                  }, 100); // Small delay to ensure data is processed
                 } catch (e) {
                   console.warn('[MultiPaneChart] Error in delayed X-axis range setting:', e);
                 }
@@ -1901,7 +3842,7 @@ export function useMultiPaneChart({
                       if (entry.dataSeries.count() === 0) return false;
                       
                       // If series is explicitly hidden, skip it
-                      if (entry.renderableSeries.isVisible === false) return false;
+                      if (!entry.renderableSeries || entry.renderableSeries.isVisible === false) return false;
                       
                       // For large history, data might exist but range check might fail due to timing
                       // So we're more lenient - if data exists and series is not explicitly hidden, include it
@@ -1944,11 +3885,16 @@ export function useMultiPaneChart({
                         let hasYData = false;
                         
                         for (const entry of entriesWithData) {
-                          const yRange = getDataSeriesYRange(entry.dataSeries);
-                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                            yMin = Math.min(yMin, yRange.min);
-                            yMax = Math.max(yMax, yRange.max);
-                            hasYData = true;
+                          try {
+                            // Calculate Y-range manually using helper function
+                            const yRange = calculateYRange(entry.dataSeries);
+                            if (yRange) {
+                              yMin = Math.min(yMin, yRange.min);
+                              yMax = Math.max(yMax, yRange.max);
+                              hasYData = true;
+                            }
+                          } catch (e) {
+                            // Ignore errors for individual series
                           }
                         }
                         
@@ -1961,14 +3907,14 @@ export function useMultiPaneChart({
                           tickYAxis.visibleRange = newYRange;
                           refs.tickSurface.invalidateElement();
                           tickScaled = true;
-                          console.log(`[MultiPaneChart] Y-axis auto-scaled (tick) using manual calculation: ${yMin.toFixed(2)} to ${yMax.toFixed(2)} (attempt ${attempt})`);
+                         
                         } else {
                           // Fallback: try zoomExtentsY if manual calculation didn't work
                           try {
                             refs.tickSurface.zoomExtentsY();
                             refs.tickSurface.invalidateElement();
                             tickScaled = true;
-                            console.log(`[MultiPaneChart] Y-axis auto-scaled (tick) using zoomExtentsY fallback (attempt ${attempt})`);
+                           
                           } catch (zoomError) {
                             console.warn('[MultiPaneChart] Both manual calculation and zoomExtentsY failed for tick chart:', zoomError);
                           }
@@ -2000,7 +3946,7 @@ export function useMultiPaneChart({
                       if (entry.dataSeries.count() === 0) return false;
                       
                       // If series is explicitly hidden, skip it
-                      if (entry.renderableSeries.isVisible === false) return false;
+                      if (!entry.renderableSeries || entry.renderableSeries.isVisible === false) return false;
                       
                       // For large history, data might exist but range check might fail due to timing
                       // So we're more lenient - if data exists and series is not explicitly hidden, include it
@@ -2043,11 +3989,16 @@ export function useMultiPaneChart({
                         let hasYData = false;
                         
                         for (const entry of entriesWithData) {
-                          const yRange = getDataSeriesYRange(entry.dataSeries);
-                          if (yRange && isFinite(yRange.min) && isFinite(yRange.max) && yRange.max > yRange.min) {
-                            yMin = Math.min(yMin, yRange.min);
-                            yMax = Math.max(yMax, yRange.max);
-                            hasYData = true;
+                          try {
+                            // Calculate Y-range manually using helper function
+                            const yRange = calculateYRange(entry.dataSeries);
+                            if (yRange) {
+                              yMin = Math.min(yMin, yRange.min);
+                              yMax = Math.max(yMax, yRange.max);
+                              hasYData = true;
+                            }
+                          } catch (e) {
+                            // Ignore errors for individual series
                           }
                         }
                         
@@ -2060,14 +4011,14 @@ export function useMultiPaneChart({
                           ohlcYAxis.visibleRange = newYRange;
                           refs.ohlcSurface.invalidateElement();
                           ohlcScaled = true;
-                          console.log(`[MultiPaneChart] Y-axis auto-scaled (ohlc) using manual calculation: ${yMin.toFixed(2)} to ${yMax.toFixed(2)} (attempt ${attempt})`);
+                         
                         } else {
                           // Fallback: try zoomExtentsY if manual calculation didn't work
                           try {
                             refs.ohlcSurface.zoomExtentsY();
                             refs.ohlcSurface.invalidateElement();
                             ohlcScaled = true;
-                            console.log(`[MultiPaneChart] Y-axis auto-scaled (ohlc) using zoomExtentsY fallback (attempt ${attempt})`);
+                         
                           } catch (zoomError) {
                             console.warn('[MultiPaneChart] Both manual calculation and zoomExtentsY failed for OHLC chart:', zoomError);
                           }
@@ -2092,7 +4043,7 @@ export function useMultiPaneChart({
                 // Reset Y-axis update timer to allow immediate updates after live transition
                 lastYAxisUpdateRef.current = 0;
                 if (tickScaled || ohlcScaled) {
-                  console.log(`[MultiPaneChart] Y-axis auto-scaling completed (attempt ${attempt})`);
+                  
                 } else {
                   console.warn('[MultiPaneChart] Y-axis auto-scaling failed after all attempts - will retry on next data update');
                 }
@@ -2115,7 +4066,7 @@ export function useMultiPaneChart({
           
           // Force immediate Y-axis scaling (works even when history is already loaded)
           // Use requestAnimationFrame to ensure the chart is ready
-          requestAnimationFrame(() => {
+          requestAnimationFrame(() => {;
             // Immediate scaling attempt - don't wait for data processing loop
             const scaleYAxisImmediately = () => {
               try {
@@ -2131,7 +4082,7 @@ export function useMultiPaneChart({
                       try {
                         refs.tickSurface.zoomExtentsY();
                         refs.tickSurface.invalidateElement();
-                        console.log('[MultiPaneChart] Y-axis auto-scaled (tick) immediately on live transition');
+                        
                       } catch (e) {
                         console.warn('[MultiPaneChart] Immediate Y-axis scaling failed for tick chart:', e);
                       }
@@ -2149,7 +4100,7 @@ export function useMultiPaneChart({
                       try {
                         refs.ohlcSurface.zoomExtentsY();
                         refs.ohlcSurface.invalidateElement();
-                        console.log('[MultiPaneChart] Y-axis auto-scaled (ohlc) immediately on live transition');
+                      
                       } catch (e) {
                         console.warn('[MultiPaneChart] Immediate Y-axis scaling failed for OHLC chart:', e);
                       }
@@ -2233,18 +4184,19 @@ export function useMultiPaneChart({
             isFullRange,
           };
           
-          console.log('[MultiPaneChart] Tab hidden - saved X-axis range:', {
-            isFullRange,
-            tickWidth: savedXAxisRangeRef.current.tickRange.width,
-            ohlcWidth: savedXAxisRangeRef.current.ohlcRange.width,
-          });
+         
         }
       } else {
-        // Tab is becoming visible - process any remaining data first
+        // Tab is becoming visible - ALWAYS jump to latest data (requirement)
         // The chart should have been processing in background, but process a few more batches
         // to catch up on any remaining samples, then restore the range smoothly
-        if (savedXAxisRangeRef.current && tickXAxis && ohlcXAxis) {
+     
+        if (tickXAxis && ohlcXAxis) {
           const saved = savedXAxisRangeRef.current;
+          // If no saved range, use current range as fallback (for window width calculation)
+          const currentTickRange = tickXAxis.visibleRange;
+          const currentOhlcRange = ohlcXAxis.visibleRange;
+          const defaultWindowMs = saved?.tickRange?.width || (currentTickRange ? (currentTickRange.max - currentTickRange.min) : 5 * 60 * 1000);
           
           // Cancel any pending setTimeout and switch back to requestAnimationFrame
           if (pendingUpdateRef.current && isUsingTimeoutRef.current) {
@@ -2270,31 +4222,40 @@ export function useMultiPaneChart({
               // Get current data state (if any exists) to determine range
               // But don't process new data yet - set range first
               const remainingBufferSize = sampleBufferRef.current.length;
-              console.log(`[MultiPaneChart] Tab visible - ${remainingBufferSize} samples pending, setting range first...`);
+             
               
-              // Get the latest timestamp from global data clock (registry)
-              // This is the requirement: "examine all the data series in the data registry and find the maximum of the timestamps"
-              // This is the requirement: "examine all the data series in the data registry and find the maximum of the timestamps"
-              let globalDataClock = 0;
+              // Get the latest timestamp - CRITICAL: Use lastDataTimeRef as primary source
+              // lastDataTimeRef is updated immediately when samples arrive (in appendSamples)
+              // Registry might be stale if data hasn't been processed/appended to DataSeries yet
+              // This ensures range restoration uses the actual latest data timestamp, not stale registry data
+              let globalDataClock = lastDataTimeRef.current;
+              
+              // Also check registry as secondary source (for series that might not have updated lastDataTimeRef)
               if (registry && registry.length > 0) {
-                globalDataClock = Math.max(...registry.map(r => r.lastMs || 0));
+                const registryMax = Math.max(...registry.map(r => r.lastMs || 0));
+                // Use whichever is newer - this handles cases where registry is more current
+                if (registryMax > globalDataClock) {
+                  globalDataClock = registryMax;
+                }
               }
               
-              // Fallback to lastDataTimeRef if registry is empty or no valid timestamps
+              // Ensure we have a valid timestamp
               if (globalDataClock === 0 || !isFinite(globalDataClock)) {
-                globalDataClock = lastDataTimeRef.current;
+                console.warn('[MultiPaneChart] No valid timestamp for range restoration, using current time');
+                globalDataClock = Date.now();
               }
               
               // Use global data clock as the source of truth
-              const latestTimestamp = globalDataClock > 0 ? globalDataClock : lastDataTimeRef.current;
+              const latestTimestamp = globalDataClock;
               
               if (latestTimestamp > 0 && tickXAxis && ohlcXAxis) {
-                const windowMs = saved.tickRange.width; // Use saved window width (e.g., 630000ms = 10.5 minutes)
+                // Use saved window width if available, otherwise use current range width or default
+                const windowMs = saved?.tickRange?.width || defaultWindowMs;
                 
                 let newTickRange: NumberRange;
                 let newOhlcRange: NumberRange;
                 
-                if (saved.isFullRange) {
+                if (saved?.isFullRange) {
                   // Show entire range: get min from series if available
                   let dataMin = latestTimestamp - windowMs; // Fallback
                   // Find earliest data point from any series in store
@@ -2318,7 +4279,8 @@ export function useMultiPaneChart({
                   // Show time window: [latestTimestamp - windowMs, latestTimestamp]
                   // This is the key pattern from SciChart documentation
                   newTickRange = new NumberRange(latestTimestamp - windowMs, latestTimestamp);
-                  newOhlcRange = new NumberRange(latestTimestamp - saved.ohlcRange.width, latestTimestamp);
+                  const ohlcWindowMs = saved?.ohlcRange?.width || (currentOhlcRange ? (currentOhlcRange.max - currentOhlcRange.min) : windowMs);
+                  newOhlcRange = new NumberRange(latestTimestamp - ohlcWindowMs, latestTimestamp);
                 }
                 
                 // Set the visible range immediately (no delay)
@@ -2349,19 +4311,7 @@ export function useMultiPaneChart({
                 const actualTickMax = tickXAxis.visibleRange?.max;
                 const actualOhlcMax = ohlcXAxis.visibleRange?.max;
                 
-                console.log('[MultiPaneChart] Tab visible - fixed X-axis range to latest position (global data clock):', {
-                  from: new Date(newTickRange.min).toISOString(),
-                  to: new Date(newTickRange.max).toISOString(),
-                  globalDataClock: new Date(globalDataClock).toISOString(),
-                  latestTimestamp: new Date(latestTimestamp).toISOString(),
-                  windowWidth: windowMs,
-                  isFullRange: saved.isFullRange,
-                  registrySeriesCount: registry.length,
-                  actualTickMax: actualTickMax ? new Date(actualTickMax).toISOString() : 'not set',
-                  actualOhlcMax: actualOhlcMax ? new Date(actualOhlcMax).toISOString() : 'not set',
-                  dataPointCount: Array.from(refs.dataSeriesStore.values()).reduce((sum, entry) => sum + entry.dataSeries.count(), 0),
-                  pendingSamples: remainingBufferSize,
-                });
+          
                 
                 // NOW process data in background (after range is set and stable)
                 // This ensures no chart updates interfere with the range restoration
@@ -2388,7 +4338,7 @@ export function useMultiPaneChart({
                       }
                     }
                     
-                    console.log(`[MultiPaneChart] Background processing complete: ${iterations} batches processed`);
+                
                   };
                   
                   // Start background processing (don't await)
@@ -2442,6 +4392,7 @@ export function useMultiPaneChart({
           
           // Set range FIRST, then process data silently in background
           // This prevents any chart updates from interfering with the range restoration
+       
           isRestoringRangeRef.current = true; // Prevent auto-scroll and Y-axis updates from overriding
           fixRangeThenProcessData().then(() => {
             // Clear the flag after a longer delay to allow auto-scroll to resume smoothly
@@ -2449,8 +4400,8 @@ export function useMultiPaneChart({
             // Extended delay ensures range is fully stable and data processing is complete
             setTimeout(() => {
               isRestoringRangeRef.current = false;
-              console.log('[MultiPaneChart] Auto-scroll re-enabled after range restoration');
-            }, 1500); // Extended delay to ensure range is fully stable
+             
+            }, 3000); // Extended delay to ensure range is fully stable (increased from 1500ms)
           }).catch((e) => {
             console.warn('[MultiPaneChart] Error in fixRangeThenProcessData:', e);
             isRestoringRangeRef.current = false;
@@ -2494,6 +4445,35 @@ export function useMultiPaneChart({
     if (latestTime > lastDataTimeRef.current) {
       lastDataTimeRef.current = latestTime;
       onDataClockUpdate?.(latestTime);
+      
+      // Requirement 15.2: Minimap window logic - live mode: right edge should track dataClockMs
+      // Update minimap window position in live mode
+      const refs = chartRefs.current;
+      if (latestTime > 0 && refs.overview && isLiveRef.current && feedStageRef.current === 'live') {
+        try {
+          const overviewSurface = (refs.overview as any).sciChartSurface;
+          if (overviewSurface) {
+            const overviewXAxis = overviewSurface.xAxes.get(0);
+            if (overviewXAxis) {
+              const mainXAxis = refs.tickSurface?.xAxes.get(0) || 
+                (plotLayout ? Array.from(refs.paneSurfaces.values())[0]?.xAxis : null);
+              
+              if (mainXAxis && mainXAxis.visibleRange) {
+                const mainRange = mainXAxis.visibleRange;
+                if (overviewXAxis.visibleRange) {
+                  const currentRange = overviewXAxis.visibleRange;
+                  const diff = Math.abs(currentRange.max - mainRange.max) + Math.abs(currentRange.min - mainRange.min);
+                  if (diff > 1000) { // 1 second threshold
+                    overviewXAxis.visibleRange = new NumberRange(mainRange.min, mainRange.max);
+                  }
+                }
+              }
+            }
+          }
+        } catch (minimapError) {
+          // Silently handle minimap update errors
+        }
+      }
     }
     
     // Schedule batched update if not already scheduled
@@ -2501,38 +4481,54 @@ export function useMultiPaneChart({
     if (pendingUpdateRef.current === null) {
       const scheduleNext = () => {
         pendingUpdateRef.current = null;
+        const isTabHidden = document.hidden;
+        const bufferSize = sampleBufferRef.current.length;
+        
+        // Log background processing activity for debugging
+        if (isTabHidden && bufferSize > 0) {
+         
+        }
+        
+        // Process the batch - this will append data to DataSeries even when tab is hidden
         processBatchedSamples();
-        // If there are more samples, schedule another batch
+        
+        // CRITICAL: Always continue processing if there are more samples, regardless of tab visibility
+        // Hybrid approach: requestAnimationFrame when visible (smooth), setTimeout when hidden (fast)
+        // requestAnimationFrame is throttled to ~1fps when hidden, which is too slow for data processing
+        // Use setTimeout(16ms) when hidden to maintain 60fps processing rate
         if (sampleBufferRef.current.length > 0) {
-          // When tab is hidden, use setTimeout instead of requestAnimationFrame
-          // Use a longer interval when hidden (100ms) to ensure processing continues
-          // but not too fast to avoid browser throttling
-          if (document.hidden) {
+          if (isTabHidden) {
+            // When hidden, use setTimeout for faster processing (60fps)
+            // This ensures we keep up with incoming data even when tab is hidden
             isUsingTimeoutRef.current = true;
-            // Use 100ms interval when hidden - ensures processing continues but not too aggressive
-            // This keeps the chart running in background so it's already at latest position when visible
-            pendingUpdateRef.current = setTimeout(scheduleNext, 100);
+            pendingUpdateRef.current = setTimeout(scheduleNext, 16);
           } else {
+            // When visible, use requestAnimationFrame for smooth rendering
             isUsingTimeoutRef.current = false;
             pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
           }
+        } else {
+          // No more samples - reset timeout flag
+          isUsingTimeoutRef.current = false;
         }
       };
       
       const now = performance.now();
       const timeSinceLastRender = now - lastRenderTimeRef.current;
+      const isTabHidden = document.hidden;
       
       if (timeSinceLastRender >= FRAME_INTERVAL_MS) {
         // Render immediately if enough time has passed
         scheduleNext();
       } else {
-        // Schedule for next frame - use setTimeout if tab is hidden
-        if (document.hidden) {
+        // Schedule for next frame - use setTimeout when hidden for faster processing
+        if (isTabHidden) {
+          // When hidden, use setTimeout for faster processing (60fps)
+          // requestAnimationFrame is throttled to ~1fps when hidden, which is too slow
           isUsingTimeoutRef.current = true;
-          // Use 16ms interval when hidden (matches 60fps) - process data aggressively in background
-          // This ensures we keep up with incoming data even when tab is hidden
           pendingUpdateRef.current = setTimeout(scheduleNext, 16);
         } else {
+          // When visible, use requestAnimationFrame for smooth rendering
           isUsingTimeoutRef.current = false;
           pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
         }

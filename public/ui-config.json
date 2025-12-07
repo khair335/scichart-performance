@@ -38,34 +38,42 @@
     "continueWhenPaused": true,
     "backgroundBufferSize": 10000000
   },
-  "layout": {
-    "preserveViewportOnReload": true,
-    "reuseXAxis": true,
-    "defaultLayout": null
-  },
   "minimap": {
     "enabled": false,
     "overlay": true,
     "liveWindowMs": 300000
   },
   "ui": {
-    "hud": {
-      "visible": true,
-      "mode": "minimal",
-      "autoHideMs": 0
-    },
-    "toolbar": {
-      "autoHide": false,
-      "opacityIdle": 1
-    },
     "theme": {
       "default": "dark",
       "allowToggle": true
     }
   },
-  "logging": {
-    "level": "info",
-    "includeStatus": true,
-    "includeEvents": false
+  "defaultLayout": {
+    "layout_mode": "multi_surface",
+    "grid": [2, 1],
+    "panes": [
+      {
+        "id": "tick-pane",
+        "row": 0,
+        "col": 0,
+        "height": 1,
+        "width": 1,
+        "title": "Tick Price & Indicators"
+      },
+      {
+        "id": "ohlc-pane",
+        "row": 1,
+        "col": 0,
+        "height": 1,
+        "width": 1,
+        "title": "OHLC Candlesticks"
+      }
+    ],
+    "series": [],
+    "strategy_markers": {
+      "exclude_panes": ["ohlc-pane"]
+    }
   }
 }
+

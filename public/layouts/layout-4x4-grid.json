@@ -1,0 +1,215 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [4, 4],
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "pane-0-0",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick"
+    },
+    {
+      "id": "pane-0-1",
+      "row": 0,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 10"
+    },
+    {
+      "id": "pane-0-2",
+      "row": 0,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 20"
+    },
+    {
+      "id": "pane-0-3",
+      "row": 0,
+      "col": 3,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 30"
+    },
+    {
+      "id": "pane-1-0",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 40"
+    },
+    {
+      "id": "pane-1-1",
+      "row": 1,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 50"
+    },
+    {
+      "id": "pane-1-2",
+      "row": 1,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 60"
+    },
+    {
+      "id": "pane-1-3",
+      "row": 1,
+      "col": 3,
+      "height": 1,
+      "width": 1,
+      "title": "SMA 70"
+    },
+    {
+      "id": "pane-2-0",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 10s"
+    },
+    {
+      "id": "pane-2-1",
+      "row": 2,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 30s"
+    },
+    {
+      "id": "pane-2-2",
+      "row": 2,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 60s"
+    },
+    {
+      "id": "pane-2-3",
+      "row": 2,
+      "col": 3,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 300s"
+    },
+    {
+      "id": "pane-3-0",
+      "row": 3,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "PnL"
+    },
+    {
+      "id": "pane-3-1",
+      "row": 3,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "Volume"
+    },
+    {
+      "id": "pane-3-2",
+      "row": 3,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "Custom 1"
+    },
+    {
+      "id": "pane-3-3",
+      "row": 3,
+      "col": 3,
+      "height": 1,
+      "width": 1,
+      "title": "Custom 2"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "pane-0-0",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "pane-0-1",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "pane-0-2",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_30",
+      "pane": "pane-0-3",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_40",
+      "pane": "pane-1-0",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_50",
+      "pane": "pane-1-1",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_60",
+      "pane": "pane-1-2",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_70",
+      "pane": "pane-1-3",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "pane-2-0",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "pane-2-1",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:60000",
+      "pane": "pane-2-2",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:300000",
+      "pane": "pane-2-3",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pane-3-0",
+      "type": "FastLineRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["pane-2-0", "pane-2-1", "pane-2-2", "pane-2-3", "pane-3-0"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "4x4 grid layout - 16 panes for maximum grid testing"
+  }
+}
+
