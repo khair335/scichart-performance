@@ -83,7 +83,8 @@ function updatePaneWaitingOverlay(
   // Get the waiting overlay element
   const waitingOverlay = document.getElementById(`pane-${paneId}-waiting`);
   if (!waitingOverlay) {
-    console.warn(`[updatePaneWaitingOverlay] Waiting overlay not found for pane ${paneId} (looking for pane-${paneId}-waiting)`);
+    // Overlay not found - this is expected in dynamic mode where overlays are optional
+    // Only log at debug level to avoid spam
     return;
   }
   
@@ -1856,9 +1857,16 @@ export function useMultiPaneChart({
 
       // Clean up any existing dynamic panes if layout was removed
       if (refs.paneSurfaces.size > 0) {
-       
+
         refs.paneSurfaces.forEach((paneSurface, paneId) => {
           try {
+            // Clear modifiers first to prevent DOM access errors
+            try {
+              paneSurface.surface.chartModifiers.clear();
+            } catch (e) {
+              // Ignore
+            }
+
             // Detach renderableSeries before destroying surface
             const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
             renderableSeries.forEach(rs => {
@@ -1876,7 +1884,17 @@ export function useMultiPaneChart({
         });
         refs.paneSurfaces.clear();
       }
-      
+
+      // Clean up the pane manager and parent surface
+      if (paneManagerRef.current) {
+        try {
+          paneManagerRef.current.cleanup();
+          paneManagerRef.current = null;
+        } catch (e) {
+          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+        }
+      }
+
       return;
     }
 
@@ -1895,6 +1913,13 @@ export function useMultiPaneChart({
       // Clean up existing panes
       refs.paneSurfaces.forEach((paneSurface, paneId) => {
         try {
+          // Clear modifiers first to prevent DOM access errors
+          try {
+            paneSurface.surface.chartModifiers.clear();
+          } catch (e) {
+            // Ignore
+          }
+
           const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
           renderableSeries.forEach(rs => {
             try {
@@ -1910,6 +1935,16 @@ export function useMultiPaneChart({
         }
       });
       refs.paneSurfaces.clear();
+
+      // Clean up the pane manager and parent surface
+      if (paneManagerRef.current) {
+        try {
+          paneManagerRef.current.cleanup();
+          paneManagerRef.current = null;
+        } catch (e) {
+          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+        }
+      }
     }
 
     // If this is the same layout and already initialized, skip

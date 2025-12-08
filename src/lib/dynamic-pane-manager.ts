@@ -491,6 +491,13 @@ export class DynamicPaneManager {
       //   }
       // }
       
+      // CRITICAL: Clear modifiers first to prevent DOM access after surface removal
+      try {
+        pane.surface.chartModifiers.clear();
+      } catch (e) {
+        console.warn(`[DynamicPaneManager] Error clearing modifiers from pane ${paneId}:`, e);
+      }
+
       // CRITICAL: Remove all RenderableSeries before deleting surface
       // This prevents "DataSeries has been deleted" errors
       try {
@@ -498,7 +505,7 @@ export class DynamicPaneManager {
         pane.surface.renderableSeries.asArray().forEach((rs: any) => {
           renderableSeriesToRemove.push(rs);
         });
-        
+
         for (const rs of renderableSeriesToRemove) {
           try {
             pane.surface.renderableSeries.remove(rs);
@@ -509,7 +516,7 @@ export class DynamicPaneManager {
       } catch (e) {
         console.warn(`[DynamicPaneManager] Error removing RenderableSeries from pane ${paneId}:`, e);
       }
-      
+
       // Delete surface (DataSeries are NOT deleted - they're managed separately)
       try {
         pane.surface.delete();
