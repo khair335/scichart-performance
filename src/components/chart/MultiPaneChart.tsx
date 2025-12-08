@@ -84,29 +84,23 @@ function updatePaneWaitingOverlay(
     }
   }
 
-  // Log the detailed status
-  console.log(`[MultiPaneChart] 📊 Pane ${paneId} status: ${assignedSeries.length} assigned, ${pendingCount} pending`, seriesStatus);
-  
-  // Get the waiting overlay element
+  // Get the waiting overlay element (silently skip if not found)
   const waitingOverlay = document.getElementById(`pane-${paneId}-waiting`);
   if (!waitingOverlay) {
-    console.warn(`[MultiPaneChart] ⚠️ Waiting overlay not found for pane ${paneId}`);
-    return;
+    return; // Overlay elements not rendered in current implementation
   }
-  
+
   // Get the count element
   const countElement = document.getElementById(`pane-${paneId}-waiting-count`);
-  
+
   if (pendingCount > 0) {
     // Show overlay with pending count
-    console.log(`[MultiPaneChart] 📊 Showing waiting overlay for pane ${paneId}: ${pendingCount} series pending`);
     waitingOverlay.style.display = 'flex';
     if (countElement) {
       countElement.textContent = `${pendingCount} ${pendingCount === 1 ? 'series' : 'series'} pending`;
     }
   } else {
     // All assigned series have data - hide overlay
-    console.log(`[MultiPaneChart] ✅ Hiding waiting overlay for pane ${paneId}: all series have data`);
     waitingOverlay.style.display = 'none';
     if (countElement) {
       countElement.textContent = '';
@@ -1317,14 +1311,6 @@ export function useMultiPaneChart({
   // This ensures buffers are ready before data arrives (proactive preallocation)
   useEffect(() => {
     const refs = chartRefs.current;
-    
-    // ALWAYS log preallocation trigger for debugging visibility issues
-    console.log('[MultiPaneChart] 🔄 Preallocation effect triggered', {
-      registryLength: registry?.length || 0,
-      isReady,
-      plotLayoutLoaded: !!plotLayout,
-      paneSurfacesCount: refs.paneSurfaces.size
-    });
     
     // Check if we have either legacy surfaces OR dynamic panes
     const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface && refs.tickWasm && refs.ohlcWasm;
