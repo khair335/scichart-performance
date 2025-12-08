@@ -658,8 +658,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
             validationErrors.warnings.push(...errs.warnings);
           });
           
-          // Set layout name from meta or filename
-          const layoutName = parsed.layout.meta?.name || file.name.replace('.json', '') || 'Custom Layout';
+          // Set layout name from filename
+          const layoutName = file.name.replace('.json', '') || 'Custom Layout';
           setCurrentLayoutName(layoutName);
           
           // Display warnings if any (non-blocking)

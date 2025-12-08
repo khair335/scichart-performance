@@ -7,6 +7,7 @@
 
 import {
   SciChartSurface,
+  SciChartSubSurface,
   NumericAxis,
   DateTimeNumericAxis,
   TSciChart,
@@ -20,7 +21,7 @@ import {
   RubberBandXyZoomModifier,
   EXyDirection,
   Rect,
-  ECoordinateMode,
+  ESubSurfacePositionCoordinateMode,
 } from 'scichart';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
@@ -106,6 +107,13 @@ export class DynamicPaneManager {
     this.sharedWasm = result.wasmContext;
 
     this.verticalGroup = new SciChartVerticalGroup();
+  }
+
+  /**
+   * Get the shared WASM context
+   */
+  getWasmContext(): TSciChart | null {
+    return this.sharedWasm;
   }
 
   /**
@@ -271,14 +279,14 @@ export class DynamicPaneManager {
     const width = paneConfig.width * colWidth;
     const height = paneConfig.height * rowHeight;
 
-    // Create sub-chart using SubCharts API
-    const subSurface = this.parentSurface.addSubChart({
+    // Create sub-chart using SciChartSubSurface API
+    const subSurface = SciChartSubSurface.createSubSurface(this.parentSurface, {
       position: new Rect(x, y, width, height),
-      coordinateMode: ECoordinateMode.Relative,
+      coordinateMode: ESubSurfacePositionCoordinateMode.Relative,
       isTransparent: false,
     });
 
-    const surface = subSurface as unknown as SciChartSurface;
+    const surface = subSurface as SciChartSurface;
     const wasmContext = this.sharedWasm;
 
     // Create timezone-aware label formatter
