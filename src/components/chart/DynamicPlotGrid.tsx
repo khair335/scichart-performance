@@ -41,6 +41,7 @@ export function DynamicPlotGrid({
       return;
     }
 
+    // Grid format: [M, N] where M = rows, N = columns (like a matrix)
     const [rows, cols] = layout.layout.grid;
 
     // Create a layout ID to detect changes

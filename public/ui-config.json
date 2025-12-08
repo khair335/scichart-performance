@@ -18,17 +18,18 @@
       "maxRows": 5000
     },
     "buffers": {
-      "pointsPerSeries": 1000000,
+      "pointsPerSeries": 500000,
       "maxPointsTotal": 10000000
     }
   },
   "performance": {
     "targetFPS": 60,
-    "batchSize": 5000,
+    "batchSize": 1000,
     "downsampleRatio": 1,
     "maxAutoTicks": 8,
     "fifoEnabled": true,
-    "fifoSweepSize": 100000
+    "fifoSweepSize": 50000,
+    "updateIntervalMs": 50
   },
   "chart": {
     "separateXAxes": false,

@@ -219,17 +219,17 @@ export function useMultiPaneChart({
   const defaultUIConfig: UIConfig = {
     data: {
       buffers: {
-        pointsPerSeries: 1_000_000, // Default preallocation for ALL series (1M points)
+        pointsPerSeries: 500_000, // Optimized for real-time performance (500K points)
         maxPointsTotal: 10_000_000, // Global cap across all series (10M points)
       },
     },
     performance: {
       targetFPS: 60,
-      batchSize: 5000,
+      batchSize: 1000,
       downsampleRatio: 1,
       maxAutoTicks: 8,
       fifoEnabled: true,
-      fifoSweepSize: 100000,
+      fifoSweepSize: 50000,
     },
     chart: {
       separateXAxes: false,
@@ -586,7 +586,7 @@ export function useMultiPaneChart({
             fill: fill,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+            resamplingMode: EResamplingMode.Auto,
           });
         } else {
           // Default to FastLineRenderableSeries
@@ -595,7 +595,7 @@ export function useMultiPaneChart({
             stroke: stroke,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+            resamplingMode: EResamplingMode.Auto,
           });
         }
       }

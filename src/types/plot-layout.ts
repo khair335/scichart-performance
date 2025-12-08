@@ -5,7 +5,7 @@
 
 export interface PlotLayout {
   layout_mode: 'multi_surface';
-  grid: [number, number]; // [rows, cols] e.g., [2, 2] for 2x2 grid
+  grid: [number, number]; // [M, N] where M = number of rows, N = number of columns (like a matrix). e.g., [2, 3] = 2 rows × 3 columns
   minimap?: {
     source: {
       series_id: string;
