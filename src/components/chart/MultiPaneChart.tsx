@@ -63,7 +63,8 @@ function updatePaneWaitingOverlay(
   // Check which assigned series have data
   let pendingCount = 0;
   let hasAnyData = false;
-  
+  const seriesStatus: string[] = [];
+
   for (const seriesId of assignedSeries) {
     const seriesEntry = refs.dataSeriesStore.get(seriesId);
     if (seriesEntry && seriesEntry.dataSeries) {
@@ -71,20 +72,25 @@ function updatePaneWaitingOverlay(
       const count = seriesEntry.dataSeries.count();
       if (count > 0) {
         hasAnyData = true;
+        seriesStatus.push(`${seriesId}: ${count} points`);
       } else {
         pendingCount++;
+        seriesStatus.push(`${seriesId}: 0 points (waiting)`);
       }
     } else {
       // Series not created yet or not in store
       pendingCount++;
+      seriesStatus.push(`${seriesId}: not created yet`);
     }
   }
+
+  // Log the detailed status
+  console.log(`[MultiPaneChart] 📊 Pane ${paneId} status: ${assignedSeries.length} assigned, ${pendingCount} pending`, seriesStatus);
   
   // Get the waiting overlay element
   const waitingOverlay = document.getElementById(`pane-${paneId}-waiting`);
   if (!waitingOverlay) {
-    // Overlay not found - this is expected in dynamic mode where overlays are optional
-    // Only log at debug level to avoid spam
+    console.warn(`[MultiPaneChart] ⚠️ Waiting overlay not found for pane ${paneId}`);
     return;
   }
   
@@ -93,12 +99,14 @@ function updatePaneWaitingOverlay(
   
   if (pendingCount > 0) {
     // Show overlay with pending count
+    console.log(`[MultiPaneChart] 📊 Showing waiting overlay for pane ${paneId}: ${pendingCount} series pending`);
     waitingOverlay.style.display = 'flex';
     if (countElement) {
       countElement.textContent = `${pendingCount} ${pendingCount === 1 ? 'series' : 'series'} pending`;
     }
   } else {
     // All assigned series have data - hide overlay
+    console.log(`[MultiPaneChart] ✅ Hiding waiting overlay for pane ${paneId}: all series have data`);
     waitingOverlay.style.display = 'none';
     if (countElement) {
       countElement.textContent = '';
@@ -1310,13 +1318,13 @@ export function useMultiPaneChart({
   useEffect(() => {
     const refs = chartRefs.current;
     
-    // Throttle logging to avoid console spam
-    const lastLogTime = (window as any).__lastPreallocTriggerLogTime || 0;
-    const now = performance.now();
-    if (now - lastLogTime > 5000) { // Log at most once every 5 seconds
- 
-      (window as any).__lastPreallocTriggerLogTime = now;
-    }
+    // ALWAYS log preallocation trigger for debugging visibility issues
+    console.log('[MultiPaneChart] 🔄 Preallocation effect triggered', {
+      registryLength: registry?.length || 0,
+      isReady,
+      plotLayoutLoaded: !!plotLayout,
+      paneSurfacesCount: refs.paneSurfaces.size
+    });
     
     // Check if we have either legacy surfaces OR dynamic panes
     const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface && refs.tickWasm && refs.ohlcWasm;

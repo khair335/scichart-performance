@@ -51,6 +51,7 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
   }, []);
 
   const handleRegistry = useCallback((rows: RegistryRow[]) => {
+    console.log(`[useWebSocketFeed] 📋 Registry updated: ${rows.length} series`);
     setRegistry(rows);
   }, []);
 
