@@ -1860,13 +1860,15 @@ export function useMultiPaneChart({
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        // Cleanup is async to wait for render loops to complete
-        paneManagerRef.current.cleanup().then(() => {
-          paneManagerRef.current = null;
+        // Store reference to old manager and set to null immediately
+        const oldManager = paneManagerRef.current;
+        paneManagerRef.current = null;
+
+        // Cleanup the old manager async to wait for render loops to complete
+        oldManager.cleanup().then(() => {
           console.log('[MultiPaneChart] No layout cleanup complete');
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-          paneManagerRef.current = null;
         });
       }
 
@@ -1885,13 +1887,16 @@ export function useMultiPaneChart({
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        // Cleanup is async to wait for render loops to complete
-        paneManagerRef.current.cleanup().then(() => {
-          paneManagerRef.current = null;
+        // Store reference to old manager and set to null immediately
+        // This ensures the next render creates a NEW manager
+        const oldManager = paneManagerRef.current;
+        paneManagerRef.current = null;
+
+        // Cleanup the old manager async to wait for render loops to complete
+        oldManager.cleanup().then(() => {
           console.log('[MultiPaneChart] Layout change cleanup complete');
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-          paneManagerRef.current = null;
         });
       }
 
