@@ -331,13 +331,21 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     zoomMode: zoomMode, // Pass zoom mode
   });
 
+  // Update tick count from registry (total count, not just new samples)
+  useEffect(() => {
+    if (!registry || registry.length === 0) return;
+
+    // Sum up all tick series counts from registry
+    const totalTicks = registry
+      .filter(r => r.id.includes(':ticks'))
+      .reduce((sum, r) => sum + r.count, 0);
+
+    setTickCount(totalTicks);
+  }, [registry]);
+
   // Handle samples from any source
   const handleSamples = useCallback((samples: Sample[]) => {
     appendSamples(samples);
-    
-    // Update tick count
-    const newTicks = samples.filter(s => s.series_id.includes(':ticks')).length;
-    setTickCount(prev => prev + newTicks);
 
     // Update demo registry
     if (demoMode) {
@@ -541,11 +549,13 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // - Respect "Clear All" action - don't auto-add series back if user cleared them
   useEffect(() => {
     if (registry.length === 0) return;
-    
+
     setVisibleSeries(prev => {
       // Initial load: show price and indicators, but hide strategy series by default
       // Strategy series (PnL, signals, markers) have different Y-axis scales and can make price data appear tiny
-      if (!hasInitializedRef.current && prev.size === 0) {
+      // CRITICAL: Initialize even if hasInitializedRef is true IF prev.size is 0 and registry has data
+      // This handles the case where registry wasn't populated during first initialization
+      if (prev.size === 0 && (!hasInitializedRef.current || registry.length > 0)) {
         hasInitializedRef.current = true;
         // Filter out strategy series - they should be hidden by default
         const visible = new Set(
@@ -553,8 +563,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
             .filter(row => {
               const seriesInfo = parseSeriesType(row.id);
               // Hide strategy series by default (they have different Y-axis scales)
-              return seriesInfo.type !== 'strategy-pnl' && 
-                     seriesInfo.type !== 'strategy-signal' && 
+              return seriesInfo.type !== 'strategy-pnl' &&
+                     seriesInfo.type !== 'strategy-signal' &&
                      seriesInfo.type !== 'strategy-marker';
             })
             .map(r => r.id)
