@@ -471,9 +471,11 @@ export class WsFeedClient {
   }
 
   private _handleSamplesFrame(kind: string, samples: Sample[]): void {
+    console.log(`[WsFeedClient] 📦 _handleSamplesFrame called: type=${kind}, samples=${samples?.length || 0}`);
     if (this._closing) return;
     const t = kind;
     const list = Array.isArray(samples) ? samples : [];
+    console.log(`[WsFeedClient] Processing ${list.length} samples of type ${t}`);
     let accepted = 0;
     const out: Sample[] = [];
 
@@ -498,6 +500,7 @@ export class WsFeedClient {
     }
 
     if (accepted) {
+      console.log(`[WsFeedClient] ✅ Accepted ${accepted} samples, calling onSamples with ${out.length} samples`);
       if (t === 'history') this.historyReceived += accepted;
       else if (t === 'delta') this.deltaReceived += accepted;
       else this.liveReceived += accepted;
@@ -506,6 +509,8 @@ export class WsFeedClient {
 
       this.onSamples(out);
       this.setLastSeq(this.lastSeq);
+    } else {
+      console.log(`[WsFeedClient] ⚠️ No samples accepted (all duplicates or invalid)`);
     }
 
     if (t === 'delta' && this.stage === 'history') this.stage = 'delta';
@@ -516,7 +521,10 @@ export class WsFeedClient {
 
   private _updateRegistry(sample: Sample): void {
     const id = sample?.series_id;
-    if (!id) return;
+    if (!id) {
+      console.warn('[WsFeedClient] Sample has no series_id, skipping registry update');
+      return;
+    }
     const t = Number(sample.t_ms ?? 0);
     const seq = Number(sample.seq ?? 0);
     const sseq = Number(sample.series_seq ?? 0);
@@ -644,10 +652,12 @@ export class WsFeedClient {
 
     if (this._regDirty) {
       this._regDirty = false;
+      const snapshot = this.getRegistrySnapshot();
+      console.log(`[WsFeedClient] 📋 Emitting registry with ${snapshot.length} series`);
       try {
-        this.onRegistry(this.getRegistrySnapshot());
-      } catch {
-        // ignore
+        this.onRegistry(snapshot);
+      } catch (err) {
+        console.error('[WsFeedClient] Error calling onRegistry:', err);
       }
     }
   }
