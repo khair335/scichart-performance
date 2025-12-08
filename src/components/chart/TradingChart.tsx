@@ -569,6 +569,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
             })
             .map(r => r.id)
         );
+        console.log(`[TradingChart] 🔄 Initializing visibleSeries with ${visible.size} series from registry of ${registry.length}`);
         return visible;
       }
       

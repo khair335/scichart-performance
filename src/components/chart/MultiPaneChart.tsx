@@ -586,7 +586,7 @@ export function useMultiPaneChart({
             fill: fill,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto,
+            resamplingMode: EResamplingMode.MinMax,
           });
         } else {
           // Default to FastLineRenderableSeries
@@ -595,7 +595,7 @@ export function useMultiPaneChart({
             stroke: stroke,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto,
+            resamplingMode: EResamplingMode.MinMax,
           });
         }
       }
@@ -1323,17 +1323,17 @@ export function useMultiPaneChart({
     const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
     
     if (!hasLegacySurfaces && !hasDynamicPanes) {
- 
+      console.log('[MultiPaneChart] Preallocation skipped: no surfaces ready');
       return;
     }
     if (!registry || registry.length === 0) {
-     
+      console.log('[MultiPaneChart] Preallocation skipped: registry empty');
       return;
     }
-    
+
     // CRITICAL: For dynamic panes, ensure panes are created before preallocating
     if (plotLayout && refs.paneSurfaces.size === 0) {
-      console.warn('[MultiPaneChart] Preallocation skipped: dynamic panes not created yet', {
+      console.warn('[MultiPaneChart] ⚠️ Preallocation skipped: dynamic panes not created yet', {
         registryLength: registry.length,
         plotLayoutPanes: plotLayout.layout.panes.length,
         paneSurfacesCount: refs.paneSurfaces.size
@@ -1341,7 +1341,7 @@ export function useMultiPaneChart({
       return;
     }
     if (!isReady) {
-    
+      console.log('[MultiPaneChart] Preallocation skipped: chart not ready');
       return; // Wait for charts to be initialized
     }
     
@@ -1569,7 +1569,7 @@ export function useMultiPaneChart({
               fill: fill,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.MinMax,
             });
           } else {
             // Default to FastLineRenderableSeries
@@ -1578,7 +1578,7 @@ export function useMultiPaneChart({
               stroke: stroke,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.MinMax,
             });
           }
         }
