@@ -592,8 +592,16 @@ export class DynamicPaneManager {
     }
 
     // CRITICAL: Wait for any in-progress animation frames to complete
-    // This ensures no render callbacks are scheduled after we delete surfaces
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // SciChart uses requestAnimationFrame, so we need to wait for multiple frames
+    // to ensure all queued render callbacks have been processed
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    // Additional safety delay for WASM event loop to fully process pending frames
+    await new Promise(resolve => setTimeout(resolve, 150));
 
     // Delete vertical group first to break all cross-surface connections
     if (this.verticalGroup) {
