@@ -1775,18 +1775,49 @@ export function useMultiPaneChart({
 
   // Callback to handle grid container being ready (called by DynamicPlotGrid)
   const handleGridReady = useCallback(async (parentContainerId: string, rows: number, cols: number) => {
+    const refs = chartRefs.current;
+
     if (parentSurfaceReadyRef.current || !plotLayout) {
+      console.log('[MultiPaneChart] Grid ready callback skipped:', {
+        alreadyReady: parentSurfaceReadyRef.current,
+        hasLayout: !!plotLayout
+      });
       return; // Already initialized or no layout
     }
 
-    const paneManager = paneManagerRef.current;
-    if (!paneManager) {
-      console.warn('[MultiPaneChart] PaneManager not initialized yet');
-      return;
-    }
-
     try {
-      console.log('[MultiPaneChart] Initializing parent surface:', parentContainerId);
+      // Initialize WASM once if not already done
+      if (!refs.sharedWasm) {
+        console.log('[MultiPaneChart] Initializing WASM from handleGridReady');
+        SciChartSurface.useWasmFromCDN();
+
+        // Disable DPI scaling for better performance on Retina/High-DPI displays
+        DpiHelper.IsDpiScaleEnabled = false;
+
+        // Enable performance optimizations globally
+        SciChartDefaults.useNativeText = true;
+        SciChartDefaults.useSharedCache = true;
+
+        // Wait for WASM to be fully loaded and initialized
+        console.log('[MultiPaneChart] Waiting for WASM to load...');
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Also wait for a couple of animation frames to ensure everything is ready
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        console.log('[MultiPaneChart] WASM loaded successfully');
+        refs.sharedWasm = true; // Mark as initialized
+      }
+
+      // Initialize pane manager if not already created
+      if (!paneManagerRef.current) {
+        console.log('[MultiPaneChart] Creating pane manager for grid initialization');
+        paneManagerRef.current = new DynamicPaneManager(chartTheme, config.chart.timezone || 'UTC');
+      }
+      const paneManager = paneManagerRef.current;
+
+      console.log('[MultiPaneChart] Initializing parent surface:', parentContainerId, `grid: ${rows}x${cols}`);
       await paneManager.initializeParentSurface(parentContainerId, rows, cols);
       parentSurfaceReadyRef.current = true;
 
@@ -1796,7 +1827,7 @@ export function useMultiPaneChart({
     } catch (e) {
       console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
     }
-  }, [plotLayout]);
+  }, [plotLayout, chartTheme, config.chart.timezone]);
 
   // Dynamic pane creation and management based on layout
   // CRITICAL: Requirement 0.1 - UI must not plot any data unless a plot layout JSON is loaded

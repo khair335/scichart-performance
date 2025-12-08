@@ -28,6 +28,28 @@ export function DynamicPlotGrid({
   const gridReadyNotifiedRef = useRef<boolean>(false);
   const [gridStyle, setGridStyle] = useState<React.CSSProperties>({});
 
+  // Separate effect to notify when grid container is ready in DOM
+  useEffect(() => {
+    if (!layout || !onGridReady || gridReadyNotifiedRef.current) {
+      return;
+    }
+
+    const [rows, cols] = layout.layout.grid;
+
+    // Wait for next tick to ensure parentRef is set
+    const timeoutId = setTimeout(() => {
+      if (parentRef.current) {
+        console.log('[DynamicPlotGrid] Parent container ready, notifying parent');
+        gridReadyNotifiedRef.current = true;
+        onGridReady('dynamic-plot-parent', rows, cols);
+      } else {
+        console.warn('[DynamicPlotGrid] Parent ref not set yet');
+      }
+    }, 0);
+
+    return () => clearTimeout(timeoutId);
+  }, [layout, onGridReady]);
+
   useEffect(() => {
     if (!layout) {
       // No layout - clear grid
@@ -40,12 +62,6 @@ export function DynamicPlotGrid({
     }
 
     const [rows, cols] = layout.layout.grid;
-
-    // Notify parent that grid is ready (once per layout)
-    if (onGridReady && !gridReadyNotifiedRef.current && parentRef.current) {
-      gridReadyNotifiedRef.current = true;
-      onGridReady('dynamic-plot-parent', rows, cols);
-    }
 
     // Set CSS Grid layout
     setGridStyle({
