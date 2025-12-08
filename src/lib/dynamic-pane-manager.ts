@@ -1,6 +1,8 @@
 /**
  * Dynamic Pane Manager
- * Handles creation, management, and cleanup of dynamic chart panes
+ * Handles creation, management, and cleanup of dynamic chart panes using SubCharts API
+ * SubCharts API provides dramatically better performance by sharing a single WebGL context
+ * across all panes instead of creating separate contexts per pane.
  */
 
 import {
@@ -17,6 +19,8 @@ import {
   MouseWheelZoomModifier,
   RubberBandXyZoomModifier,
   EXyDirection,
+  Rect,
+  ECoordinateMode,
 } from 'scichart';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
@@ -66,10 +70,42 @@ export class DynamicPaneManager {
   private theme: ChartTheme;
   private zoomMode: ZoomMode = 'box'; // Default zoom mode
   private timezone: string = 'UTC'; // Timezone for DateTime axis formatting
+  private parentSurface: SciChartSurface | null = null; // Parent surface for SubCharts API
+  private gridRows: number = 1; // Current grid rows
+  private gridCols: number = 1; // Current grid cols
 
   constructor(theme: ChartTheme, timezone: string = 'UTC') {
     this.theme = theme;
     this.timezone = timezone;
+  }
+
+  /**
+   * Initialize parent surface for SubCharts API
+   * This must be called once before creating any panes
+   * @param containerId - ID of the HTML container element
+   * @param gridRows - Number of rows in the grid
+   * @param gridCols - Number of columns in the grid
+   */
+  async initializeParentSurface(
+    containerId: string,
+    gridRows: number,
+    gridCols: number
+  ): Promise<void> {
+    if (this.parentSurface) {
+      return;
+    }
+
+    this.gridRows = gridRows;
+    this.gridCols = gridCols;
+
+    const result = await SciChartSurface.create(containerId, {
+      theme: this.theme,
+    });
+
+    this.parentSurface = result.sciChartSurface;
+    this.sharedWasm = result.wasmContext;
+
+    this.verticalGroup = new SciChartVerticalGroup();
   }
 
   /**
@@ -206,7 +242,8 @@ export class DynamicPaneManager {
   }
 
   /**
-   * Create a new pane surface
+   * Create a new pane surface using SubCharts API
+   * This creates a sub-chart within the parent surface, sharing the WebGL context
    */
   async createPane(
     paneId: string,
@@ -220,17 +257,29 @@ export class DynamicPaneManager {
       return this.paneSurfaces.get(paneId)!;
     }
 
-    // Create surface directly - SciChart will initialize WASM
-    const result = await SciChartSurface.create(containerId, {
-      theme: this.theme,
+    // Ensure parent surface is initialized
+    if (!this.parentSurface || !this.sharedWasm) {
+      throw new Error('Parent surface not initialized. Call initializeParentSurface() first.');
+    }
+
+    // Calculate position in grid using relative coordinates (0-1 range)
+    const colWidth = 1 / this.gridCols;
+    const rowHeight = 1 / this.gridRows;
+
+    const x = paneConfig.col * colWidth;
+    const y = paneConfig.row * rowHeight;
+    const width = paneConfig.width * colWidth;
+    const height = paneConfig.height * rowHeight;
+
+    // Create sub-chart using SubCharts API
+    const subSurface = this.parentSurface.addSubChart({
+      position: new Rect(x, y, width, height),
+      coordinateMode: ECoordinateMode.Relative,
+      isTransparent: false,
     });
 
-    const { sciChartSurface: surface, wasmContext } = result;
-    
-    // Store WASM context as shared if this is the first pane
-    if (!this.sharedWasm) {
-      this.sharedWasm = wasmContext;
-    }
+    const surface = subSurface as unknown as SciChartSurface;
+    const wasmContext = this.sharedWasm;
 
     // Create timezone-aware label formatter
     const timezoneFormatter = (value: number): string => {
@@ -452,8 +501,21 @@ export class DynamicPaneManager {
    */
   cleanup(): void {
     this.destroyAllPanes();
+
+    // Delete parent surface (this will also delete all sub-charts)
+    if (this.parentSurface) {
+      try {
+        this.parentSurface.delete();
+      } catch (e) {
+        console.warn('[DynamicPaneManager] Error deleting parent surface:', e);
+      }
+      this.parentSurface = null;
+    }
+
     this.verticalGroup = null;
     this.sharedWasm = null;
+    this.gridRows = 1;
+    this.gridCols = 1;
   }
 }
 

@@ -10,18 +10,22 @@ interface DynamicPlotGridProps {
   layout: ParsedLayout | null;
   onPaneReady?: (paneId: string, containerId: string) => void;
   onPaneDestroyed?: (paneId: string) => void;
+  onGridReady?: (parentContainerId: string, rows: number, cols: number) => void;
   className?: string;
 }
 
-export function DynamicPlotGrid({ 
-  layout, 
-  onPaneReady, 
+export function DynamicPlotGrid({
+  layout,
+  onPaneReady,
   onPaneDestroyed,
-  className = '' 
+  onGridReady,
+  className = ''
 }: DynamicPlotGridProps) {
+  const parentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const containerIdsRef = useRef<Map<string, string>>(new Map());
-  const notifiedPanesRef = useRef<Set<string>>(new Set()); // Track which panes have been notified
+  const notifiedPanesRef = useRef<Set<string>>(new Set());
+  const gridReadyNotifiedRef = useRef<boolean>(false);
   const [gridStyle, setGridStyle] = useState<React.CSSProperties>({});
 
   useEffect(() => {
@@ -31,11 +35,18 @@ export function DynamicPlotGrid({
         gridRef.current.innerHTML = '';
       }
       containerIdsRef.current.clear();
+      gridReadyNotifiedRef.current = false;
       return;
     }
 
     const [rows, cols] = layout.layout.grid;
-    
+
+    // Notify parent that grid is ready (once per layout)
+    if (onGridReady && !gridReadyNotifiedRef.current && parentRef.current) {
+      gridReadyNotifiedRef.current = true;
+      onGridReady('dynamic-plot-parent', rows, cols);
+    }
+
     // Set CSS Grid layout
     setGridStyle({
       display: 'grid',
@@ -171,11 +182,17 @@ export function DynamicPlotGrid({
   }
 
   return (
-    <div 
-      ref={gridRef}
-      className={`w-full h-full ${className}`}
-      style={gridStyle}
-    />
+    <div
+      ref={parentRef}
+      id="dynamic-plot-parent"
+      className={`w-full h-full relative ${className}`}
+    >
+      <div
+        ref={gridRef}
+        className="absolute inset-0 w-full h-full"
+        style={gridStyle}
+      />
+    </div>
   );
 }
 

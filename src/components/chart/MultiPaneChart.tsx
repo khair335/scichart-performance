@@ -1855,6 +1855,15 @@ export function useMultiPaneChart({
           await new Promise(resolve => requestAnimationFrame(resolve));
         }
 
+        // Initialize parent surface for SubCharts API (once per layout)
+        const [gridRows, gridCols] = plotLayout.layout.grid;
+        try {
+          await paneManager.initializeParentSurface('dynamic-plot-parent', gridRows, gridCols);
+        } catch (e) {
+          console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
+          return;
+        }
+
         // Check if all panes already exist (prevent re-creation)
         const allPanesExist = plotLayout.layout.panes.every(paneConfig => {
           const existingPane = refs.paneSurfaces.get(paneConfig.id);
@@ -1862,7 +1871,7 @@ export function useMultiPaneChart({
         });
 
         if (allPanesExist && dynamicPanesInitializedRef.current) {
-         
+
           currentLayoutIdRef.current = layoutId;
           return;
         }
@@ -2564,41 +2573,8 @@ export function useMultiPaneChart({
 
     lastDataTimeRef.current = latestTime;
     onDataClockUpdate?.(latestTime);
-    
-    // Requirement 15.2: Minimap window logic - live mode: right edge should track dataClockMs
-    // Update minimap window position in live mode
-    if (latestTime > 0 && refs.overview && isLiveRef.current && feedStageRef.current === 'live') {
-      try {
-        const overviewSurface = (refs.overview as any).sciChartSurface;
-        if (overviewSurface) {
-          // Get the overview's X-axis
-          const overviewXAxis = overviewSurface.xAxes.get(0);
-          if (overviewXAxis) {
-            // Get the main chart's X-axis visible range to sync minimap window
-            const mainXAxis = refs.tickSurface?.xAxes.get(0) || 
-              (plotLayout ? Array.from(refs.paneSurfaces.values())[0]?.xAxis : null);
-            
-            if (mainXAxis && mainXAxis.visibleRange) {
-              // Sync minimap window to main chart's visible range
-              // In live mode, the main chart auto-scrolls, so the minimap window will track it
-              const mainRange = mainXAxis.visibleRange;
-              
-              // Update overview's visible range to match main chart
-              // Only update if significantly different to avoid constant updates
-              if (overviewXAxis.visibleRange) {
-                const currentRange = overviewXAxis.visibleRange;
-                const diff = Math.abs(currentRange.max - mainRange.max) + Math.abs(currentRange.min - mainRange.min);
-                if (diff > 1000) { // 1 second threshold
-                  overviewXAxis.visibleRange = new NumberRange(mainRange.min, mainRange.max);
-                }
-              }
-            }
-          }
-        }
-      } catch (minimapError) {
-        // Silently handle minimap update errors - not critical
-      }
-    }
+
+    // OPTIMIZATION: Minimap syncing removed from hot path - minimap will sync via SciChartOverview's built-in mechanism
 
     // CRITICAL: During history/delta loading, DO NOT update X-axis range
     // This prevents unwanted scrolling during history loading
@@ -2684,37 +2660,40 @@ export function useMultiPaneChart({
         }
       }
 
+      // OPTIMIZATION: Pre-compute strategy marker mappings ONCE before the loop
+      const strategyMarkerDuplicates = new Map<string, string[]>();
+      if (plotLayout) {
+        const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
+          .filter(id => {
+            const info = parseSeriesType(id);
+            return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+          });
+        if (allMarkerIds.length > 0) {
+          const markerGroups = groupStrategyMarkers(allMarkerIds);
+          for (const [groupKey, group] of markerGroups) {
+            const consolidatedId = getConsolidatedSeriesId(group);
+            const duplicateKeys: string[] = [];
+            for (const [key] of refs.dataSeriesStore) {
+              if (key.startsWith(`${consolidatedId}:`) && key !== consolidatedId) {
+                duplicateKeys.push(key);
+              }
+            }
+            for (const seriesId of group.seriesIds) {
+              strategyMarkerDuplicates.set(seriesId, duplicateKeys);
+            }
+          }
+        }
+      }
+
+      // OPTIMIZATION: Track panes that need overlay updates (batch DOM operations)
+      const panesNeedingUpdate = new Set<string>();
+      let minimapNeedsUpdate = false;
+
       // Append data to all series using unified store
-      // All series (tick, OHLC, indicators, strategy) go through the same code path
-      let totalAppended = 0;
-      let skippedCount = 0;
-      const seriesDebugInfo: Array<{seriesId: string; paneId?: string; hasData: boolean; isVisible?: boolean; count: number; hasRenderableSeries: boolean}> = [];
-      
       for (const [seriesId, buf] of seriesBuffers) {
         const seriesEntry = refs.dataSeriesStore.get(seriesId);
         if (!seriesEntry) {
-          // Series not in store - try to create it on-demand ONLY if surfaces are ready
-          // CRITICAL: Don't try to create series if:
-          // 1. Layout is loaded but panes aren't ready yet (prevents WASM abort)
-          // 2. No layout and legacy surfaces aren't ready (prevents WASM abort)
-          const hasLayoutButNoPanes = plotLayout && refs.paneSurfaces.size === 0;
-          const noLayoutAndNoLegacy = !plotLayout && (!refs.tickSurface || !refs.ohlcSurface || !refs.tickWasm || !refs.ohlcWasm);
-          const canCreateOnDemand = !hasLayoutButNoPanes && !noLayoutAndNoLegacy;
-          
-          // DISABLED: On-demand creation causes WASM abort errors
-          // Instead, wait for preallocation to create series when surfaces are ready
-          // Data will be buffered and processed once series are created via preallocation
-          skippedCount++;
-          
-          // Only log once per series to avoid spam
-          const lastSkipLog = (window as any).__lastSkipLog || new Map();
-          const now = performance.now();
-          const lastLogTime = lastSkipLog.get(seriesId) || 0;
-          if (now - lastLogTime > 5000) { // Log at most once every 5 seconds per series
-            console.warn(`[MultiPaneChart] Series ${seriesId} not found - skipping ${buf.x.length} samples (will be created via preallocation when surfaces are ready)`);
-            lastSkipLog.set(seriesId, now);
-            (window as any).__lastSkipLog = lastSkipLog;
-          }
+          // Skip missing series silently - will be created via preallocation
           continue;
         }
 
@@ -2722,105 +2701,65 @@ export function useMultiPaneChart({
           if (seriesEntry.seriesType === 'ohlc-bar') {
             // OHLC bar data - use OhlcDataSeries.appendRange
             if (buf.x.length > 0 && buf.o && buf.h && buf.l && buf.c) {
-              (seriesEntry.dataSeries as OhlcDataSeries).appendRange(
-                Float64Array.from(buf.x),
-                Float64Array.from(buf.o),
-                Float64Array.from(buf.h),
-                Float64Array.from(buf.l),
-                Float64Array.from(buf.c)
-              );
-              totalAppended += buf.x.length;
-              
-              // Mark pane as having data and update waiting overlay
+              // OPTIMIZATION: Create typed arrays directly (already arrays from buffer)
+              const xArr = new Float64Array(buf.x);
+              const oArr = new Float64Array(buf.o);
+              const hArr = new Float64Array(buf.h);
+              const lArr = new Float64Array(buf.l);
+              const cArr = new Float64Array(buf.c);
+
+              (seriesEntry.dataSeries as OhlcDataSeries).appendRange(xArr, oArr, hArr, lArr, cArr);
+
+              // OPTIMIZATION: Batch pane updates
               if (seriesEntry.paneId) {
-                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                panesNeedingUpdate.add(seriesEntry.paneId);
                 const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
                 if (paneSurface) {
-                  // Update optional properties
                   paneSurface.hasData = true;
                   paneSurface.waitingForData = false;
                 }
               }
-              
-              // Update minimap "Waiting for Data" overlay if this is the minimap source series
+
+              // OPTIMIZATION: Defer minimap update
               if (plotLayout?.minimapSourceSeries === seriesId) {
-                const waitingOverlay = document.getElementById('overview-chart-waiting');
-                if (waitingOverlay) {
-                  waitingOverlay.style.display = 'none';
-                }
+                minimapNeedsUpdate = true;
               }
-              
-              // Debug info
-              seriesDebugInfo.push({
-                seriesId,
-                paneId: seriesEntry.paneId,
-                hasData: true,
-                isVisible: seriesEntry.renderableSeries?.isVisible ?? false,
-                count: buf.x.length,
-                hasRenderableSeries: !!seriesEntry.renderableSeries
-              });
             }
           } else {
             // All other series (tick, indicators, strategy) use XyDataSeries.appendRange
             if (buf.x.length > 0 && buf.y) {
-              (seriesEntry.dataSeries as XyDataSeries).appendRange(
-                Float64Array.from(buf.x),
-                Float64Array.from(buf.y)
-              );
-              totalAppended += buf.x.length;
-              
-              // Mark pane as having data and update waiting overlay
+              // OPTIMIZATION: Create typed arrays directly
+              const xArr = new Float64Array(buf.x);
+              const yArr = new Float64Array(buf.y);
+
+              (seriesEntry.dataSeries as XyDataSeries).appendRange(xArr, yArr);
+
+              // OPTIMIZATION: Batch pane updates
               if (seriesEntry.paneId) {
-                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                panesNeedingUpdate.add(seriesEntry.paneId);
                 const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
                 if (paneSurface) {
                   paneSurface.hasData = true;
                   paneSurface.waitingForData = false;
                 }
               }
-              
-              // Update minimap "Waiting for Data" overlay if this is the minimap source series
+
+              // OPTIMIZATION: Defer minimap update
               if (plotLayout?.minimapSourceSeries === seriesId) {
-                const waitingOverlay = document.getElementById('overview-chart-waiting');
-                if (waitingOverlay) {
-                  waitingOverlay.style.display = 'none';
-                }
+                minimapNeedsUpdate = true;
               }
-              
-              // Requirement 0.4: Sync data to duplicate strategy marker series on other panes
-              // Requirement 11.2: Use consolidated series ID for syncing
-              // Find all duplicate series for this strategy marker (format: consolidatedSeriesId:paneId)
-              const seriesInfo = parseSeriesType(seriesId);
-              if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
-                // Find the consolidated series ID for this marker
-                let consolidatedSeriesId = seriesId;
-                const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
-                  .filter(id => {
-                    const info = parseSeriesType(id);
-                    return info.type === 'strategy-marker' || info.type === 'strategy-signal';
-                  });
-                const markerGroups = groupStrategyMarkers([seriesId, ...allMarkerIds]);
-                for (const [groupKey, group] of markerGroups) {
-                  if (group.seriesIds.includes(seriesId)) {
-                    consolidatedSeriesId = getConsolidatedSeriesId(group);
-                    break;
-                  }
-                }
-                
-                // Find all duplicate entries for this consolidated series
-                for (const [duplicateKey, duplicateEntry] of refs.dataSeriesStore) {
-                  if (duplicateKey.startsWith(`${consolidatedSeriesId}:`) && duplicateKey !== consolidatedSeriesId) {
-                    // This is a duplicate - sync the data
+
+              // OPTIMIZATION: Use pre-computed strategy marker duplicates
+              const duplicateKeys = strategyMarkerDuplicates.get(seriesId);
+              if (duplicateKeys && duplicateKeys.length > 0) {
+                for (const duplicateKey of duplicateKeys) {
+                  const duplicateEntry = refs.dataSeriesStore.get(duplicateKey);
+                  if (duplicateEntry) {
                     try {
-                      (duplicateEntry.dataSeries as XyDataSeries).appendRange(
-                        Float64Array.from(buf.x),
-                        Float64Array.from(buf.y)
-                      );
-                      totalAppended += buf.x.length; // Count duplicate appends too
-                      
-                      // Mark duplicate pane as having data and update waiting overlay
+                      (duplicateEntry.dataSeries as XyDataSeries).appendRange(xArr, yArr);
+
                       if (duplicateEntry.paneId) {
-                        updatePaneWaitingOverlay(refs, layoutManager, duplicateEntry.paneId, plotLayout);
+                        panesNeedingUpdate.add(duplicateEntry.paneId);
                         const duplicatePaneSurface = refs.paneSurfaces.get(duplicateEntry.paneId);
                         if (duplicatePaneSurface) {
                           duplicatePaneSurface.hasData = true;
@@ -2828,15 +2767,15 @@ export function useMultiPaneChart({
                         }
                       }
                     } catch (syncError) {
-                      console.warn(`[MultiPaneChart] Failed to sync data to duplicate consolidated strategy marker ${duplicateKey}:`, syncError);
+                      // Silently handle sync errors
                     }
                   }
                 }
               }
-              
-              // Mark pane as having data and update waiting overlay
+
+              // OPTIMIZATION: Removed duplicate pane update
               if (seriesEntry.paneId) {
-                updatePaneWaitingOverlay(refs, layoutManager, seriesEntry.paneId, plotLayout);
+                panesNeedingUpdate.add(seriesEntry.paneId);
                 const paneSurface = refs.paneSurfaces.get(seriesEntry.paneId);
                 if (paneSurface) {
                   // Update optional properties
@@ -2845,43 +2784,26 @@ export function useMultiPaneChart({
                 }
               }
               
-              // Debug info
-              seriesDebugInfo.push({
-                seriesId,
-                paneId: seriesEntry.paneId,
-                hasData: true,
-                isVisible: seriesEntry.renderableSeries?.isVisible ?? false,
-                count: buf.x.length,
-                hasRenderableSeries: !!seriesEntry.renderableSeries
-              });
             }
           }
         } catch (error) {
-          console.error(`[MultiPaneChart] Error appending data to ${seriesId}:`, error);
-          // Continue with other series even if one fails
+          // Silently handle append errors to avoid log spam
         }
       }
-      
-      // Log batch processing summary (throttled)
-      if (totalAppended > 0 || skippedCount > 0) {
-        const lastLogTime = (window as any).__lastBatchLogTime || 0;
-        const now = performance.now();
-        if (now - lastLogTime > 2000) { // Log at most once every 2 seconds
-         
-          
-          // Debug: Show which series have data and their visibility status
-          if (seriesDebugInfo.length > 0) {
-            const hiddenSeries = seriesDebugInfo.filter(s => s.isVisible === false);
-            const visibleSeries = seriesDebugInfo.filter(s => s.isVisible === true);
-            const noPaneSeries = seriesDebugInfo.filter(s => !s.paneId);
-            const noRenderableSeries = seriesDebugInfo.filter(s => !s.hasRenderableSeries);
-            
-           
-          }
-          
-          (window as any).__lastBatchLogTime = now;
+
+      // OPTIMIZATION: Batch DOM updates after the loop (not inside it)
+      for (const paneId of panesNeedingUpdate) {
+        updatePaneWaitingOverlay(refs, layoutManager, paneId, plotLayout);
+      }
+
+      if (minimapNeedsUpdate) {
+        const waitingOverlay = document.getElementById('overview-chart-waiting');
+        if (waitingOverlay) {
+          waitingOverlay.style.display = 'none';
         }
       }
+
+      // OPTIMIZATION: Removed verbose logging to reduce CPU
     } catch (error) {
       console.error('[MultiPaneChart] WASM memory error in data append:', error);
       // Critical error - likely WASM out of memory
