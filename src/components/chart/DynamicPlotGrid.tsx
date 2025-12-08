@@ -26,29 +26,8 @@ export function DynamicPlotGrid({
   const containerIdsRef = useRef<Map<string, string>>(new Map());
   const notifiedPanesRef = useRef<Set<string>>(new Set());
   const gridReadyNotifiedRef = useRef<boolean>(false);
+  const lastLayoutIdRef = useRef<string | null>(null);
   const [gridStyle, setGridStyle] = useState<React.CSSProperties>({});
-
-  // Separate effect to notify when grid container is ready in DOM
-  useEffect(() => {
-    if (!layout || !onGridReady || gridReadyNotifiedRef.current) {
-      return;
-    }
-
-    const [rows, cols] = layout.layout.grid;
-
-    // Wait for next tick to ensure parentRef is set
-    const timeoutId = setTimeout(() => {
-      if (parentRef.current) {
-        console.log('[DynamicPlotGrid] Parent container ready, notifying parent');
-        gridReadyNotifiedRef.current = true;
-        onGridReady('dynamic-plot-parent', rows, cols);
-      } else {
-        console.warn('[DynamicPlotGrid] Parent ref not set yet');
-      }
-    }, 0);
-
-    return () => clearTimeout(timeoutId);
-  }, [layout, onGridReady]);
 
   useEffect(() => {
     if (!layout) {
@@ -58,10 +37,24 @@ export function DynamicPlotGrid({
       }
       containerIdsRef.current.clear();
       gridReadyNotifiedRef.current = false;
+      lastLayoutIdRef.current = null;
       return;
     }
 
     const [rows, cols] = layout.layout.grid;
+
+    // Create a layout ID to detect changes
+    const layoutId = JSON.stringify({
+      panes: layout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
+      grid: layout.layout.grid
+    });
+
+    // Reset notification flag if layout changed
+    if (lastLayoutIdRef.current !== layoutId) {
+      console.log('[DynamicPlotGrid] Layout changed, resetting notification flag');
+      gridReadyNotifiedRef.current = false;
+      lastLayoutIdRef.current = layoutId;
+    }
 
     // Set CSS Grid layout
     setGridStyle({
@@ -171,10 +164,23 @@ export function DynamicPlotGrid({
           }
         }
       }
-      
+
       containerIdsRef.current = newContainerIds;
+
+      // Now notify parent that grid is ready (after all panes are created)
+      // Use a longer delay to ensure pane containers are fully in DOM
+      if (onGridReady && !gridReadyNotifiedRef.current) {
+        setTimeout(() => {
+          const parentElement = document.getElementById('dynamic-plot-parent');
+          if (parentElement && !gridReadyNotifiedRef.current) {
+            console.log('[DynamicPlotGrid] All panes created, notifying parent that grid is ready');
+            gridReadyNotifiedRef.current = true;
+            onGridReady('dynamic-plot-parent', rows, cols);
+          }
+        }, 50); // Wait for pane containers to be ready
+      }
     }
-  }, [layout]); // Removed onPaneReady and onPaneDestroyed from deps to prevent re-runs
+  }, [layout, onGridReady, onPaneReady, onPaneDestroyed]);
 
   // Cleanup on unmount
   useEffect(() => {

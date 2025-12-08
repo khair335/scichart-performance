@@ -1786,28 +1786,24 @@ export function useMultiPaneChart({
     }
 
     try {
-      // Initialize WASM once if not already done
+      // Wait for WASM to be ready (initialized in early useEffect)
+      if (!wasmInitializedRef.current) {
+        console.log('[MultiPaneChart] Waiting for WASM initialization in handleGridReady...');
+        let attempts = 0;
+        while (!wasmInitializedRef.current && attempts < 50) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+        if (!wasmInitializedRef.current) {
+          console.error('[MultiPaneChart] WASM initialization timeout in handleGridReady');
+          return;
+        }
+      }
+      console.log('[MultiPaneChart] WASM ready, proceeding with parent surface initialization');
+
+      // Mark WASM as ready in refs too
       if (!refs.sharedWasm) {
-        console.log('[MultiPaneChart] Initializing WASM from handleGridReady');
-        SciChartSurface.useWasmFromCDN();
-
-        // Disable DPI scaling for better performance on Retina/High-DPI displays
-        DpiHelper.IsDpiScaleEnabled = false;
-
-        // Enable performance optimizations globally
-        SciChartDefaults.useNativeText = true;
-        SciChartDefaults.useSharedCache = true;
-
-        // Wait for WASM to be fully loaded and initialized
-        console.log('[MultiPaneChart] Waiting for WASM to load...');
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Also wait for a couple of animation frames to ensure everything is ready
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await new Promise(resolve => requestAnimationFrame(resolve));
-
-        console.log('[MultiPaneChart] WASM loaded successfully');
-        refs.sharedWasm = true; // Mark as initialized
+        refs.sharedWasm = true;
       }
 
       // Initialize pane manager if not already created
@@ -1871,10 +1867,38 @@ export function useMultiPaneChart({
 
     // Create a stable layout ID to detect actual layout changes
     const layoutId = JSON.stringify(plotLayout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })));
-    
+
+    // If layout changed, reset everything
+    if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
+      console.log('[MultiPaneChart] Layout changed, resetting state');
+      dynamicPanesInitializedRef.current = false;
+      parentSurfaceReadyRef.current = false;
+      pendingPaneCreationRef.current = false;
+      setParentSurfaceReady(false);
+      currentLayoutIdRef.current = null;
+
+      // Clean up existing panes
+      refs.paneSurfaces.forEach((paneSurface, paneId) => {
+        try {
+          const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
+          renderableSeries.forEach(rs => {
+            try {
+              rs.dataSeries = null;
+              paneSurface.surface.renderableSeries.remove(rs);
+            } catch (e) {
+              // Ignore
+            }
+          });
+          paneSurface.surface.delete();
+        } catch (e) {
+          console.warn(`[MultiPaneChart] Error destroying pane ${paneId}:`, e);
+        }
+      });
+      refs.paneSurfaces.clear();
+    }
+
     // If this is the same layout and already initialized, skip
     if (dynamicPanesInitializedRef.current && currentLayoutIdRef.current === layoutId) {
-     
       return;
     }
 
