@@ -1950,6 +1950,10 @@ export function useMultiPaneChart({
           return; // Exit and wait for onGridReady callback
         }
 
+        // Wait for DOM to be fully ready (containers need to be rendered)
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
         // Check if all panes already exist (prevent re-creation)
         const allPanesExist = plotLayout.layout.panes.every(paneConfig => {
           const existingPane = refs.paneSurfaces.get(paneConfig.id);
