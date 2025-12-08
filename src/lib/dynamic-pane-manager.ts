@@ -573,13 +573,20 @@ export class DynamicPaneManager {
    * Cleanup all resources
    */
   async cleanup(): Promise<void> {
+    // Store parent surface reference and clear immediately to prevent re-entry
+    const parentToDelete = this.parentSurface;
+    this.parentSurface = null;
+
+    if (!parentToDelete) {
+      // Already cleaned up
+      return;
+    }
+
     // Suspend all rendering first to stop render loops
-    if (this.parentSurface) {
-      try {
-        this.parentSurface.suspendUpdates();
-      } catch (e) {
-        // Ignore
-      }
+    try {
+      parentToDelete.suspendUpdates();
+    } catch (e) {
+      // Ignore - may already be deleted
     }
 
     // Suspend all pane rendering
@@ -591,17 +598,19 @@ export class DynamicPaneManager {
       }
     }
 
-    // CRITICAL: Wait for any in-progress animation frames to complete
-    // SciChart uses requestAnimationFrame, so we need to wait for multiple frames
-    // to ensure all queued render callbacks have been processed
+    // CRITICAL: Wait for WASM render loop to fully stop
+    // The render loop runs at ~60fps, so we need to wait multiple frames
+    // PLUS additional time for WASM event processing
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
-    // Additional safety delay for WASM event loop to fully process pending frames
-    await new Promise(resolve => setTimeout(resolve, 150));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    // CRITICAL: Additional delay for WASM to fully process pending events
+    await new Promise(resolve => setTimeout(resolve, 300));
 
     // Remove all surfaces from vertical group
     // Note: Don't call delete() - just remove surfaces and let it be garbage collected
@@ -651,13 +660,14 @@ export class DynamicPaneManager {
     this.paneSurfaces.clear();
 
     // Delete parent surface LAST - this cascades to all subsurfaces
-    if (this.parentSurface) {
-      try {
-        this.parentSurface.delete();
-      } catch (e) {
+    // Catch "already deleted" errors from SciChart
+    try {
+      parentToDelete.delete();
+    } catch (e: any) {
+      // Silently ignore "already deleted" errors, warn on others
+      if (!e?.message?.includes('already been deleted')) {
         console.warn('[DynamicPaneManager] Error deleting parent surface:', e);
       }
-      this.parentSurface = null;
     }
 
     this.sharedWasm = null;
