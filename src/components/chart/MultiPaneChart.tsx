@@ -1855,58 +1855,42 @@ export function useMultiPaneChart({
       pendingPaneCreationRef.current = false;
       setParentSurfaceReady(false);
 
-      // CRITICAL: Suspend all rendering FIRST to prevent measureText errors
+      // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        const manager = paneManagerRef.current;
+        // Store reference to old manager and set to null immediately
+        const oldManager = paneManagerRef.current;
+        paneManagerRef.current = null;
 
-        // Suspend parent surface
-        if (manager.getParentSurface()) {
-          try {
-            manager.getParentSurface()!.suspendUpdates();
-          } catch (e) {
-            // Ignore
-          }
-        }
+        // CRITICAL: Cleanup FIRST, then clear references
+        // This ensures cleanup completes before we clear our tracking maps
+        oldManager.cleanup().then(() => {
+          console.log('[MultiPaneChart] No layout cleanup complete');
 
-        // Suspend all pane surfaces
-        for (const [, pane] of refs.paneSurfaces) {
-          try {
-            pane.surface.suspendUpdates();
-          } catch (e) {
-            // Ignore
+          // NOW clear our local references after cleanup is done
+          refs.paneSurfaces.clear();
+
+          // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            if (entry.renderableSeries) {
+              refs.dataSeriesStore.delete(seriesId);
+            }
           }
-        }
+
+          // Clear preallocated series tracking
+          preallocatedSeriesRef.current.clear();
+        }).catch((e) => {
+          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+
+          // Even on error, clear references to prevent memory leaks
+          refs.paneSurfaces.clear();
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            if (entry.renderableSeries) {
+              refs.dataSeriesStore.delete(seriesId);
+            }
+          }
+          preallocatedSeriesRef.current.clear();
+        });
       }
-
-      // Wait briefly for any in-flight render frames to complete
-      setTimeout(() => {
-        // Clear our local references
-        refs.paneSurfaces.clear();
-
-        // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
-        for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-          if (entry.renderableSeries) {
-            refs.dataSeriesStore.delete(seriesId);
-          }
-        }
-
-        // Clear preallocated series tracking
-        preallocatedSeriesRef.current.clear();
-
-        // Clean up the pane manager (this will properly cleanup all panes and parent surface)
-        if (paneManagerRef.current) {
-          // Store reference to old manager and set to null immediately
-          const oldManager = paneManagerRef.current;
-          paneManagerRef.current = null;
-
-          // Cleanup the old manager async to wait for render loops to complete
-          oldManager.cleanup().then(() => {
-            console.log('[MultiPaneChart] No layout cleanup complete');
-          }).catch((e) => {
-            console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-          });
-        }
-      }, 50);
 
       return;
     }
@@ -1918,65 +1902,47 @@ export function useMultiPaneChart({
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
       console.log('[MultiPaneChart] Layout changed, resetting state');
 
-      // CRITICAL: Suspend all rendering FIRST to prevent measureText errors
-      // This must happen before any cleanup to stop in-flight render loops
+      // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        const manager = paneManagerRef.current;
+        // Store reference to old manager and set to null immediately
+        // This ensures the next render creates a NEW manager
+        const oldManager = paneManagerRef.current;
+        paneManagerRef.current = null;
 
-        // Suspend parent surface
-        if (manager.getParentSurface()) {
-          try {
-            manager.getParentSurface()!.suspendUpdates();
-          } catch (e) {
-            // Ignore
-          }
-        }
+        // CRITICAL: Cleanup FIRST, then clear references
+        // This ensures cleanup completes before we clear our tracking maps
+        oldManager.cleanup().then(() => {
+          console.log('[MultiPaneChart] Layout change cleanup complete');
 
-        // Suspend all pane surfaces
-        for (const [, pane] of refs.paneSurfaces) {
-          try {
-            pane.surface.suspendUpdates();
-          } catch (e) {
-            // Ignore
+          // NOW clear our local references after cleanup is done
+          refs.paneSurfaces.clear();
+
+          // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
+          // The renderableSeries will be destroyed when panes are destroyed
+          // but we need to clear the store so series can be recreated
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            if (entry.renderableSeries) {
+              // Keep the DataSeries (which holds data) but clear the entry
+              // so it can be recreated with a new renderableSeries
+              refs.dataSeriesStore.delete(seriesId);
+            }
           }
-        }
+
+          // Clear preallocated series tracking
+          preallocatedSeriesRef.current.clear();
+        }).catch((e) => {
+          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+
+          // Even on error, clear references to prevent memory leaks
+          refs.paneSurfaces.clear();
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            if (entry.renderableSeries) {
+              refs.dataSeriesStore.delete(seriesId);
+            }
+          }
+          preallocatedSeriesRef.current.clear();
+        });
       }
-
-      // Wait briefly for any in-flight render frames to complete
-      // This prevents "measureText" errors from queued renders
-      setTimeout(() => {
-        // Clear our local references
-        refs.paneSurfaces.clear();
-
-        // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
-        // The renderableSeries will be destroyed when panes are destroyed
-        // but we need to clear the store so series can be recreated
-        for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-          if (entry.renderableSeries) {
-            // Keep the DataSeries (which holds data) but clear the entry
-            // so it can be recreated with a new renderableSeries
-            refs.dataSeriesStore.delete(seriesId);
-          }
-        }
-
-        // Clear preallocated series tracking
-        preallocatedSeriesRef.current.clear();
-
-        // Clean up the pane manager (this will properly cleanup all panes and parent surface)
-        if (paneManagerRef.current) {
-          // Store reference to old manager and set to null immediately
-          // This ensures the next render creates a NEW manager
-          const oldManager = paneManagerRef.current;
-          paneManagerRef.current = null;
-
-          // Cleanup the old manager async to wait for render loops to complete
-          oldManager.cleanup().then(() => {
-            console.log('[MultiPaneChart] Layout change cleanup complete');
-          }).catch((e) => {
-            console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-          });
-        }
-      }, 50);
 
       // Reset all state flags
       dynamicPanesInitializedRef.current = false;
