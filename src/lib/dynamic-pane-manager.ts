@@ -110,7 +110,8 @@ export class DynamicPaneManager {
 
     // Wait for the rendering context to be fully ready
     // The parent surface needs time to initialize its WebGL context
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Use multiple animation frames to ensure context is ready
+    await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
   }
@@ -294,6 +295,13 @@ export class DynamicPaneManager {
 
     const surface = subSurface as SciChartSurface;
     const wasmContext = this.sharedWasm;
+
+    // Wait for the subsurface rendering context to be ready
+    // This is critical - the subsurface needs time to initialize its rendering context
+    // Use multiple animation frames to ensure rendering context is fully ready
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     // Create timezone-aware label formatter
     const timezoneFormatter = (value: number): string => {
