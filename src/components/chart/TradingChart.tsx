@@ -211,59 +211,101 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // Use appropriate registry based on mode - must be defined before useMultiPaneChart
   const registry = demoMode ? demoRegistry : wsRegistry;
 
-  // Load default layout from UI config on mount
-  // DISABLED: Default layout loading is deactivated for now
-  // User must explicitly load a layout JSON file
-  // TODO: Re-enable default layout loading in the future if needed
+  // Load UI config and default layout on mount
   useEffect(() => {
-    // Default layout loading is disabled - user must load layout manually
-    // Keeping code commented for future use:
-    /*
-    if (uiConfig?.defaultLayout && !plotLayout) {
-      try {
-        const validationErrors: { errors: string[]; warnings: string[] } = { errors: [], warnings: [] };
-        const parsed = parsePlotLayout(uiConfig.defaultLayout, (errs) => {
-          validationErrors.errors.push(...errs.errors);
-          validationErrors.warnings.push(...errs.warnings);
-        });
-        setPlotLayout(parsed);
-        setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
-        setLayoutError(null);
-        if (validationErrors.warnings.length > 0) {
-          console.warn('[TradingChart] Default layout validation warnings:', validationErrors.warnings);
-        }
-        console.log('[TradingChart] Loaded default layout from UI config:', parsed.layout.grid);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.warn('[TradingChart] Failed to parse default layout from UI config:', error);
-        setLayoutError(errorMsg);
-        // Fallback to default layout
-        try {
-          const defaultLayout = getDefaultLayout();
-          setPlotLayout(parsePlotLayout(defaultLayout));
-          setCurrentLayoutName('Default Layout');
-          setLayoutError(null);
-        } catch (fallbackError) {
-          const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          setLayoutError(fallbackErrorMsg);
-          setCurrentLayoutName(null);
-        }
+    let mounted = true;
+
+    async function loadDefaultLayout() {
+      if (plotLayout) {
+        // Layout already loaded, skip
+        return;
       }
-    } else if (!plotLayout) {
-      // No default layout in config, use built-in default
+
       try {
-        const defaultLayout = getDefaultLayout();
-        setPlotLayout(parsePlotLayout(defaultLayout));
-        setCurrentLayoutName('Default Layout');
-        setLayoutError(null);
+        // Fetch ui-config.json
+        const configResponse = await fetch('/ui-config.json');
+        if (!configResponse.ok) {
+          console.warn('[TradingChart] Failed to load ui-config.json');
+          return;
+        }
+
+        const config = await configResponse.json();
+
+        // Check for defaultLayoutPath
+        if (config.defaultLayoutPath && mounted) {
+          try {
+            console.log('[TradingChart] Loading default layout from:', config.defaultLayoutPath);
+            const layoutResponse = await fetch(config.defaultLayoutPath);
+
+            if (!layoutResponse.ok) {
+              throw new Error(`Failed to fetch layout: ${layoutResponse.statusText}`);
+            }
+
+            const layoutJson = await layoutResponse.json();
+            const validationErrors: { errors: string[]; warnings: string[] } = { errors: [], warnings: [] };
+
+            const parsed = parsePlotLayout(layoutJson, (errs) => {
+              validationErrors.errors.push(...errs.errors);
+              validationErrors.warnings.push(...errs.warnings);
+            });
+
+            if (mounted) {
+              setPlotLayout(parsed);
+              setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
+              setLayoutError(null);
+
+              if (validationErrors.warnings.length > 0) {
+                console.warn('[TradingChart] Default layout validation warnings:', validationErrors.warnings);
+              }
+              console.log('[TradingChart] Loaded default layout:', parsed.layout.grid);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.warn('[TradingChart] Failed to load default layout file:', error);
+
+            if (mounted) {
+              setLayoutError(errorMsg);
+            }
+          }
+        } else if (config.defaultLayout && mounted) {
+          // Fallback: load embedded defaultLayout from config
+          try {
+            const validationErrors: { errors: string[]; warnings: string[] } = { errors: [], warnings: [] };
+            const parsed = parsePlotLayout(config.defaultLayout, (errs) => {
+              validationErrors.errors.push(...errs.errors);
+              validationErrors.warnings.push(...errs.warnings);
+            });
+
+            if (mounted) {
+              setPlotLayout(parsed);
+              setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
+              setLayoutError(null);
+
+              if (validationErrors.warnings.length > 0) {
+                console.warn('[TradingChart] Default layout validation warnings:', validationErrors.warnings);
+              }
+              console.log('[TradingChart] Loaded embedded default layout:', parsed.layout.grid);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.warn('[TradingChart] Failed to parse embedded default layout:', error);
+
+            if (mounted) {
+              setLayoutError(errorMsg);
+            }
+          }
+        }
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        setLayoutError(errorMsg);
-        setCurrentLayoutName(null);
+        console.warn('[TradingChart] Failed to load ui-config.json:', error);
       }
     }
-    */
-  }, [uiConfig, plotLayout]);
+
+    loadDefaultLayout();
+
+    return () => {
+      mounted = false;
+    };
+  }, [plotLayout]);
 
   // Initialize multi-pane charts
   const {

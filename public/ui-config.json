@@ -49,6 +49,7 @@
       "allowToggle": true
     }
   },
+  "defaultLayoutPath": "/layouts/layout-2x1-simple.json",
   "defaultLayout": {
     "layout_mode": "multi_surface",
     "grid": [2, 1],
