@@ -107,6 +107,12 @@ export class DynamicPaneManager {
     this.sharedWasm = result.wasmContext;
 
     this.verticalGroup = new SciChartVerticalGroup();
+
+    // Wait for the rendering context to be fully ready
+    // The parent surface needs time to initialize its WebGL context
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
   }
 
   /**
