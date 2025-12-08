@@ -1860,18 +1860,14 @@ export function useMultiPaneChart({
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        try {
-          paneManagerRef.current.cleanup();
+        // Cleanup is async to wait for render loops to complete
+        paneManagerRef.current.cleanup().then(() => {
           paneManagerRef.current = null;
-        } catch (e) {
+          console.log('[MultiPaneChart] No layout cleanup complete');
+        }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-        }
-      }
-
-      // CRITICAL: Clear the parent container to remove all canvas elements
-      const parentContainer = document.getElementById('dynamic-plot-parent');
-      if (parentContainer) {
-        parentContainer.innerHTML = '';
+          paneManagerRef.current = null;
+        });
       }
 
       return;
@@ -1889,19 +1885,14 @@ export function useMultiPaneChart({
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
-        try {
-          paneManagerRef.current.cleanup();
+        // Cleanup is async to wait for render loops to complete
+        paneManagerRef.current.cleanup().then(() => {
           paneManagerRef.current = null;
-        } catch (e) {
+          console.log('[MultiPaneChart] Layout change cleanup complete');
+        }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
-        }
-      }
-
-      // CRITICAL: Clear the parent container to remove all canvas elements
-      // This prevents "Cannot read properties of undefined (reading 'measureText')" errors
-      const parentContainer = document.getElementById('dynamic-plot-parent');
-      if (parentContainer) {
-        parentContainer.innerHTML = '';
+          paneManagerRef.current = null;
+        });
       }
 
       // Reset all state flags

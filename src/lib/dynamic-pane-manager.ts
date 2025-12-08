@@ -572,7 +572,29 @@ export class DynamicPaneManager {
   /**
    * Cleanup all resources
    */
-  cleanup(): void {
+  async cleanup(): Promise<void> {
+    // Suspend all rendering first to stop render loops
+    if (this.parentSurface) {
+      try {
+        this.parentSurface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Suspend all pane rendering
+    for (const pane of this.paneSurfaces.values()) {
+      try {
+        pane.surface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // CRITICAL: Wait for any in-progress animation frames to complete
+    // This ensures no render callbacks are scheduled after we delete surfaces
+    await new Promise(resolve => setTimeout(resolve, 50));
+
     // Delete vertical group first to break all cross-surface connections
     if (this.verticalGroup) {
       try {
@@ -588,13 +610,6 @@ export class DynamicPaneManager {
 
     // Delete parent surface last (this will also delete all sub-charts)
     if (this.parentSurface) {
-      try {
-        // Suspend updates to prevent render attempts during deletion
-        this.parentSurface.suspendUpdates();
-      } catch (e) {
-        // Ignore
-      }
-
       try {
         this.parentSurface.delete();
       } catch (e) {
