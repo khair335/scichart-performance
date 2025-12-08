@@ -123,6 +123,8 @@ interface UIConfig {
     batchSize: number;
     downsampleRatio: number;
     maxAutoTicks: number;
+    fifoEnabled?: boolean;
+    fifoSweepSize?: number;
   };
   chart: {
     separateXAxes: boolean;
@@ -223,12 +225,14 @@ export function useMultiPaneChart({
     },
     performance: {
       targetFPS: 60,
-      batchSize: 500,
-      downsampleRatio: 2,
+      batchSize: 5000,
+      downsampleRatio: 1,
       maxAutoTicks: 8,
+      fifoEnabled: true,
+      fifoSweepSize: 100000,
     },
     chart: {
-      separateXAxes: true,
+      separateXAxes: false,
       autoScroll: true,
       autoScrollThreshold: 200,
       timezone: 'UTC',
@@ -521,6 +525,7 @@ export function useMultiPaneChart({
           dataSeries = new OhlcDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: capacity,
+          isFifo: config.performance.fifoEnabled ?? true,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
@@ -540,6 +545,7 @@ export function useMultiPaneChart({
         dataSeries = new XyDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: capacity,
+          isFifo: config.performance.fifoEnabled ?? true,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
@@ -738,20 +744,13 @@ export function useMultiPaneChart({
   const TARGET_FPS = 60;
   const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
   
-  // Balanced downsampling: 2:1 ratio gives smooth curves while maintaining good FPS
-  // 2:1 means render every 2nd point = 50% of points = still very smooth for sine waves
-  // For 40 ticks/sec: 40 ÷ 2 = 20 rendered/sec × 60 sec = 1200 points/cycle = perfectly smooth!
-  const BASE_DOWNSAMPLE_RATIO = 2;
+  // Downsampling ratio from config (default 1 = no downsampling for maximum data fidelity)
+  // Can be increased if CPU usage is too high, but user requires all data to be plotted
+  const BASE_DOWNSAMPLE_RATIO = config.performance.downsampleRatio || 1;
   const lastDownsampleIndexRef = useRef<Map<string, number>>(new Map());
   
-  // Reusable buffers for better performance - reuse instead of allocating new arrays
-  const tickXBufferRef = useRef<Float64Array>(new Float64Array(10000));
-  const tickYBufferRef = useRef<Float64Array>(new Float64Array(10000));
-  const ohlcXBufferRef = useRef<Float64Array>(new Float64Array(1000));
-  const ohlcOBufferRef = useRef<Float64Array>(new Float64Array(1000));
-  const ohlcHBufferRef = useRef<Float64Array>(new Float64Array(1000));
-  const ohlcLBufferRef = useRef<Float64Array>(new Float64Array(1000));
-  const ohlcCBufferRef = useRef<Float64Array>(new Float64Array(1000));
+  // Reusable buffers removed - not needed with direct Float64Array creation from batch
+  // Direct typed array creation from batch data is more efficient
 
   // Theme configuration - use 'Dark' as base and override with custom colors
   const chartTheme = {
@@ -1032,7 +1031,8 @@ export function useMultiPaneChart({
           surface.chartModifiers.add(
             new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection }),
             new RubberBandXyZoomModifier({ isAnimated: false }), // Box zoom without animation for performance
-            // Removed: ZoomPanModifier, ZoomExtentsModifier, XAxisDragModifier, YAxisDragModifier for FPS
+            new ZoomPanModifier(), // Enable pan with mouse drag
+            new ZoomExtentsModifier() // Enable double-click to zoom extents
           );
         };
 

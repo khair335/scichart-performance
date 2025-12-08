@@ -24,12 +24,14 @@
   },
   "performance": {
     "targetFPS": 60,
-    "batchSize": 500,
-    "downsampleRatio": 2,
-    "maxAutoTicks": 8
+    "batchSize": 5000,
+    "downsampleRatio": 1,
+    "maxAutoTicks": 8,
+    "fifoEnabled": true,
+    "fifoSweepSize": 100000
   },
   "chart": {
-    "separateXAxes": true,
+    "separateXAxes": false,
     "autoScroll": true,
     "autoScrollThreshold": 200,
     "timezone": "UTC"

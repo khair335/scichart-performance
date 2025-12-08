@@ -248,7 +248,9 @@ export class DynamicPaneManager {
         }
         surface.chartModifiers.add(
           wheelModifier,
-          new RubberBandXyZoomModifier({ isAnimated: false })
+          new RubberBandXyZoomModifier({ isAnimated: false }),
+          new ZoomPanModifier(), // Enable pan with mouse drag
+          new ZoomExtentsModifier() // Enable double-click to zoom extents
         );
         break;
     }

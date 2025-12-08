@@ -59,9 +59,15 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
       clientRef.current.close();
     }
 
+    // Use localStorage for data persistence across page refreshes
+    // This ensures the UI retrieves all historical + delta + live data even after refresh
+    const storage = typeof window !== 'undefined' && window.localStorage
+      ? window.localStorage
+      : new MemoryStorage();
+
     const client = new WsFeedClient({
       url,
-      storage: new MemoryStorage(), // Reset on page reload
+      storage: storage,
       onSamples: (samples) => onSamplesRef.current(samples),
       onStatus: handleStatus,
       onRegistry: handleRegistry,
