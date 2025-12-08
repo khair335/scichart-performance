@@ -1,0 +1,114 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 2],
+  "minimap": {
+    "source": {
+      "series_id": "ESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "esu5-tick-pane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "ESU5 - Tick Price & Indicators"
+    },
+    {
+      "id": "mesu5-tick-pane",
+      "row": 0,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 - Tick Price & Indicators"
+    },
+    {
+      "id": "esu5-ohlc-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "ESU5 - OHLC Candlesticks"
+    },
+    {
+      "id": "mesu5-ohlc-pane",
+      "row": 1,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 - OHLC Candlesticks"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "ESU5:ticks",
+      "pane": "esu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "ESU5:sma_10",
+      "pane": "esu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "ESU5:sma_20",
+      "pane": "esu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "ESU5:sma_30",
+      "pane": "esu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "ESU5:ohlc_time:10000",
+      "pane": "esu5-ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "ESU5:ohlc_time:30000",
+      "pane": "esu5-ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "mesu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "mesu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "mesu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:sma_30",
+      "pane": "mesu5-tick-pane",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "mesu5-ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "mesu5-ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["esu5-ohlc-pane", "mesu5-ohlc-pane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "name": "ESU5 & MESU5 Side-by-Side"
+  }
+}
+

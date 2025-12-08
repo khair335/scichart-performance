@@ -249,9 +249,13 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
               validationErrors.warnings.push(...errs.warnings);
             });
 
+            // Extract filename from path (e.g., "/layouts/layout-3x1-simple.json" -> "layout-3x1-simple")
+            const layoutPath = config.defaultLayoutPath;
+            const filename = layoutPath.split('/').pop()?.replace('.json', '') || 'Default Layout';
+
             if (mounted) {
               setPlotLayout(parsed);
-              setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
+              setCurrentLayoutName(filename);
               setLayoutError(null);
 
               if (validationErrors.warnings.length > 0) {
@@ -278,6 +282,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
 
             if (mounted) {
               setPlotLayout(parsed);
+              // For embedded layout, use meta.name or fallback to 'Default Layout'
               setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
               setLayoutError(null);
 

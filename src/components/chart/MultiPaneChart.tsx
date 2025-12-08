@@ -526,8 +526,7 @@ export function useMultiPaneChart({
           // OHLC bar series - must use OhlcDataSeries
           dataSeries = new OhlcDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
-          fifoCapacity: capacity,
-          isFifo: config.performance.fifoEnabled ?? true,
+          fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
@@ -546,8 +545,7 @@ export function useMultiPaneChart({
         // All other series (tick, indicators, strategy) use XyDataSeries
         dataSeries = new XyDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
-          fifoCapacity: capacity,
-          isFifo: config.performance.fifoEnabled ?? true,
+          fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
@@ -1563,7 +1561,7 @@ export function useMultiPaneChart({
               fill: fill,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.MinMax,
+              resamplingMode: EResamplingMode.Auto,
             });
           } else {
             // Default to FastLineRenderableSeries
@@ -1572,7 +1570,7 @@ export function useMultiPaneChart({
               stroke: stroke,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.MinMax,
+              resamplingMode: EResamplingMode.Auto,
             });
           }
         }
@@ -2362,7 +2360,7 @@ export function useMultiPaneChart({
                       fill: fill,
                       strokeThickness: strokeThickness,
                       pointMarker: pointMarker,
-                      resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+                      resamplingMode: EResamplingMode.Auto,
                     });
                   } else {
                     renderableSeries = new FastLineRenderableSeries(wasm, {
@@ -2370,7 +2368,7 @@ export function useMultiPaneChart({
                       stroke: stroke,
                       strokeThickness: strokeThickness,
                       pointMarker: pointMarker,
-                      resamplingMode: seriesInfo.type === 'tick' ? EResamplingMode.None : EResamplingMode.Auto,
+                      resamplingMode: EResamplingMode.Auto,
                     });
                   }
                 }
@@ -2533,9 +2531,10 @@ export function useMultiPaneChart({
             entry.renderableSeries.isVisible = isInLayout !== false;
           }
           
-          // Set resampling mode for tick series (None for pure sine waves)
-          if (entry.seriesType === 'tick' && entry.renderableSeries instanceof FastLineRenderableSeries) {
-            entry.renderableSeries.resamplingMode = EResamplingMode.None;
+          // Set resampling mode for all series - use Auto for better performance
+          // Auto resampling significantly reduces CPU usage by rendering only visible pixels
+          if (entry.renderableSeries instanceof FastLineRenderableSeries) {
+            entry.renderableSeries.resamplingMode = EResamplingMode.Auto;
           }
         }
       });
@@ -2615,14 +2614,28 @@ export function useMultiPaneChart({
     // CRITICAL: When tab is hidden, use larger batches to process data faster
     // This ensures we keep up with incoming data even when tab is hidden
     const baseBatchSize = config.performance.batchSize;
+    
+    // Adjust batch size based on number of active series (multiple instruments = more data)
+    // With multiple instruments, we need larger batches to keep up with higher data rates
+    // But keep it reasonable to avoid CPU spikes
+    const activeSeriesCount = refs.dataSeriesStore.size;
+    const isMultipleInstruments = activeSeriesCount > 10;
+    // Moderate multiplier for multiple instruments (2x instead of 3x to reduce CPU load)
+    const multiInstrumentMultiplier = isMultipleInstruments ? 2 : 1;
+    const adjustedBaseBatchSize = baseBatchSize * multiInstrumentMultiplier;
+    
     // When tab is hidden, use much larger batches to catch up faster
     // If there's a large backlog (>10000 samples), process even larger batches
+    // For multiple instruments, be more aggressive with batch sizes
     const backlogSize = allSamples.length;
+    const backlogThreshold = isMultipleInstruments ? 2000 : 5000; // Lower threshold for multiple instruments
     const MAX_BATCH_SIZE = isTabHidden 
       ? (backlogSize > 10000 
           ? Math.min(10000, backlogSize) // Process up to 10k at once for large backlogs
-          : Math.min(baseBatchSize * 5, 5000)) // 5x batch size when hidden, max 5000
-      : baseBatchSize;
+          : Math.min(adjustedBaseBatchSize * 5, 5000)) // 5x batch size when hidden, max 5000
+      : (backlogSize > backlogThreshold 
+          ? Math.min(backlogThreshold * 2, backlogSize) // Process larger batches if backlog is building up
+          : adjustedBaseBatchSize);
     
     const samples = allSamples.length > MAX_BATCH_SIZE
       ? allSamples.slice(0, MAX_BATCH_SIZE)
@@ -3270,13 +3283,21 @@ export function useMultiPaneChart({
       // Show latest data: range ends at latest data point (or slightly ahead for padding)
       // This ensures the latest series line is always in the current view
       // CRITICAL: Only create range if we have valid actualDataMax
+      // However, if processing is behind (buffer has samples), use latestTime as fallback
+      // This prevents auto-scroll from stopping when processing can't keep up
+      let scrollTarget = actualDataMax;
       if (actualDataMax <= 0) {
-        console.warn('[MultiPaneChart] Cannot create X-axis range - no valid data');
-        return; // Skip auto-scroll if no valid data
+        // If no data in DataSeries yet but we have samples in buffer, use latestTime
+        if (latestTime > 0 && sampleBufferRef.current.length > 0) {
+          scrollTarget = latestTime;
+        } else {
+          console.warn('[MultiPaneChart] Cannot create X-axis range - no valid data');
+          return; // Skip auto-scroll if no valid data
+        }
       }
       
       const padding = 10 * 1000; // 10 seconds padding after latest data
-      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
+      const newRange = new NumberRange(scrollTarget - windowMs, scrollTarget + padding);
       
       // Log for debugging (throttled to avoid spam)
       if (hasActualData && actualDataMax < latestTime - 60 * 1000) { // More than 1 minute behind
@@ -4591,16 +4612,33 @@ export function useMultiPaneChart({
         // Hybrid approach: requestAnimationFrame when visible (smooth), setTimeout when hidden (fast)
         // requestAnimationFrame is throttled to ~1fps when hidden, which is too slow for data processing
         // Use setTimeout(16ms) when hidden to maintain 60fps processing rate
+        // With multiple instruments, use faster processing to keep up with higher data rates
         if (sampleBufferRef.current.length > 0) {
+          const bufferSize = sampleBufferRef.current.length;
+          const activeSeriesCount = chartRefs.current.dataSeriesStore.size;
+          const isMultipleInstruments = activeSeriesCount > 10;
+          // More aggressive detection for multiple instruments
+          // Lower threshold (1000 instead of 2000) to catch backlogs earlier
+          const isHighDataRate = isMultipleInstruments || bufferSize > 1000;
+          // Use faster processing (8ms) for high data rates or when backlog is building
+          // For multiple instruments, always use fast processing to prevent falling behind
+          const nextFrameDelay = isHighDataRate ? 8 : 16;
+          
           if (isTabHidden) {
-            // When hidden, use setTimeout for faster processing (60fps)
+            // When hidden, use setTimeout for faster processing (60fps or 125fps for high rates)
             // This ensures we keep up with incoming data even when tab is hidden
             isUsingTimeoutRef.current = true;
-            pendingUpdateRef.current = setTimeout(scheduleNext, 16);
+            pendingUpdateRef.current = setTimeout(scheduleNext, nextFrameDelay);
           } else {
-            // When visible, use requestAnimationFrame for smooth rendering
-            isUsingTimeoutRef.current = false;
-            pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
+            // When visible, use setTimeout for high data rates to prevent UI freezing
+            // Otherwise use requestAnimationFrame for smooth rendering
+            if (isHighDataRate && bufferSize > 1000) {
+              isUsingTimeoutRef.current = true;
+              pendingUpdateRef.current = setTimeout(scheduleNext, nextFrameDelay);
+            } else {
+              isUsingTimeoutRef.current = false;
+              pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
+            }
           }
         } else {
           // No more samples - reset timeout flag

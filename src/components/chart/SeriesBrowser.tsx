@@ -166,8 +166,8 @@ export function SeriesBrowser({
                           >
                             {getSeriesIcon(row.id)}
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium text-sidebar-foreground truncate">
-                                {row.id.split(':').pop()}
+                              <div className="text-sm font-medium text-sidebar-foreground truncate" title={row.id}>
+                                {row.id}
                               </div>
                               <div className="text-xs text-muted-foreground mono-data">
                                 {formatCount(row.count)} pts • {formatTime(row.lastMs)}

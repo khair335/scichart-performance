@@ -24,12 +24,12 @@
   },
   "performance": {
     "targetFPS": 60,
-    "batchSize": 1000,
-    "downsampleRatio": 1,
-    "maxAutoTicks": 8,
+    "batchSize": 500,
+    "downsampleRatio": 2,
+    "maxAutoTicks": 4,
     "fifoEnabled": true,
-    "fifoSweepSize": 50000,
-    "updateIntervalMs": 50
+    "fifoSweepSize": 25000,
+    "updateIntervalMs": 100
   },
   "chart": {
     "separateXAxes": false,
@@ -52,7 +52,7 @@
       "allowToggle": true
     }
   },
-  "defaultLayoutPath": "/layouts/layout-2x1-simple.json",
+  "defaultLayoutPath": "/layouts/layout-3x1-simple.json",
   "defaultLayout": {
     "layout_mode": "multi_surface",
     "grid": [2, 1],

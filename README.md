@@ -88,3 +88,43 @@ python server.py \
     --price-model sine \
     --sine-period-sec 60
 ```
+
+### Multiple Instruments (ESU5 and MESU5):
+
+**PowerShell:**
+```powershell
+python server.py `
+    --mode session `
+    --instrument ESU5,MESU5 `
+    --session-ms 23400000 `
+    --tick-hz 40 `
+    --indicator-windows "10,20,30,40,50,60,70,80,90" `
+    --bar-intervals "10000,30000" `
+    --strategy-rate-per-min 2 `
+    --strategy-hold-bars 5 `
+    --strategy-max-open 3 `
+    --total-samples 12000000 `
+    --ring-capacity 12000000 `
+    --live-batch 2048 `
+    --price-model sine `
+    --sine-period-sec 60
+```
+
+**Bash:**
+```bash
+python3 server.py \
+    --mode session \
+    --instrument ESU5,MESU5 \
+    --session-ms 23400000 \
+    --tick-hz 40 \
+    --indicator-windows "10,20,30,40,50,60,70,80,90" \
+    --bar-intervals "10000,30000" \
+    --strategy-rate-per-min 2 \
+    --strategy-hold-bars 5 \
+    --strategy-max-open 3 \
+    --total-samples 12000000 \
+    --ring-capacity 12000000 \
+    --live-batch 2048 \
+    --price-model sine \
+    --sine-period-sec 60
+```

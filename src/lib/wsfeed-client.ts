@@ -266,6 +266,19 @@ export class WsFeedClient {
         if (t === 'init_begin') {
           this.minSeq = Number(msg.min_seq || 0);
           this.wmSeq = Number(msg.wm_seq || 0);
+          
+          // Detect server restart: if server's minSeq is lower than our stored lastSeq,
+          // OR if server's wmSeq is lower than our stored lastSeq,
+          // it means the server has restarted and sequence numbers have reset.
+          // Reset lastSeq to 0 to allow accepting new samples.
+          if (this.minSeq < this.lastSeq || this.wmSeq < this.lastSeq) {
+            console.log(`[WsFeedClient] 🔄 Server restart detected: minSeq=${this.minSeq}, wmSeq=${this.wmSeq}, lastSeq=${this.lastSeq}, resetting lastSeq to 0`);
+            this.lastSeq = 0;
+            this.storage.removeItem(this.storageKey);
+            // Update resumeFromRequested to match the reset
+            this.resumeFromRequested = 1;
+          }
+          
           const start = Math.max(this.resumeFromRequested, this.minSeq);
           this.expectedHistory = (this.wmSeq >= start) ? (this.wmSeq - start + 1) : 0;
           this.historyReceived = 0;

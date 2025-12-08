@@ -530,27 +530,79 @@ class SyntheticBuilder:
 
 
 def build_synthetic_dataset(args) -> List[dict]:
-    builder = SyntheticBuilder(
-        mode=args.mode,
-        instrument=args.instrument,
-        session_ms=args.session_ms,
-        tick_dt_ms=args.tick_dt_ms,
-        bar_intervals_ms=args.bar_intervals,
-        indicator_windows=args.indicator_windows_list,
-        price_model=args.price_model,
-        base_price=args.base_price,
-        sine_period_sec=args.sine_period_sec,
-        sine_amp=args.sine_amp,
-        sine_noise=args.sine_noise,
-        rw_drift=args.rw_drift,
-        rw_vol=args.rw_vol,
-        seed=args.seed,
-        strategy_id=args.strategy_id,
-        strategy_rate_per_min=args.strategy_rate_per_min,
-        strategy_hold_bars=args.strategy_hold_bars,
-        strategy_max_open=args.strategy_max_open,
+    """
+    Build synthetic dataset for one or more instruments.
+    Returns combined samples from all instruments, sorted by t_ms.
+    """
+    all_samples: List[dict] = []
+    
+    # Use different base prices for different instruments to make them visually distinct
+    base_prices = {
+        "ESU5": 6000.0,
+        "MESU5": 3000.0,
+        "ES.c.0": 100.0,
+    }
+    
+    # Distribute total_samples across instruments (if specified)
+    # In session mode: ignore total_samples and let each instrument generate full session
+    # In quick mode: use total_samples if specified, otherwise let each generate full dataset
+    if args.mode == "session":
+        # Session mode: generate full session for each instrument (ignore total_samples)
+        samples_per_instrument = 0
+    elif args.total_samples > 0:
+        # Quick mode with total_samples specified: distribute across instruments
+        samples_per_instrument = args.total_samples // len(args.instruments)
+    else:
+        # Quick mode without total_samples: unlimited per instrument
+        samples_per_instrument = 0
+    
+    # Build dataset for each instrument
+    for idx, instrument in enumerate(args.instruments):
+        # Use different seeds for each instrument to get different price patterns
+        instrument_seed = args.seed + idx if args.seed is not None else None
+        
+        # Use instrument-specific base price if available, otherwise use default
+        instrument_base_price = base_prices.get(instrument, args.base_price + (idx * 10.0))
+        
+        builder = SyntheticBuilder(
+            mode=args.mode,
+            instrument=instrument,
+            session_ms=args.session_ms,
+            tick_dt_ms=args.tick_dt_ms,
+            bar_intervals_ms=args.bar_intervals,
+            indicator_windows=args.indicator_windows_list,
+            price_model=args.price_model,
+            base_price=instrument_base_price,
+            sine_period_sec=args.sine_period_sec,
+            sine_amp=args.sine_amp,
+            sine_noise=args.sine_noise,
+            rw_drift=args.rw_drift,
+            rw_vol=args.rw_vol,
+            seed=instrument_seed,
+            strategy_id=args.strategy_id,
+            strategy_rate_per_min=args.strategy_rate_per_min,
+            strategy_hold_bars=args.strategy_hold_bars,
+            strategy_max_open=args.strategy_max_open,
+        )
+        
+        # Use distributed sample cap per instrument, or 0 for unlimited
+        instrument_samples = builder.build(total_samples_cap=samples_per_instrument)
+        all_samples.extend(instrument_samples)
+    
+    # Sort all samples by t_ms to interleave them chronologically
+    all_samples.sort(key=lambda s: s.get("t_ms", 0))
+    
+    # Only cap combined samples in quick mode (not in session mode)
+    # In session mode, we want the full session for all instruments
+    if args.mode != "session" and args.total_samples > 0 and len(all_samples) > args.total_samples:
+        all_samples = all_samples[:args.total_samples]
+    
+    print(
+        f"[build] synthetic {args.mode.upper()} dataset: "
+        f"instruments={args.instruments}, total_samples={len(all_samples)}"
     )
-    return builder.build(total_samples_cap=args.total_samples)
+    
+    return all_samples
 
 
 # ---------------------------------------------------------------------------
@@ -1404,7 +1456,11 @@ def parse_args():
         default="quick",
     )
     p.add_argument(
-        "--instrument", type=str, default="ES.c.0", dest="instrument"
+        "--instrument", 
+        type=str, 
+        default="ES.c.0", 
+        dest="instrument",
+        help="Comma-separated list of instruments (e.g., 'ESU5,MESU5' or 'ES.c.0')"
     )
 
     p.add_argument(
@@ -1424,9 +1480,16 @@ def parse_args():
     p.add_argument(
         "--tick-dt-ms",
         type=int,
-        default=TICK_DT_MS_DEFAULT,
+        default=None,
         dest="tick_dt_ms",
         help="Logical ms between synthetic ticks on t_ms axis",
+    )
+    p.add_argument(
+        "--tick-hz",
+        type=float,
+        default=None,
+        dest="tick_hz",
+        help="Ticks per second (alternative to --tick-dt-ms). Converts to tick_dt_ms = 1000 / tick_hz",
     )
     p.add_argument("--seed", type=int, default=None, dest="seed")
 
@@ -1522,6 +1585,26 @@ def parse_args():
     )
 
     a = p.parse_args()
+
+    # Handle tick-hz / tick-dt-ms conversion
+    if a.tick_hz is not None and a.tick_dt_ms is not None:
+        raise SystemExit("Cannot specify both --tick-hz and --tick-dt-ms")
+    if a.tick_hz is not None:
+        if a.tick_hz <= 0:
+            raise SystemExit("--tick-hz must be > 0")
+        a.tick_dt_ms = int(1000.0 / a.tick_hz)
+    elif a.tick_dt_ms is None:
+        a.tick_dt_ms = TICK_DT_MS_DEFAULT
+
+    # parse instruments (comma-separated)
+    try:
+        a.instruments = [
+            x.strip() for x in a.instrument.split(",") if x.strip()
+        ]
+        if not a.instruments:
+            a.instruments = ["ES.c.0"]
+    except Exception:
+        a.instruments = [a.instrument] if a.instrument else ["ES.c.0"]
 
     # parse bar intervals
     try:
@@ -1721,7 +1804,7 @@ async def main():
 
     async with websockets.serve(ws_handler, args.host, args.port, compression=None):
         print(f"[server] listening on ws://{args.host}:{args.port}")
-        print(f"[server] mode={args.mode} instrument={args.instrument}")
+        print(f"[server] mode={args.mode} instruments={args.instruments}")
         await asyncio.Future()
 
 
