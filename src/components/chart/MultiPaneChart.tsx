@@ -1881,13 +1881,13 @@ export function useMultiPaneChart({
           // Clear preallocated series tracking
           preallocatedSeriesRef.current.clear();
 
-          // Wait one more frame before allowing new surface creation
-          // This ensures WASM render loop has fully processed all pending frames
-          requestAnimationFrame(() => {
+          // Wait additional time before allowing new surface creation
+          // WASM module needs extra time to fully process deletions
+          setTimeout(() => {
             // Clear cleanup flag and trigger re-render to proceed with new layout
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          });
+          }, 250);
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 
@@ -1900,12 +1900,12 @@ export function useMultiPaneChart({
           }
           preallocatedSeriesRef.current.clear();
 
-          // Wait one more frame before allowing new surface creation
-          requestAnimationFrame(() => {
+          // Wait additional time before allowing new surface creation
+          setTimeout(() => {
             // Clear cleanup flag and trigger re-render
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          });
+          }, 250);
         });
       }
 
@@ -1949,13 +1949,13 @@ export function useMultiPaneChart({
           // Clear preallocated series tracking
           preallocatedSeriesRef.current.clear();
 
-          // Wait one more frame before allowing new surface creation
-          // This ensures WASM render loop has fully processed all pending frames
-          requestAnimationFrame(() => {
+          // Wait additional time before allowing new surface creation
+          // WASM module needs extra time to fully process deletions
+          setTimeout(() => {
             // Clear cleanup flag and trigger re-render to proceed with new layout
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          });
+          }, 250);
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 
@@ -1968,12 +1968,12 @@ export function useMultiPaneChart({
           }
           preallocatedSeriesRef.current.clear();
 
-          // Wait one more frame before allowing new surface creation
-          requestAnimationFrame(() => {
+          // Wait additional time before allowing new surface creation
+          setTimeout(() => {
             // Clear cleanup flag and trigger re-render
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          });
+          }, 250);
         });
       }
 

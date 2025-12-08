@@ -603,20 +603,54 @@ export class DynamicPaneManager {
     // Additional safety delay for WASM event loop to fully process pending frames
     await new Promise(resolve => setTimeout(resolve, 150));
 
-    // Delete vertical group first to break all cross-surface connections
+    // Remove all surfaces from vertical group
+    // Note: Don't call delete() - just remove surfaces and let it be garbage collected
     if (this.verticalGroup) {
       try {
-        this.verticalGroup.delete();
+        // Remove all surfaces from the group
+        for (const pane of this.paneSurfaces.values()) {
+          try {
+            this.verticalGroup.remove(pane.surface);
+          } catch (e) {
+            // Ignore if already removed
+          }
+        }
       } catch (e) {
-        console.warn('[DynamicPaneManager] Error deleting vertical group:', e);
+        console.warn('[DynamicPaneManager] Error clearing vertical group:', e);
       }
       this.verticalGroup = null;
     }
 
-    // Destroy all child panes
-    this.destroyAllPanes();
+    // Clear modifiers and series from all panes before parent deletion
+    for (const pane of this.paneSurfaces.values()) {
+      try {
+        pane.surface.chartModifiers.clear();
+      } catch (e) {
+        // Ignore
+      }
 
-    // Delete parent surface last (this will also delete all sub-charts)
+      try {
+        const renderableSeriesToRemove: any[] = [];
+        pane.surface.renderableSeries.asArray().forEach((rs: any) => {
+          renderableSeriesToRemove.push(rs);
+        });
+        for (const rs of renderableSeriesToRemove) {
+          try {
+            pane.surface.renderableSeries.remove(rs);
+          } catch (e) {
+            // Ignore
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Clear the panes map WITHOUT calling delete on subsurfaces
+    // The parent.delete() will cascade delete all subsurfaces automatically
+    this.paneSurfaces.clear();
+
+    // Delete parent surface LAST - this cascades to all subsurfaces
     if (this.parentSurface) {
       try {
         this.parentSurface.delete();
