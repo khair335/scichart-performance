@@ -56,7 +56,9 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
   }, []);
 
   const connect = useCallback(() => {
+    console.log('[useWebSocketFeed] 🔌 Attempting to connect to:', url);
     if (clientRef.current) {
+      console.log('[useWebSocketFeed] Closing existing client');
       clientRef.current.close();
     }
 
@@ -66,21 +68,28 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
       ? window.localStorage
       : new MemoryStorage();
 
+    console.log('[useWebSocketFeed] Creating new WsFeedClient');
     const client = new WsFeedClient({
       url,
       storage: storage,
-      onSamples: (samples) => onSamplesRef.current(samples),
+      onSamples: (samples) => {
+        console.log(`[useWebSocketFeed] 📦 Received ${samples.length} samples`);
+        onSamplesRef.current(samples);
+      },
       onStatus: handleStatus,
       onRegistry: handleRegistry,
       onEvent: (evt) => {
+        console.log('[useWebSocketFeed] 📡 Event:', evt.type, evt);
         if (evt.type === 'error') {
           console.error('[WebSocket Error]', evt);
         }
       },
     });
 
-    clientRef.current = client;
+    console.log('[useWebSocketFeed] ✅ Client created, calling connect()');
     client.connect();
+    clientRef.current = client;
+    console.log('[useWebSocketFeed] 📊 Client stored in ref');
   }, [url, handleStatus, handleRegistry]);
 
   const disconnect = useCallback(() => {
@@ -89,12 +98,20 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
 
   // Auto-connect on mount
   useEffect(() => {
+    console.log('[useWebSocketFeed] useEffect triggered, autoConnect:', autoConnect);
     if (autoConnect) {
+      console.log('[useWebSocketFeed] AutoConnect is true, calling connect()');
       connect();
+    } else {
+      console.log('[useWebSocketFeed] AutoConnect is false, skipping connection');
     }
 
     return () => {
-      clientRef.current?.close();
+      console.log('[useWebSocketFeed] Cleanup: closing client');
+      if (clientRef.current) {
+        clientRef.current.close();
+        clientRef.current = null;
+      }
     };
   }, [autoConnect, connect]);
 
