@@ -589,9 +589,16 @@ export class DynamicPaneManager {
       // Ignore - may already be deleted
     }
 
-    // CRITICAL: Clear all axes FIRST before suspending to prevent measureText errors
+    // CRITICAL: Clear all series AND axes before suspending to prevent render errors
     for (const pane of this.paneSurfaces.values()) {
-      // Remove all axes completely from the surface
+      // First remove all series
+      try {
+        pane.surface.renderableSeries.clear();
+      } catch (e) {
+        // Ignore
+      }
+
+      // Then remove all axes
       try {
         pane.surface.xAxes.clear();
         pane.surface.yAxes.clear();
@@ -599,7 +606,7 @@ export class DynamicPaneManager {
         // Ignore
       }
 
-      // Then suspend rendering
+      // Finally suspend rendering
       try {
         pane.surface.suspendUpdates();
       } catch (e) {
