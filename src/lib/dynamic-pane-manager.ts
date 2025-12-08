@@ -589,10 +589,21 @@ export class DynamicPaneManager {
       // Ignore - may already be deleted
     }
 
-    // Suspend all pane rendering
+    // Suspend all pane rendering AND disable axes to prevent measureText errors
     for (const pane of this.paneSurfaces.values()) {
       try {
         pane.surface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+
+      // CRITICAL: Disable all axes to prevent measureText errors during cleanup
+      // The render loop may still fire even after suspendUpdates
+      try {
+        pane.xAxis.isVisible = false;
+        pane.yAxis.isVisible = false;
+        pane.xAxis.drawLabels = false;
+        pane.yAxis.drawLabels = false;
       } catch (e) {
         // Ignore
       }
@@ -609,8 +620,10 @@ export class DynamicPaneManager {
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
     // CRITICAL: Additional delay for WASM to fully process pending events
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 400));
 
     // Remove all surfaces from vertical group
     // Note: Don't call delete() - just remove surfaces and let it be garbage collected
