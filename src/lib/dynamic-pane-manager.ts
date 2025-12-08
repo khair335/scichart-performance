@@ -109,9 +109,18 @@ export class DynamicPaneManager {
     this.verticalGroup = new SciChartVerticalGroup();
 
     // Wait for the rendering context to be fully ready
-    // The parent surface needs time to initialize its WebGL context
-    // Use multiple animation frames to ensure context is ready
+    // The parent surface needs time to initialize its WebGL context and render surface
+    // Force an initial render to ensure all contexts are initialized
     await new Promise(resolve => requestAnimationFrame(resolve));
+
+    // Check if renderSurface is initialized
+    let attempts = 0;
+    while (attempts < 50 && !(this.parentSurface as any).renderSurface?.context2D) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      attempts++;
+    }
+
+    // Additional frames for safety
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
   }
@@ -298,8 +307,25 @@ export class DynamicPaneManager {
 
     // Wait for the subsurface rendering context to be ready
     // This is critical - the subsurface needs time to initialize its rendering context
-    // Use multiple animation frames to ensure rendering context is fully ready
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    // Poll for the renderSurface to be ready with text measurement capabilities
+    let attempts = 0;
+    const maxAttempts = 50; // 50 attempts * 20ms = 1 second max wait
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      // Check if the rendering context is ready by checking for renderSurface
+      const renderSurface = (surface as any).renderSurface;
+      if (renderSurface && renderSurface.context2D) {
+        // Context is ready
+        break;
+      }
+      attempts++;
+    }
+
+    if (attempts >= maxAttempts) {
+      console.warn('[DynamicPaneManager] Subsurface rendering context did not initialize in time');
+    }
+
+    // Additional animation frames for safety
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -332,9 +358,9 @@ export class DynamicPaneManager {
       useNativeText: true,
       useSharedCache: true,
       maxAutoTicks: maxAutoTicks,
-      // Add styling to make X-axis visible (match new-index.html)
-      axisTitle: "Time",
-      axisTitleStyle: { color: "#9fb2c9" },
+      // Don't set axisTitle - causes text rendering issues with subsurfaces
+      // axisTitle: "Time",
+      // axisTitleStyle: { color: "#9fb2c9" },
       labelStyle: { color: "#9fb2c9" },
       // Apply timezone-aware label formatting
       // Note: SciChart may use labelProvider or labelFormat - check API docs
@@ -362,9 +388,9 @@ export class DynamicPaneManager {
       useSharedCache: true,
       maxAutoTicks: 3,
       growBy: new NumberRange(0.1, 0.1),
-      // Add styling to make Y-axis visible (match new-index.html)
-      axisTitle: "Price",
-      axisTitleStyle: { color: "#9fb2c9" },
+      // Don't set axisTitle - causes text rendering issues with subsurfaces
+      // axisTitle: "Price",
+      // axisTitleStyle: { color: "#9fb2c9" },
       labelStyle: { color: "#9fb2c9" },
     });
 
