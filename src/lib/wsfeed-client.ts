@@ -165,6 +165,7 @@ export class WsFeedClient {
     const saved = this.storage.getItem(this.storageKey);
     this.lastSeq = saved ? Number(saved) : 0;
     this.resumeFromRequested = (this.lastSeq || 0) + 1;
+    console.log(`[WsFeedClient] 🔧 Initialized: lastSeq=${this.lastSeq} (from localStorage), resumeFromRequested=${this.resumeFromRequested}`);
   }
 
   getLastSeq(): number {
@@ -194,6 +195,7 @@ export class WsFeedClient {
 
     const sendResume = () => {
       this.resumeFromRequested = (this.lastSeq || 0) + 1;
+      console.log(`[WsFeedClient] 📤 Sending resume request: from_seq=${this.resumeFromRequested} (lastSeq was ${this.lastSeq})`);
       this.ws?.send(JSON.stringify({ type: 'resume', from_seq: this.resumeFromRequested }));
     };
 
@@ -491,7 +493,12 @@ export class WsFeedClient {
       }
 
       // Dedup by global seq
-      if (seq <= this.lastSeq) continue;
+      if (seq <= this.lastSeq) {
+        if (accepted === 0) {
+          console.log(`[WsFeedClient] 🚫 Duplicate: seq=${seq} <= lastSeq=${this.lastSeq} (first sample in batch)`);
+        }
+        continue;
+      }
 
       out.push(s);
       this.lastSeq = seq;
