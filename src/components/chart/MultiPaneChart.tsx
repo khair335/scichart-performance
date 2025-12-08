@@ -1855,33 +1855,8 @@ export function useMultiPaneChart({
       pendingPaneCreationRef.current = false;
       setParentSurfaceReady(false);
 
-      // Clean up any existing dynamic panes if layout was removed
-      if (refs.paneSurfaces.size > 0) {
-        // Suspend updates on all surfaces first to prevent render attempts during cleanup
-        refs.paneSurfaces.forEach((paneSurface) => {
-          try {
-            paneSurface.surface.suspendUpdates();
-          } catch (e) {
-            // Ignore
-          }
-        });
-
-        // Detach all DataSeries from RenderableSeries to prevent deletion
-        refs.paneSurfaces.forEach((paneSurface, paneId) => {
-          try {
-            const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
-            renderableSeries.forEach(rs => {
-              try {
-                rs.dataSeries = null;
-              } catch (e) {
-                // Ignore errors
-              }
-            });
-          } catch (e) {
-            console.warn(`[MultiPaneChart] Error detaching DataSeries from pane ${paneId}:`, e);
-          }
-        });
-      }
+      // Clear our local references first
+      refs.paneSurfaces.clear();
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
@@ -1893,8 +1868,11 @@ export function useMultiPaneChart({
         }
       }
 
-      // Clear our local references
-      refs.paneSurfaces.clear();
+      // CRITICAL: Clear the parent container to remove all canvas elements
+      const parentContainer = document.getElementById('dynamic-plot-parent');
+      if (parentContainer) {
+        parentContainer.innerHTML = '';
+      }
 
       return;
     }
@@ -1905,36 +1883,9 @@ export function useMultiPaneChart({
     // If layout changed, reset everything
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
       console.log('[MultiPaneChart] Layout changed, resetting state');
-      dynamicPanesInitializedRef.current = false;
-      parentSurfaceReadyRef.current = false;
-      pendingPaneCreationRef.current = false;
-      setParentSurfaceReady(false);
-      currentLayoutIdRef.current = null;
 
-      // Suspend updates on all surfaces first to prevent render attempts during cleanup
-      refs.paneSurfaces.forEach((paneSurface) => {
-        try {
-          paneSurface.surface.suspendUpdates();
-        } catch (e) {
-          // Ignore
-        }
-      });
-
-      // Detach all DataSeries from RenderableSeries to prevent deletion
-      refs.paneSurfaces.forEach((paneSurface, paneId) => {
-        try {
-          const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
-          renderableSeries.forEach(rs => {
-            try {
-              rs.dataSeries = null;
-            } catch (e) {
-              // Ignore
-            }
-          });
-        } catch (e) {
-          console.warn(`[MultiPaneChart] Error detaching DataSeries from pane ${paneId}:`, e);
-        }
-      });
+      // Clear our local references first
+      refs.paneSurfaces.clear();
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
@@ -1946,8 +1897,23 @@ export function useMultiPaneChart({
         }
       }
 
-      // Clear our local references
-      refs.paneSurfaces.clear();
+      // CRITICAL: Clear the parent container to remove all canvas elements
+      // This prevents "Cannot read properties of undefined (reading 'measureText')" errors
+      const parentContainer = document.getElementById('dynamic-plot-parent');
+      if (parentContainer) {
+        parentContainer.innerHTML = '';
+      }
+
+      // Reset all state flags
+      dynamicPanesInitializedRef.current = false;
+      parentSurfaceReadyRef.current = false;
+      pendingPaneCreationRef.current = false;
+      currentLayoutIdRef.current = null;
+      setParentSurfaceReady(false);
+
+      // CRITICAL: Return early and let the effect re-run on the next render cycle
+      // This ensures cleanup is complete before we try to create new surfaces
+      return;
     }
 
     // If this is the same layout and already initialized, skip

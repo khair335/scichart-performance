@@ -539,7 +539,18 @@ export class DynamicPaneManager {
    * Destroy all panes
    */
   destroyAllPanes(): void {
-    for (const paneId of this.paneSurfaces.keys()) {
+    // First suspend updates on all panes to prevent render attempts
+    for (const pane of this.paneSurfaces.values()) {
+      try {
+        pane.surface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Then destroy each pane
+    const paneIds = Array.from(this.paneSurfaces.keys());
+    for (const paneId of paneIds) {
       this.destroyPane(paneId);
     }
   }
@@ -562,10 +573,28 @@ export class DynamicPaneManager {
    * Cleanup all resources
    */
   cleanup(): void {
+    // Delete vertical group first to break all cross-surface connections
+    if (this.verticalGroup) {
+      try {
+        this.verticalGroup.delete();
+      } catch (e) {
+        console.warn('[DynamicPaneManager] Error deleting vertical group:', e);
+      }
+      this.verticalGroup = null;
+    }
+
+    // Destroy all child panes
     this.destroyAllPanes();
 
-    // Delete parent surface (this will also delete all sub-charts)
+    // Delete parent surface last (this will also delete all sub-charts)
     if (this.parentSurface) {
+      try {
+        // Suspend updates to prevent render attempts during deletion
+        this.parentSurface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+
       try {
         this.parentSurface.delete();
       } catch (e) {
@@ -574,7 +603,6 @@ export class DynamicPaneManager {
       this.parentSurface = null;
     }
 
-    this.verticalGroup = null;
     this.sharedWasm = null;
     this.gridRows = 1;
     this.gridCols = 1;
