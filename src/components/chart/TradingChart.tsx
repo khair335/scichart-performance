@@ -272,6 +272,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     setLiveMode,
     zoomExtents,
     jumpToLive,
+    handleGridReady,
   } = useMultiPaneChart({
     tickContainerId: 'tick-chart',
     ohlcContainerId: 'ohlc-chart',
@@ -747,7 +748,6 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         onReloadLayout={handleReloadLayout}
         seriesCount={registry.length}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-        onToggleFullscreen={handleToggleFullscreen}
         isFullscreen={isFullscreen}
         className="shrink-0 border-b border-border"
       />
@@ -787,13 +787,14 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         {/* Requirement 0.1: Layout-Driven Rendering - no plotting without layout */}
         <DynamicPlotGrid
           layout={plotLayout}
+          onGridReady={handleGridReady}
           onPaneReady={(paneId, containerId) => {
             // Pane container is ready - MultiPaneChart will create surface
-           
+
           }}
           onPaneDestroyed={(paneId) => {
             // Pane was removed - MultiPaneChart will cleanup
-         
+
           }}
           className="w-full h-full"
         />

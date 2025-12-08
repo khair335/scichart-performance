@@ -654,6 +654,7 @@ export function useMultiPaneChart({
   });
 
   const [isReady, setIsReady] = useState(false);
+  const [parentSurfaceReady, setParentSurfaceReady] = useState(false);
   const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
   
   // FPS tracking using requestAnimationFrame to count actual browser frames
@@ -1769,6 +1770,33 @@ export function useMultiPaneChart({
   // Track if dynamic panes have been initialized to prevent re-initialization
   const dynamicPanesInitializedRef = useRef<boolean>(false);
   const currentLayoutIdRef = useRef<string | null>(null);
+  const parentSurfaceReadyRef = useRef<boolean>(false);
+  const pendingPaneCreationRef = useRef<boolean>(false);
+
+  // Callback to handle grid container being ready (called by DynamicPlotGrid)
+  const handleGridReady = useCallback(async (parentContainerId: string, rows: number, cols: number) => {
+    if (parentSurfaceReadyRef.current || !plotLayout) {
+      return; // Already initialized or no layout
+    }
+
+    const paneManager = paneManagerRef.current;
+    if (!paneManager) {
+      console.warn('[MultiPaneChart] PaneManager not initialized yet');
+      return;
+    }
+
+    try {
+      console.log('[MultiPaneChart] Initializing parent surface:', parentContainerId);
+      await paneManager.initializeParentSurface(parentContainerId, rows, cols);
+      parentSurfaceReadyRef.current = true;
+
+      // Trigger pane creation by updating state
+      setParentSurfaceReady(true);
+      console.log('[MultiPaneChart] Parent surface ready, triggering pane creation');
+    } catch (e) {
+      console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
+    }
+  }, [plotLayout]);
 
   // Dynamic pane creation and management based on layout
   // CRITICAL: Requirement 0.1 - UI must not plot any data unless a plot layout JSON is loaded
@@ -1780,7 +1808,10 @@ export function useMultiPaneChart({
       // No SciChart panes are created automatically without a layout
       dynamicPanesInitializedRef.current = false;
       currentLayoutIdRef.current = null;
-      
+      parentSurfaceReadyRef.current = false;
+      pendingPaneCreationRef.current = false;
+      setParentSurfaceReady(false);
+
       // Clean up any existing dynamic panes if layout was removed
       if (refs.paneSurfaces.size > 0) {
        
@@ -1855,13 +1886,11 @@ export function useMultiPaneChart({
           await new Promise(resolve => requestAnimationFrame(resolve));
         }
 
-        // Initialize parent surface for SubCharts API (once per layout)
-        const [gridRows, gridCols] = plotLayout.layout.grid;
-        try {
-          await paneManager.initializeParentSurface('dynamic-plot-parent', gridRows, gridCols);
-        } catch (e) {
-          console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
-          return;
+        // Parent surface initialization is now handled by onGridReady callback
+        // Wait for parent surface to be ready before creating panes
+        if (!parentSurfaceReadyRef.current) {
+          pendingPaneCreationRef.current = true;
+          return; // Exit and wait for onGridReady callback
         }
 
         // Check if all panes already exist (prevent re-creation)
@@ -2303,7 +2332,7 @@ export function useMultiPaneChart({
       isMounted = false;
       // Don't destroy panes here - let the layout change handler do it
     };
-  }, [plotLayout, config.performance.maxAutoTicks, config.chart.separateXAxes, zoomMode]); // Added zoomMode to update modifiers when mode changes
+  }, [plotLayout, config.performance.maxAutoTicks, config.chart.separateXAxes, zoomMode, parentSurfaceReady]); // Added parentSurfaceReady to trigger pane creation when parent surface is ready
   
   // Update zoom mode for all surfaces (legacy and dynamic)
   useEffect(() => {
@@ -4492,5 +4521,6 @@ export function useMultiPaneChart({
     zoomExtents,
     jumpToLive,
     chartRefs,
+    handleGridReady,
   };
 }
