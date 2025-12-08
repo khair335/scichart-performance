@@ -1887,7 +1887,7 @@ export function useMultiPaneChart({
             // Clear cleanup flag and trigger re-render to proceed with new layout
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          }, 400);
+          }, 600);
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 
@@ -1955,7 +1955,7 @@ export function useMultiPaneChart({
             // Clear cleanup flag and trigger re-render to proceed with new layout
             cleanupInProgressRef.current = false;
             setParentSurfaceReady(false); // Trigger effect re-run
-          }, 400);
+          }, 600);
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 

@@ -589,21 +589,19 @@ export class DynamicPaneManager {
       // Ignore - may already be deleted
     }
 
-    // Suspend all pane rendering AND disable axes to prevent measureText errors
+    // CRITICAL: Clear all axes FIRST before suspending to prevent measureText errors
     for (const pane of this.paneSurfaces.values()) {
+      // Remove all axes completely from the surface
       try {
-        pane.surface.suspendUpdates();
+        pane.surface.xAxes.clear();
+        pane.surface.yAxes.clear();
       } catch (e) {
         // Ignore
       }
 
-      // CRITICAL: Disable all axes to prevent measureText errors during cleanup
-      // The render loop may still fire even after suspendUpdates
+      // Then suspend rendering
       try {
-        pane.xAxis.isVisible = false;
-        pane.yAxis.isVisible = false;
-        pane.xAxis.drawLabels = false;
-        pane.yAxis.drawLabels = false;
+        pane.surface.suspendUpdates();
       } catch (e) {
         // Ignore
       }
