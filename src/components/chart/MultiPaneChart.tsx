@@ -1805,7 +1805,6 @@ export function useMultiPaneChart({
         await new Promise(resolve => requestAnimationFrame(resolve));
 
         console.log('[MultiPaneChart] WASM loaded successfully');
-        refs.sharedWasm = true;
       }
 
       // Initialize pane manager if not already created
@@ -1817,6 +1816,12 @@ export function useMultiPaneChart({
 
       console.log('[MultiPaneChart] Initializing parent surface:', parentContainerId, `grid: ${rows}x${cols}`);
       await paneManager.initializeParentSurface(parentContainerId, rows, cols);
+      
+      // Now get the WASM context AFTER parent surface is initialized
+      if (!refs.sharedWasm) {
+        refs.sharedWasm = paneManager.getWasmContext();
+      }
+      
       parentSurfaceReadyRef.current = true;
 
       // Trigger pane creation by updating state
@@ -1985,13 +1990,9 @@ export function useMultiPaneChart({
           const createPane = async () => {
             try {
               const containerId = `pane-${paneConfig.id}-chart`;
-              const container = document.getElementById(containerId);
-              
-              if (!container) {
-                console.warn(`[MultiPaneChart] Container not found for pane ${paneConfig.id}: ${containerId}`);
-                creatingPanesRef.current.delete(paneConfig.id);
-                return;
-              }
+              // Note: With SubCharts API, individual containers are not needed
+              // The parent surface handles all rendering
+              // We still pass the containerId for reference but don't require the DOM element
 
               // Check if pane already exists
               const existingPane = refs.paneSurfaces.get(paneConfig.id);

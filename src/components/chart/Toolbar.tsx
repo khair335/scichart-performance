@@ -23,12 +23,17 @@ interface ToolbarProps {
   onJumpToLive: () => void;
   onToggleLive: () => void;
   onZoomExtents: () => void;
+  onToggleFullscreen?: () => void;
   onToggleMinimap: () => void;
   onToggleTheme: () => void;
   onLoadLayout: () => void;
   onOpenSeriesBrowser: () => void;
-  currentLayoutName?: string | null; // Display current layout name/filename
-  layoutError?: string | null; // Display layout validation errors
+  onReloadLayout?: () => void;
+  onOpenCommandPalette?: () => void;
+  currentLayoutName?: string | null;
+  layoutError?: string | null;
+  seriesCount?: number;
+  isFullscreen?: boolean;
   className?: string;
 }
 

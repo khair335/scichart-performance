@@ -12,6 +12,16 @@ interface HUDProps {
   cpuUsage?: number;
   memoryUsage?: number;
   gpuDrawCalls?: number;
+  currentLayoutName?: string | null;
+  onReloadLayout?: () => void;
+  seriesCount?: number;
+  minimapEnabled?: boolean;
+  onToggleMinimap?: () => void;
+  theme?: 'dark' | 'light';
+  onToggleTheme?: () => void;
+  onOpenCommandPalette?: () => void;
+  onToggleFullscreen?: () => void;
+  isFullscreen?: boolean;
   className?: string;
 }
 
