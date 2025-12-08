@@ -1857,35 +1857,33 @@ export function useMultiPaneChart({
 
       // Clean up any existing dynamic panes if layout was removed
       if (refs.paneSurfaces.size > 0) {
+        // Suspend updates on all surfaces first to prevent render attempts during cleanup
+        refs.paneSurfaces.forEach((paneSurface) => {
+          try {
+            paneSurface.surface.suspendUpdates();
+          } catch (e) {
+            // Ignore
+          }
+        });
 
+        // Detach all DataSeries from RenderableSeries to prevent deletion
         refs.paneSurfaces.forEach((paneSurface, paneId) => {
           try {
-            // Clear modifiers first to prevent DOM access errors
-            try {
-              paneSurface.surface.chartModifiers.clear();
-            } catch (e) {
-              // Ignore
-            }
-
-            // Detach renderableSeries before destroying surface
             const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
             renderableSeries.forEach(rs => {
               try {
-                rs.dataSeries = null; // Detach DataSeries to prevent deletion
-                paneSurface.surface.renderableSeries.remove(rs);
+                rs.dataSeries = null;
               } catch (e) {
                 // Ignore errors
               }
             });
-            paneSurface.surface.delete();
           } catch (e) {
-            console.warn(`[MultiPaneChart] Error destroying pane ${paneId}:`, e);
+            console.warn(`[MultiPaneChart] Error detaching DataSeries from pane ${paneId}:`, e);
           }
         });
-        refs.paneSurfaces.clear();
       }
 
-      // Clean up the pane manager and parent surface
+      // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
         try {
           paneManagerRef.current.cleanup();
@@ -1894,6 +1892,9 @@ export function useMultiPaneChart({
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
         }
       }
+
+      // Clear our local references
+      refs.paneSurfaces.clear();
 
       return;
     }
@@ -1910,33 +1911,32 @@ export function useMultiPaneChart({
       setParentSurfaceReady(false);
       currentLayoutIdRef.current = null;
 
-      // Clean up existing panes
+      // Suspend updates on all surfaces first to prevent render attempts during cleanup
+      refs.paneSurfaces.forEach((paneSurface) => {
+        try {
+          paneSurface.surface.suspendUpdates();
+        } catch (e) {
+          // Ignore
+        }
+      });
+
+      // Detach all DataSeries from RenderableSeries to prevent deletion
       refs.paneSurfaces.forEach((paneSurface, paneId) => {
         try {
-          // Clear modifiers first to prevent DOM access errors
-          try {
-            paneSurface.surface.chartModifiers.clear();
-          } catch (e) {
-            // Ignore
-          }
-
           const renderableSeries = Array.from(paneSurface.surface.renderableSeries.asArray());
           renderableSeries.forEach(rs => {
             try {
               rs.dataSeries = null;
-              paneSurface.surface.renderableSeries.remove(rs);
             } catch (e) {
               // Ignore
             }
           });
-          paneSurface.surface.delete();
         } catch (e) {
-          console.warn(`[MultiPaneChart] Error destroying pane ${paneId}:`, e);
+          console.warn(`[MultiPaneChart] Error detaching DataSeries from pane ${paneId}:`, e);
         }
       });
-      refs.paneSurfaces.clear();
 
-      // Clean up the pane manager and parent surface
+      // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
         try {
           paneManagerRef.current.cleanup();
@@ -1945,6 +1945,9 @@ export function useMultiPaneChart({
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
         }
       }
+
+      // Clear our local references
+      refs.paneSurfaces.clear();
     }
 
     // If this is the same layout and already initialized, skip

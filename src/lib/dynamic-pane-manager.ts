@@ -491,6 +491,13 @@ export class DynamicPaneManager {
       //   }
       // }
       
+      // CRITICAL: Suspend updates first to prevent render attempts during cleanup
+      try {
+        pane.surface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+
       // CRITICAL: Clear modifiers first to prevent DOM access after surface removal
       try {
         pane.surface.chartModifiers.clear();
