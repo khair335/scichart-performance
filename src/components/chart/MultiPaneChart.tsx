@@ -1777,6 +1777,7 @@ export function useMultiPaneChart({
   const currentLayoutIdRef = useRef<string | null>(null);
   const parentSurfaceReadyRef = useRef<boolean>(false);
   const pendingPaneCreationRef = useRef<boolean>(false);
+  const cleanupInProgressRef = useRef<boolean>(false);
 
   // Callback to handle grid container being ready (called by DynamicPlotGrid)
   const handleGridReady = useCallback(async (parentContainerId: string, rows: number, cols: number) => {
@@ -1856,10 +1857,11 @@ export function useMultiPaneChart({
       setParentSurfaceReady(false);
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
-      if (paneManagerRef.current) {
+      if (paneManagerRef.current && !cleanupInProgressRef.current) {
         // Store reference to old manager and set to null immediately
         const oldManager = paneManagerRef.current;
         paneManagerRef.current = null;
+        cleanupInProgressRef.current = true;
 
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
@@ -1878,6 +1880,10 @@ export function useMultiPaneChart({
 
           // Clear preallocated series tracking
           preallocatedSeriesRef.current.clear();
+
+          // Clear cleanup flag and trigger re-render to proceed with new layout
+          cleanupInProgressRef.current = false;
+          setParentSurfaceReady(false); // Trigger effect re-run
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 
@@ -1889,6 +1895,10 @@ export function useMultiPaneChart({
             }
           }
           preallocatedSeriesRef.current.clear();
+
+          // Clear cleanup flag and trigger re-render
+          cleanupInProgressRef.current = false;
+          setParentSurfaceReady(false); // Trigger effect re-run
         });
       }
 
@@ -1903,11 +1913,12 @@ export function useMultiPaneChart({
       console.log('[MultiPaneChart] Layout changed, resetting state');
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
-      if (paneManagerRef.current) {
+      if (paneManagerRef.current && !cleanupInProgressRef.current) {
         // Store reference to old manager and set to null immediately
         // This ensures the next render creates a NEW manager
         const oldManager = paneManagerRef.current;
         paneManagerRef.current = null;
+        cleanupInProgressRef.current = true;
 
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
@@ -1930,6 +1941,10 @@ export function useMultiPaneChart({
 
           // Clear preallocated series tracking
           preallocatedSeriesRef.current.clear();
+
+          // Clear cleanup flag and trigger re-render to proceed with new layout
+          cleanupInProgressRef.current = false;
+          setParentSurfaceReady(false); // Trigger effect re-run
         }).catch((e) => {
           console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
 
@@ -1941,6 +1956,10 @@ export function useMultiPaneChart({
             }
           }
           preallocatedSeriesRef.current.clear();
+
+          // Clear cleanup flag and trigger re-render
+          cleanupInProgressRef.current = false;
+          setParentSurfaceReady(false); // Trigger effect re-run
         });
       }
 
@@ -1958,6 +1977,13 @@ export function useMultiPaneChart({
 
     // If this is the same layout and already initialized, skip
     if (dynamicPanesInitializedRef.current && currentLayoutIdRef.current === layoutId) {
+      return;
+    }
+
+    // CRITICAL: If cleanup is in progress, wait for it to complete before creating new surfaces
+    // This prevents "measureText" errors from queued render frames during cleanup
+    if (cleanupInProgressRef.current) {
+      console.log('[MultiPaneChart] Cleanup in progress, waiting for completion before creating surfaces');
       return;
     }
 
