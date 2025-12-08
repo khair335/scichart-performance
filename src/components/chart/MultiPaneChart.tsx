@@ -1786,23 +1786,25 @@ export function useMultiPaneChart({
     }
 
     try {
-      // Wait for WASM to be ready (initialized in early useEffect)
-      if (!wasmInitializedRef.current) {
-        console.log('[MultiPaneChart] Waiting for WASM initialization in handleGridReady...');
-        let attempts = 0;
-        while (!wasmInitializedRef.current && attempts < 50) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          attempts++;
-        }
-        if (!wasmInitializedRef.current) {
-          console.error('[MultiPaneChart] WASM initialization timeout in handleGridReady');
-          return;
-        }
-      }
-      console.log('[MultiPaneChart] WASM ready, proceeding with parent surface initialization');
-
-      // Mark WASM as ready in refs too
+      // Initialize WASM if not already done
       if (!refs.sharedWasm) {
+        console.log('[MultiPaneChart] Initializing WASM from handleGridReady');
+        SciChartSurface.useWasmFromCDN();
+
+        // Disable DPI scaling for better performance
+        DpiHelper.IsDpiScaleEnabled = false;
+
+        // Enable performance optimizations
+        SciChartDefaults.useNativeText = true;
+        SciChartDefaults.useSharedCache = true;
+
+        // Wait for WASM to be fully loaded
+        console.log('[MultiPaneChart] Waiting for WASM to load...');
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        console.log('[MultiPaneChart] WASM loaded successfully');
         refs.sharedWasm = true;
       }
 
