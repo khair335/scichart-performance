@@ -1858,6 +1858,16 @@ export function useMultiPaneChart({
       // Clear our local references first
       refs.paneSurfaces.clear();
 
+      // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
+      for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+        if (entry.renderableSeries) {
+          refs.dataSeriesStore.delete(seriesId);
+        }
+      }
+
+      // Clear preallocated series tracking
+      preallocatedSeriesRef.current.clear();
+
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
         // Store reference to old manager and set to null immediately
@@ -1884,6 +1894,20 @@ export function useMultiPaneChart({
 
       // Clear our local references first
       refs.paneSurfaces.clear();
+
+      // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
+      // The renderableSeries will be destroyed when panes are destroyed
+      // but we need to clear the store so series can be recreated
+      for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+        if (entry.renderableSeries) {
+          // Keep the DataSeries (which holds data) but clear the entry
+          // so it can be recreated with a new renderableSeries
+          refs.dataSeriesStore.delete(seriesId);
+        }
+      }
+
+      // Clear preallocated series tracking
+      preallocatedSeriesRef.current.clear();
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current) {
