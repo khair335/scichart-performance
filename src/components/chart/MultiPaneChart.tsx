@@ -271,8 +271,12 @@ export function useMultiPaneChart({
   
   // Track which series have been preallocated to prevent re-running
   const preallocatedSeriesRef = useRef<Set<string>>(new Set());
-
-  // Update layout manager when plotLayout changes
+  
+  // Ref for plotLayout to avoid stale closure in callbacks
+  const plotLayoutRef = useRef(plotLayout);
+  useEffect(() => {
+    plotLayoutRef.current = plotLayout;
+  }, [plotLayout]);
   useEffect(() => {
     if (plotLayout) {
       // Layout is already parsed, just update the manager's internal state
@@ -1776,13 +1780,17 @@ export function useMultiPaneChart({
   // Callback to handle grid container being ready (called by DynamicPlotGrid)
   const handleGridReady = useCallback(async (parentContainerId: string, rows: number, cols: number) => {
     const refs = chartRefs.current;
+    // Use ref to get latest plotLayout (avoid stale closure)
+    const currentLayout = plotLayoutRef.current;
 
-    if (parentSurfaceReadyRef.current || !plotLayout) {
-      console.log('[MultiPaneChart] Grid ready callback skipped:', {
-        alreadyReady: parentSurfaceReadyRef.current,
-        hasLayout: !!plotLayout
-      });
-      return; // Already initialized or no layout
+    if (parentSurfaceReadyRef.current) {
+      console.log('[MultiPaneChart] Grid ready callback skipped: already ready');
+      return; // Already initialized
+    }
+    
+    if (!currentLayout) {
+      console.log('[MultiPaneChart] Grid ready callback skipped: no layout yet');
+      return; // No layout
     }
 
     try {
@@ -1830,7 +1838,7 @@ export function useMultiPaneChart({
     } catch (e) {
       console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
     }
-  }, [plotLayout, chartTheme, config.chart.timezone]);
+  }, [chartTheme, config.chart.timezone]);
 
   // Dynamic pane creation and management based on layout
   // CRITICAL: Requirement 0.1 - UI must not plot any data unless a plot layout JSON is loaded
@@ -1927,32 +1935,25 @@ export function useMultiPaneChart({
     let isMounted = true;
 
     const createDynamicPanes = async () => {
+      console.log('[MultiPaneChart] createDynamicPanes called', {
+        hasWasm: !!refs.sharedWasm,
+        parentReady: parentSurfaceReadyRef.current,
+        parentSurfaceReadyState: parentSurfaceReady,
+        hasPaneManager: !!paneManagerRef.current
+      });
+      
       try {
-        // Only initialize WASM once globally (not on every layout change)
-        if (!refs.sharedWasm) {
-        
-          SciChartSurface.useWasmFromCDN();
-
-          // Disable DPI scaling for better performance on Retina/High-DPI displays
-          DpiHelper.IsDpiScaleEnabled = false;
-          
-          // Enable performance optimizations globally
-          SciChartDefaults.useNativeText = true;
-          SciChartDefaults.useSharedCache = true;
-          
-          // Wait for WASM to be fully loaded and initialized
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
-          // Also wait for a couple of animation frames to ensure everything is ready
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          await new Promise(resolve => requestAnimationFrame(resolve));
-        }
-
         // Parent surface initialization is now handled by onGridReady callback
         // Wait for parent surface to be ready before creating panes
         if (!parentSurfaceReadyRef.current) {
+          console.log('[MultiPaneChart] Parent surface not ready, setting pending flag');
           pendingPaneCreationRef.current = true;
           return; // Exit and wait for onGridReady callback
+        }
+
+        // Only initialize WASM once globally (not on every layout change)
+        if (!refs.sharedWasm) {
+          console.log('[MultiPaneChart] WASM not ready yet, will be set by pane manager');
         }
 
         // Wait for DOM to be fully ready (containers need to be rendered)
@@ -1966,12 +1967,12 @@ export function useMultiPaneChart({
         });
 
         if (allPanesExist && dynamicPanesInitializedRef.current) {
-
+          console.log('[MultiPaneChart] All panes already exist, skipping creation');
           currentLayoutIdRef.current = layoutId;
           return;
         }
 
-        // Create panes for each pane config in layout
+        console.log('[MultiPaneChart] Creating panes for layout:', plotLayout.layout.panes.map(p => p.id));
         const panePromises: Promise<void>[] = [];
         
         for (const paneConfig of plotLayout.layout.panes) {
@@ -2001,8 +2002,7 @@ export function useMultiPaneChart({
                 return; // Already exists
               }
 
-              // Create pane surface
-              
+              console.log('[MultiPaneChart] Creating pane:', paneConfig.id);
               const paneSurface = await paneManager.createPane(
                 paneConfig.id,
                 containerId,
@@ -2010,6 +2010,7 @@ export function useMultiPaneChart({
                 config.performance.maxAutoTicks,
                 config.chart.separateXAxes
               );
+              console.log('[MultiPaneChart] Pane created successfully:', paneConfig.id);
 
               if (!isMounted) {
                 paneManager.destroyPane(paneConfig.id);
@@ -2134,14 +2135,17 @@ export function useMultiPaneChart({
         }
 
         await Promise.all(panePromises);
+        
+        console.log('[MultiPaneChart] All pane promises resolved, paneSurfaces size:', refs.paneSurfaces.size);
 
         // Mark as initialized after successful creation
         dynamicPanesInitializedRef.current = true;
         currentLayoutIdRef.current = layoutId;
 
-        // Set isReady after creating at least one pane (for dynamic layouts)
-        if (refs.paneSurfaces.size > 0 && !isReady) {
-        
+        // Set isReady after creating panes OR if parent surface is ready (for dynamic layouts)
+        // This ensures the "Initializing Chart" overlay is removed
+        if (!isReady) {
+          console.log('[MultiPaneChart] Setting isReady = true');
           setIsReady(true);
           onReadyChange?.(true);
         }
