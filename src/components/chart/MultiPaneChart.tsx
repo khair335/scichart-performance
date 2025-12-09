@@ -31,7 +31,7 @@ import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
 import { parseSeriesType, isTickChartSeries, isOhlcChartSeries } from '@/lib/series-namespace';
 import { PlotLayoutManager } from '@/lib/plot-layout-manager';
-import type { ParsedLayout } from '@/types/plot-layout';
+import type { ParsedLayout, PlotLayout } from '@/types/plot-layout';
 import { DynamicPaneManager, type PaneSurface as DynamicPaneSurface } from '@/lib/dynamic-pane-manager';
 import { renderHorizontalLines, renderVerticalLines } from '@/lib/overlay-renderer';
 import { groupStrategyMarkers, getConsolidatedSeriesId, type MarkerGroup } from '@/lib/strategy-marker-consolidator';
@@ -1292,11 +1292,42 @@ export function useMultiPaneChart({
           // If overview exists but source changed, delete and recreate
           if (refs.overview && needsRecreate) {
             try {
+              // CRITICAL: Suspend updates on source surfaces before deleting overview
+              // This prevents "dataSeries has been deleted" errors from render loop
+              for (const pane of refs.paneSurfaces.values()) {
+                try {
+                  pane.surface.suspendUpdates();
+                } catch (e) {
+                  // Ignore if surface is already suspended or deleted
+                }
+              }
+              
+              // Wait for render loop to fully stop
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              await new Promise(resolve => requestAnimationFrame(resolve));
+              
               refs.overview.delete();
               refs.overview = null;
               lastOverviewSourceRef.current = null;
+              
+              // Resume updates after overview is deleted
+              for (const pane of refs.paneSurfaces.values()) {
+                try {
+                  pane.surface.resumeUpdates();
+                } catch (e) {
+                  // Ignore if surface is already resumed or deleted
+                }
+              }
             } catch (e) {
               console.warn('[MultiPaneChart] Error deleting old overview:', e);
+              // Try to resume updates even on error
+              for (const pane of refs.paneSurfaces.values()) {
+                try {
+                  pane.surface.resumeUpdates();
+                } catch (resumeError) {
+                  // Ignore
+                }
+              }
             }
           }
           
@@ -1349,8 +1380,13 @@ export function useMultiPaneChart({
             
             if (isCancelled) return;
             
-            // Create overview even if no series yet (it will show empty until series are added)
-            // But log a warning if we had to wait
+            // Only create overview if source surface has series
+            // If no series after retries, skip and let the refresh mechanism handle it later
+            if (!surfaceHasSeries) {
+              console.log('[MultiPaneChart] Skipping overview creation: source surface has no series after waiting');
+              return;
+            }
+            
             if (retries > 0) {
               console.log(`[MultiPaneChart] Waited ${retries * 200}ms for series to be added to source surface before creating overview`);
             }
@@ -1955,16 +1991,38 @@ export function useMultiPaneChart({
                 seriesCount: correctPaneSurface.surface.renderableSeries.size()
               });
               
-              // Delete and recreate overview
-              try {
-                refs.overview.delete();
-                refs.overview = null;
-                lastOverviewSourceRef.current = null;
-                // Trigger overview recreation by incrementing refresh counter
-                setOverviewNeedsRefresh(prev => prev + 1);
-              } catch (e) {
-                console.warn('[MultiPaneChart] Error deleting overview for recreation:', e);
-              }
+              // Delete and recreate overview with proper suspension
+              // Use Promise chain since we're in a useEffect (not async)
+              const deleteOverviewSafely = async () => {
+                try {
+                  // CRITICAL: Suspend updates to prevent render loop errors
+                  for (const pane of refs.paneSurfaces.values()) {
+                    try { pane.surface.suspendUpdates(); } catch (e) { /* ignore */ }
+                  }
+                  await new Promise(resolve => requestAnimationFrame(resolve));
+                  
+                  if (refs.overview) {
+                    refs.overview.delete();
+                    refs.overview = null;
+                    lastOverviewSourceRef.current = null;
+                  }
+                  
+                  // Resume updates
+                  for (const pane of refs.paneSurfaces.values()) {
+                    try { pane.surface.resumeUpdates(); } catch (e) { /* ignore */ }
+                  }
+                  
+                  // Trigger overview recreation by incrementing refresh counter
+                  setOverviewNeedsRefresh(prev => prev + 1);
+                } catch (e) {
+                  console.warn('[MultiPaneChart] Error deleting overview for recreation:', e);
+                  // Try to resume on error
+                  for (const pane of refs.paneSurfaces.values()) {
+                    try { pane.surface.resumeUpdates(); } catch (resumeErr) { /* ignore */ }
+                  }
+                }
+              };
+              deleteOverviewSafely();
             } else {
               // Just refresh the overview
               overviewSurface.invalidateElement();
@@ -3270,7 +3328,7 @@ export function useMultiPaneChart({
       const MAX_FRAME_TIME_MS = FRAME_INTERVAL_MS * 1.2; // Stricter: only 20% overhead allowed
       if (processTime > MAX_FRAME_TIME_MS) {
         // Processing took too long - skip next frame to prevent lag accumulation
-        frameSkipCountRef.current++;
+        // Processing took too long - skip next frame to prevent lag accumulation
         // AGGRESSIVE: Increase delay when falling behind to let browser catch up
         const delay = processTime > FRAME_INTERVAL_MS * 2 ? 16 : 8;
         if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {

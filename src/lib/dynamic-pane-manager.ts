@@ -579,21 +579,9 @@ export class DynamicPaneManager {
     // CRITICAL: Additional delay for WASM to fully process pending events
     await new Promise(resolve => setTimeout(resolve, 400));
 
-    // Remove all surfaces from vertical group
-    // Note: Don't call delete() - just remove surfaces and let it be garbage collected
+    // Clear vertical group reference - surfaces will be cleaned up by delete()
+    // SciChartVerticalGroup doesn't have a remove method, so just nullify the reference
     if (this.verticalGroup) {
-      try {
-        // Remove all surfaces from the group
-        for (const pane of this.paneSurfaces.values()) {
-          try {
-            this.verticalGroup.remove(pane.surface);
-          } catch (e) {
-            // Ignore if already removed
-          }
-        }
-      } catch (e) {
-        console.warn('[DynamicPaneManager] Error clearing vertical group:', e);
-      }
       this.verticalGroup = null;
     }
 
