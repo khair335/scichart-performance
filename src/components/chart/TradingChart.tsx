@@ -282,8 +282,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
 
             if (mounted) {
               setPlotLayout(parsed);
-              // For embedded layout, use meta.name or fallback to 'Default Layout'
-              setCurrentLayoutName(parsed.layout.meta?.name || 'Default Layout');
+              // For embedded layout, use a default name
+              setCurrentLayoutName('Default Layout');
               setLayoutError(null);
 
               if (validationErrors.warnings.length > 0) {
