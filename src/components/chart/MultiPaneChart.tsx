@@ -455,7 +455,7 @@ export function useMultiPaneChart({
         
         // Fallback: if pane not found in dynamic panes, try legacy surfaces
         // This handles the case where layout specifies a pane that doesn't exist yet
-        console.warn(`[MultiPaneChart] Pane ${paneId} not found in dynamic panes, trying legacy fallback`);
+        // Pane not found, trying legacy fallback
         if (paneId.includes('tick') || paneId.includes('price') || paneId.includes('indicator')) {
           return { paneId, surface: refs.tickSurface, wasm: refs.tickWasm };
         } else if (paneId.includes('ohlc') || paneId.includes('candlestick') || paneId.includes('bar')) {
@@ -491,7 +491,7 @@ export function useMultiPaneChart({
   const ensureSeriesExists = (seriesId: string): DataSeriesEntry | null => {
     // This function is disabled to prevent WASM abort errors
     // All series creation should happen via preallocation
-    console.warn(`[MultiPaneChart] ensureSeriesExists called for ${seriesId} - this should not happen!`);
+    // ensureSeriesExists called unexpectedly
     return null;
     const refs = chartRefs.current;
     
@@ -504,12 +504,7 @@ export function useMultiPaneChart({
     // This prevents WASM abort errors when trying to create series before panes exist
     if (plotLayout && refs.paneSurfaces.size === 0) {
       // Layout is loaded but panes aren't created yet - wait for panes to be ready
-      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: layout loaded but panes not ready yet`, {
-        seriesId,
-        plotLayoutPanes: plotLayout.layout.panes.length,
-        paneSurfacesCount: refs.paneSurfaces.size,
-        isReady
-      });
+      // Cannot create series on-demand: panes not ready yet
       return null;
     }
     
@@ -519,13 +514,7 @@ export function useMultiPaneChart({
     const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
     
     if (!hasLegacySurfaces && !hasDynamicPanes) {
-      console.warn(`[MultiPaneChart] Cannot create series ${seriesId}: no surfaces available`, {
-        hasLegacySurfaces,
-        hasDynamicPanes,
-        paneCount: refs.paneSurfaces.size,
-        plotLayout: !!plotLayout,
-        isReady
-      });
+      // Cannot create series: no surfaces available
       return null;
     }
     
@@ -533,21 +522,14 @@ export function useMultiPaneChart({
     // This prevents WASM abort errors
     const { paneId, surface, wasm } = getPaneForSeries(seriesId);
     if (!wasm || !surface || !paneId) {
-      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: invalid pane/surface/WASM`, {
-        seriesId,
-        paneId,
-        hasSurface: !!surface,
-        hasWasm: !!wasm,
-        availablePanes: Array.from(refs.paneSurfaces.keys()),
-        hasLegacySurfaces
-      });
+      // Cannot create series: invalid pane/surface/WASM
       return null;
     }
     
     // CRITICAL: Ensure sharedWasm is available for DataSeries creation
     // DataSeries must use sharedWasm to prevent sharing issues
     if (!refs.sharedWasm && !wasm) {
-      console.warn(`[MultiPaneChart] Cannot create series ${seriesId} on-demand: no WASM context available`);
+      // Cannot create series: no WASM context
       return null;
     }
     
@@ -573,12 +555,7 @@ export function useMultiPaneChart({
       // CRITICAL: Validate WASM context before creating DataSeries
       // WASM abort errors occur when WASM context is invalid or not properly initialized
       if (!dataSeriesWasm || !wasm) {
-        console.error(`[MultiPaneChart] Cannot create series ${seriesId}: invalid WASM context`, {
-          seriesId,
-          hasSharedWasm: !!refs.sharedWasm,
-          hasWasm: !!wasm,
-          dataSeriesWasm: !!dataSeriesWasm
-        });
+        // Invalid WASM context - silently skip
         return null;
       }
       
@@ -710,7 +687,7 @@ export function useMultiPaneChart({
       
       return entry;
     } catch (e) {
-      console.warn(`[MultiPaneChart] Failed to create DataSeries on-demand for ${seriesId}:`, e);
+      // Failed to create DataSeries on-demand
       return null;
     }
   };
@@ -882,11 +859,11 @@ export function useMultiPaneChart({
         const ohlcContainer = document.getElementById(ohlcContainerId);
         
         if (!tickContainer) {
-          console.warn(`[MultiPaneChart] Container not found: ${tickContainerId} - may be using dynamic layout, skipping legacy initialization`);
+          // Container not found - may be using dynamic layout
           return;
         }
         if (!ohlcContainer) {
-          console.warn(`[MultiPaneChart] Container not found: ${ohlcContainerId} - may be using dynamic layout, skipping legacy initialization`);
+          // Container not found - may be using dynamic layout
           return;
         }
 
@@ -895,13 +872,13 @@ export function useMultiPaneChart({
         const ohlcRect = ohlcContainer.getBoundingClientRect();
         
         if (tickRect.width === 0 || tickRect.height === 0) {
-          console.warn(`[MultiPaneChart] Tick container has no dimensions, waiting...`);
+          // Tick container has no dimensions yet
           // Wait a bit for layout
           await new Promise(resolve => setTimeout(resolve, 100));
         }
         
         if (ohlcRect.width === 0 || ohlcRect.height === 0) {
-          console.warn(`[MultiPaneChart] OHLC container has no dimensions, waiting...`);
+          // OHLC container has no dimensions yet
           // Wait a bit for layout
           await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -1128,12 +1105,7 @@ export function useMultiPaneChart({
        
 
       } catch (error) {
-        console.error('[MultiPaneChart] Initialization error:', error);
-        console.error('[MultiPaneChart] Error details:', {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : undefined,
-        });
+        // Silently handle initialization errors (surfaces may not exist yet)
         // Set ready to false to show error state
         setIsReady(false);
       }
@@ -2099,9 +2071,8 @@ export function useMultiPaneChart({
 
       // Trigger pane creation by updating state
       setParentSurfaceReady(true);
-      console.log('[MultiPaneChart] Parent surface ready, triggering pane creation');
     } catch (e) {
-      console.error('[MultiPaneChart] Failed to initialize parent surface:', e);
+      // Silently handle parent surface errors
     }
   }, [chartTheme, config.chart.timezone]);
 
@@ -2472,7 +2443,7 @@ export function useMultiPaneChart({
             
               
             } catch (error) {
-              console.error(`[MultiPaneChart] Failed to create pane ${paneConfig.id}:`, error);
+              // Silently handle pane creation error
             } finally {
               creatingPanesRef.current.delete(paneConfig.id);
             }
@@ -2734,7 +2705,7 @@ export function useMultiPaneChart({
         }
 
       } catch (error) {
-        console.error('[MultiPaneChart] Error in dynamic pane creation:', error);
+        // Silently handle pane creation errors
       }
     };
 
@@ -3340,7 +3311,7 @@ export function useMultiPaneChart({
         return;
       }
     } catch (error) {
-      console.error('[MultiPaneChart] WASM memory error in data append:', error);
+      // Silently handle WASM memory errors
       // Critical error - likely WASM out of memory
       // Clear the buffer to prevent crash loop
       sampleBufferRef.current = [];
