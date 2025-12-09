@@ -531,14 +531,33 @@ export class DynamicPaneManager {
       return;
     }
 
-    // Suspend all rendering first to stop render loops
+    // CRITICAL: Suspend ALL surfaces first before any modifications
+    // This prevents the render loop from accessing deleted resources
     try {
       parentToDelete.suspendUpdates();
     } catch (e) {
       // Ignore - may already be deleted
     }
+    
+    for (const pane of this.paneSurfaces.values()) {
+      try {
+        pane.surface.suspendUpdates();
+      } catch (e) {
+        // Ignore
+      }
+    }
 
-    // CRITICAL: Clear all series AND axes before suspending to prevent render errors
+    // CRITICAL: Wait for multiple render frames to ensure the render loop has fully stopped
+    // The WASM render loop is async and may still be processing when we suspend
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    
+    // Additional timeout for WASM to fully process pending events
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // NOW clear all series AND axes after render loop has stopped
     for (const pane of this.paneSurfaces.values()) {
       // First remove all series
       try {
@@ -554,18 +573,16 @@ export class DynamicPaneManager {
       } catch (e) {
         // Ignore
       }
-
-      // Finally suspend rendering
+      
+      // Clear modifiers
       try {
-        pane.surface.suspendUpdates();
+        pane.surface.chartModifiers.clear();
       } catch (e) {
         // Ignore
       }
     }
 
-    // CRITICAL: Wait for WASM render loop to fully stop
-    // The render loop runs at ~60fps, so we need to wait multiple frames
-    // PLUS additional time for WASM event processing
+    // CRITICAL: Wait again for WASM render loop to fully stop after clearing
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
@@ -585,30 +602,7 @@ export class DynamicPaneManager {
       this.verticalGroup = null;
     }
 
-    // Clear modifiers and series from all panes before parent deletion
-    for (const pane of this.paneSurfaces.values()) {
-      try {
-        pane.surface.chartModifiers.clear();
-      } catch (e) {
-        // Ignore
-      }
-
-      try {
-        const renderableSeriesToRemove: any[] = [];
-        pane.surface.renderableSeries.asArray().forEach((rs: any) => {
-          renderableSeriesToRemove.push(rs);
-        });
-        for (const rs of renderableSeriesToRemove) {
-          try {
-            pane.surface.renderableSeries.remove(rs);
-          } catch (e) {
-            // Ignore
-          }
-        }
-      } catch (e) {
-        // Ignore
-      }
-    }
+    // Modifiers and series already cleared above - no need to repeat
 
     // Clear the panes map WITHOUT calling delete on subsurfaces
     // The parent.delete() will cascade delete all subsurfaces automatically
