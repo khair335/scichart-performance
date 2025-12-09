@@ -101,6 +101,7 @@ export class DynamicPaneManager {
 
     const result = await SciChartSurface.create(containerId, {
       theme: this.theme,
+      freezeWhenOutOfView: true, // Freeze charts when out of viewport for better performance
     });
 
     this.parentSurface = result.sciChartSurface;
@@ -145,36 +146,12 @@ export class DynamicPaneManager {
 
   /**
    * Update DateTime axis with timezone-aware formatting
+   * Note: Currently disabled - letting SciChart use its default intelligent formatting
+   * which automatically adapts based on zoom level (e.g., "08:25" when zoomed in, "12/08" when zoomed out)
    */
   private updateAxisTimezone(xAxis: DateTimeNumericAxis): void {
-    // SciChart DateTimeNumericAxis uses labelProvider for custom formatting
-    // We'll use the labelFormat option if available, or create a custom formatter
-    try {
-      // Create timezone-aware label formatter
-      const formatter = (value: number) => {
-        const date = new Date(value);
-        // Format using the configured timezone
-        return date.toLocaleString('en-US', {
-          timeZone: this.timezone,
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-      };
-      
-      // Apply formatter if the axis supports it
-      // Note: SciChart's DateTimeNumericAxis may use different API
-      // This is a placeholder - actual implementation depends on SciChart API
-      if ((xAxis as any).labelProvider) {
-        (xAxis as any).labelProvider.formatLabel = formatter;
-      }
-    } catch (e) {
-      console.warn('[DynamicPaneManager] Failed to apply timezone formatting:', e);
-    }
+    // No-op: Let SciChart handle datetime formatting automatically
+    // SciChart's DateTimeNumericAxis automatically adjusts format based on visible range
   }
 
   /**
@@ -331,31 +308,14 @@ export class DynamicPaneManager {
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
 
-    // Create timezone-aware label formatter
-    const timezoneFormatter = (value: number): string => {
-      try {
-        const date = new Date(value);
-        return date.toLocaleString('en-US', {
-          timeZone: this.timezone,
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-      } catch (e) {
-        // Fallback to ISO string if timezone formatting fails
-        return new Date(value).toISOString();
-      }
-    };
-
-    // Create axes with timezone-aware formatting
+    // Create axes - let SciChart use its default intelligent datetime formatting
+    // SciChart automatically adapts the format based on zoom level (e.g., "08:25" when zoomed in, "12/08" when zoomed out)
     const xAxis = new DateTimeNumericAxis(wasmContext, {
       autoRange: EAutoRange.Once,
       drawMajorGridLines: true, // Enable grid lines
-      drawMinorGridLines: true, // Enable minor grid lines
+      drawMinorGridLines: false, // Disable minor grid lines for better performance
+      drawMajorTickLines: true,
+      drawMinorTickLines: false, // Disable minor ticks for better performance
       isVisible: true,
       useNativeText: true,
       useSharedCache: true,
@@ -364,27 +324,14 @@ export class DynamicPaneManager {
       // axisTitle: "Time",
       // axisTitleStyle: { color: "#9fb2c9" },
       labelStyle: { color: "#9fb2c9" },
-      // Apply timezone-aware label formatting
-      // Note: SciChart may use labelProvider or labelFormat - check API docs
-      // For now, we'll try to set it via labelProvider if available
     });
-    
-    // Apply timezone formatter after axis creation
-    // SciChart DateTimeNumericAxis may expose labelProvider or formatLabel
-    try {
-      if ((xAxis as any).labelProvider) {
-        (xAxis as any).labelProvider.formatLabel = timezoneFormatter;
-      } else if ((xAxis as any).formatLabel) {
-        (xAxis as any).formatLabel = timezoneFormatter;
-      }
-    } catch (e) {
-      console.warn('[DynamicPaneManager] Could not apply timezone formatter (may not be supported by SciChart version):', e);
-    }
 
     const yAxis = new NumericAxis(wasmContext, {
       autoRange: EAutoRange.Once,
       drawMajorGridLines: true, // Enable grid lines
-      drawMinorGridLines: true, // Enable minor grid lines
+      drawMinorGridLines: false, // Disable minor grid lines for better performance
+      drawMajorTickLines: true,
+      drawMinorTickLines: false, // Disable minor ticks for better performance
       axisAlignment: EAxisAlignment.Right,
       useNativeText: true,
       useSharedCache: true,

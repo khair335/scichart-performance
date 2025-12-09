@@ -15,6 +15,13 @@ export interface PlotLayout {
   panes: PaneConfig[];
   series: SeriesAssignment[];
   strategy_markers?: StrategyMarkersConfig;
+  xAxis?: {
+    defaultRange?: {
+      mode: 'lastMinutes' | 'lastHours' | 'entireSession' | 'custom';
+      value?: number; // Minutes or hours depending on mode, or custom range [min, max] in ms
+      customRange?: [number, number]; // [min, max] in milliseconds (Unix timestamp)
+    };
+  };
   meta?: {
     version: string;
   };
@@ -84,6 +91,7 @@ export interface ParsedLayout {
   paneToSeriesMap: Map<string, string[]>; // pane.id -> series_id[]
   strategyMarkerPanes: Set<string>; // pane.id[] that should show strategy markers
   minimapSourceSeries?: string;
+  xAxisDefaultRange?: PlotLayout['xAxis']['defaultRange']; // Default X-axis range from layout
 }
 
 /**
@@ -334,6 +342,7 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     paneToSeriesMap,
     strategyMarkerPanes,
     minimapSourceSeries: layout.minimap?.source.series_id,
+    xAxisDefaultRange: layout.xAxis?.defaultRange,
   };
 }
 

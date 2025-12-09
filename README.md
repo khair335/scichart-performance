@@ -57,15 +57,15 @@ python server.py `
     --mode session `
     --instrument MESU5 `
     --session-ms 23400000 `
-    --tick-hz 40 `
-    --indicator-windows "10,20,30,40,50,60,70,80,90" `
+    --tick-hz 25 `
+    --indicator-windows "10,20,30,40,50" `
     --bar-intervals "10000,30000" `
     --strategy-rate-per-min 2 `
     --strategy-hold-bars 5 `
     --strategy-max-open 3 `
     --total-samples 12000000 `
     --ring-capacity 12000000 `
-    --live-batch 2048 `
+    --live-batch 1024 `
     --price-model sine `
     --sine-period-sec 60
 ```

@@ -227,11 +227,11 @@ export function useMultiPaneChart({
     },
     performance: {
       targetFPS: 60,
-      batchSize: 1000,
-      downsampleRatio: 1,
-      maxAutoTicks: 8,
+      batchSize: 500, // Reduced for better responsiveness
+      downsampleRatio: 2, // Enable 2:1 downsampling to reduce data volume
+      maxAutoTicks: 6, // Reduced for better performance
       fifoEnabled: true,
-      fifoSweepSize: 50000,
+      fifoSweepSize: 50000, // FIFO sweep size for real-time data (50K points)
     },
     chart: {
       separateXAxes: false,
@@ -294,6 +294,70 @@ export function useMultiPaneChart({
   // Helper to get preallocation capacity for any series
   const getSeriesCapacity = (): number => {
     return config.data?.buffers.pointsPerSeries ?? 1_000_000;
+  };
+
+  // Helper to calculate default X-axis range from plot layout
+  const calculateDefaultXAxisRange = (
+    defaultRange: PlotLayout['xAxis']['defaultRange'],
+    latestTime: number,
+    dataMin?: number,
+    dataMax?: number
+  ): NumberRange | null => {
+    if (!defaultRange) return null;
+
+    const now = latestTime > 0 ? latestTime : Date.now();
+    let rangeMin: number;
+    let rangeMax: number;
+
+    switch (defaultRange.mode) {
+      case 'lastMinutes':
+        if (defaultRange.value && defaultRange.value > 0) {
+          const minutes = defaultRange.value;
+          rangeMin = now - (minutes * 60 * 1000);
+          rangeMax = now + (10 * 1000); // 10 seconds padding
+        } else {
+          return null;
+        }
+        break;
+
+      case 'lastHours':
+        if (defaultRange.value && defaultRange.value > 0) {
+          const hours = defaultRange.value;
+          rangeMin = now - (hours * 60 * 60 * 1000);
+          rangeMax = now + (10 * 1000); // 10 seconds padding
+        } else {
+          return null;
+        }
+        break;
+
+      case 'entireSession':
+        // Show all data in the buffer
+        if (dataMin !== undefined && dataMax !== undefined && dataMin < dataMax) {
+          const padding = (dataMax - dataMin) * 0.05; // 5% padding
+          rangeMin = dataMin - padding;
+          rangeMax = dataMax + padding;
+        } else {
+          // Fallback: use a large window if data range not available
+          const sessionWindow = 8 * 60 * 60 * 1000; // 8 hours
+          rangeMin = now - sessionWindow;
+          rangeMax = now + (10 * 1000);
+        }
+        break;
+
+      case 'custom':
+        if (defaultRange.customRange && defaultRange.customRange.length === 2) {
+          rangeMin = defaultRange.customRange[0];
+          rangeMax = defaultRange.customRange[1];
+        } else {
+          return null;
+        }
+        break;
+
+      default:
+        return null;
+    }
+
+    return new NumberRange(rangeMin, rangeMax);
   };
   
   // Helper to find first series of a given type from unified store
@@ -530,7 +594,7 @@ export function useMultiPaneChart({
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: false,
+          dataEvenlySpacedInX: true, // Time-series data is evenly spaced for better performance
         });
         
         renderableSeries = new FastCandlestickRenderableSeries(wasm, {
@@ -549,7 +613,7 @@ export function useMultiPaneChart({
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: false,
+          dataEvenlySpacedInX: true, // Time-series data is evenly spaced for better performance
         });
         
         // Get series assignment from layout for styling
@@ -586,7 +650,7 @@ export function useMultiPaneChart({
             fill: fill,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.MinMax,
+            resamplingMode: EResamplingMode.Auto, // Use Auto for better performance
           });
         } else {
           // Default to FastLineRenderableSeries
@@ -595,7 +659,7 @@ export function useMultiPaneChart({
             stroke: stroke,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.MinMax,
+            resamplingMode: EResamplingMode.Auto, // Use Auto for better performance
           });
         }
       }
@@ -666,6 +730,7 @@ export function useMultiPaneChart({
 
   const [isReady, setIsReady] = useState(false);
   const [parentSurfaceReady, setParentSurfaceReady] = useState(false);
+  const [overviewNeedsRefresh, setOverviewNeedsRefresh] = useState(0); // Counter to trigger overview refresh
   const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
   
   // FPS tracking using requestAnimationFrame to count actual browser frames
@@ -726,6 +791,7 @@ export function useMultiPaneChart({
   const lastYAxisUpdateRef = useRef(0);
   const isCleaningUpOverviewRef = useRef(false);
   const overviewContainerIdRef = useRef<string | null>(null); // Store the container ID used to create overview
+  const lastOverviewSourceRef = useRef<{ surfaceId?: string; minimapSourceSeries?: string } | null>(null); // Track last overview source
   const triggerYAxisScalingOnNextBatchRef = useRef(false); // Flag to trigger Y-axis scaling after data is processed
   
   // Track X-axis range state before tab is hidden to restore it when visible again
@@ -874,28 +940,8 @@ export function useMultiPaneChart({
         // Don't suspend updates initially - let the surface render once to initialize fonts
         // We'll suspend later when adding series
 
-        // Create timezone-aware label formatter for legacy axes
-        const timezone = config.chart.timezone || 'UTC';
-        const timezoneFormatter = (value: number): string => {
-          try {
-            const date = new Date(value);
-            return date.toLocaleString('en-US', {
-              timeZone: timezone,
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-              hour12: false,
-            });
-          } catch (e) {
-            // Fallback to ISO string if timezone formatting fails
-            return new Date(value).toISOString();
-          }
-        };
-
         // Configure tick axes - each pane has its own X-axis
+        // Let SciChart use its default intelligent datetime formatting (adapts based on zoom level)
         const tickXAxis = new DateTimeNumericAxis(tickWasm, {
           autoRange: EAutoRange.Once,
           drawMajorGridLines: false, // Disable gridlines for better FPS
@@ -909,17 +955,6 @@ export function useMultiPaneChart({
           axisTitleStyle: { color: "#9fb2c9" },
           labelStyle: { color: "#9fb2c9" },
         });
-        
-        // Apply timezone formatter to legacy tick X-axis
-        try {
-          if ((tickXAxis as any).labelProvider) {
-            (tickXAxis as any).labelProvider.formatLabel = timezoneFormatter;
-          } else if ((tickXAxis as any).formatLabel) {
-            (tickXAxis as any).formatLabel = timezoneFormatter;
-          }
-        } catch (e) {
-          console.warn('[MultiPaneChart] Could not apply timezone formatter to tick X-axis:', e);
-        }
 
         const tickYAxis = new NumericAxis(tickWasm, {
           autoRange: EAutoRange.Once, // Changed from Always to Once to prevent Y-axis jumping
@@ -973,6 +1008,7 @@ export function useMultiPaneChart({
         // We'll suspend later when adding series
 
         // Configure OHLC axes - separate X-axis for OHLC pane
+        // Let SciChart use its default intelligent datetime formatting (adapts based on zoom level)
         const ohlcXAxis = new DateTimeNumericAxis(ohlcWasm, {
           autoRange: EAutoRange.Once,
           drawMajorGridLines: false, // Disable gridlines for better FPS
@@ -987,17 +1023,6 @@ export function useMultiPaneChart({
           axisTitleStyle: { color: "#9fb2c9" },
           labelStyle: { color: "#9fb2c9" },
         });
-        
-        // Apply timezone formatter to OHLC X-axis
-        try {
-          if ((ohlcXAxis as any).labelProvider) {
-            (ohlcXAxis as any).labelProvider.formatLabel = timezoneFormatter;
-          } else if ((ohlcXAxis as any).formatLabel) {
-            (ohlcXAxis as any).formatLabel = timezoneFormatter;
-          }
-        } catch (e) {
-          console.warn('[MultiPaneChart] Could not apply timezone formatter to OHLC X-axis:', e);
-        }
 
         const ohlcYAxis = new NumericAxis(ohlcWasm, {
           autoRange: EAutoRange.Once, // Changed from Always to Once to prevent Y-axis jumping
@@ -1134,7 +1159,10 @@ export function useMultiPaneChart({
       chartRefs.current.ohlcSurface?.delete();
       // Then delete overview - it shares DataSeries, so must be deleted after main surfaces
       // This ensures the main chart's DataSeries are cleaned up first
-      chartRefs.current.overview?.delete();
+      if (chartRefs.current.overview) {
+        chartRefs.current.overview.delete();
+        lastOverviewSourceRef.current = null;
+      }
     };
   }, [tickContainerId, ohlcContainerId, plotLayout]);
 
@@ -1180,12 +1208,38 @@ export function useMultiPaneChart({
         if (plotLayout?.minimapSourceSeries) {
           // Dynamic layout with minimap - find the surface that contains the source series
           minimapSourceSeriesId = plotLayout.minimapSourceSeries;
-          const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-          if (sourceSeriesEntry?.paneId) {
-            const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
+          
+          // Method 1: Find pane from layout (more reliable - doesn't depend on dataSeriesStore)
+          const sourceSeriesAssignment = plotLayout.layout.series.find(
+            s => s.series_id === minimapSourceSeriesId
+          );
+          if (sourceSeriesAssignment?.pane) {
+            const paneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane);
             if (paneSurface) {
               sourceSurface = paneSurface.surface;
-            
+              console.log('[MultiPaneChart] Found source surface from layout:', {
+                seriesId: minimapSourceSeriesId,
+                paneId: sourceSeriesAssignment.pane,
+                surfaceId: sourceSurface?.id,
+                seriesCount: sourceSurface.renderableSeries.size()
+              });
+            }
+          }
+          
+          // Method 2: Fallback - try dataSeriesStore (in case paneId is set)
+          if (!sourceSurface) {
+            const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+            if (sourceSeriesEntry?.paneId) {
+              const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
+              if (paneSurface) {
+                sourceSurface = paneSurface.surface;
+                console.log('[MultiPaneChart] Found source surface from dataSeriesStore:', {
+                  seriesId: minimapSourceSeriesId,
+                  paneId: sourceSeriesEntry.paneId,
+                  surfaceId: sourceSurface?.id,
+                  seriesCount: sourceSurface.renderableSeries.size()
+                });
+              }
             }
           }
         }
@@ -1193,7 +1247,7 @@ export function useMultiPaneChart({
         // Fallback to legacy tickSurface if no dynamic pane found
         if (!sourceSurface && refs.tickSurface) {
           sourceSurface = refs.tickSurface;
-
+          console.log('[MultiPaneChart] Using legacy tickSurface for overview');
         }
         
         if (!sourceSurface) {
@@ -1207,11 +1261,100 @@ export function useMultiPaneChart({
         }
         
         if (overviewContainer) {
-          // If overview already exists, reuse it (visibility controlled by CSS in parent component)
+          // Check if overview needs to be recreated (e.g., when layout changes and source surface changes)
+          let needsRecreate = false;
+          const currentSourceInfo = {
+            surfaceId: sourceSurface?.id || (sourceSurface as any)?._id || undefined,
+            minimapSourceSeries: minimapSourceSeriesId
+          };
+          
           if (refs.overview) {
+            const lastSource = lastOverviewSourceRef.current;
+            // Recreate if minimap source series changed or if we can't determine the surface
+            if (lastSource?.minimapSourceSeries !== currentSourceInfo.minimapSourceSeries ||
+                (lastSource?.minimapSourceSeries && !currentSourceInfo.minimapSourceSeries) ||
+                (!lastSource?.minimapSourceSeries && currentSourceInfo.minimapSourceSeries)) {
+              needsRecreate = true;
+              console.log('[MultiPaneChart] Minimap source series changed, recreating overview', {
+                old: lastSource?.minimapSourceSeries,
+                new: currentSourceInfo.minimapSourceSeries
+              });
+            } else if (lastSource?.surfaceId && currentSourceInfo.surfaceId && 
+                       lastSource.surfaceId !== currentSourceInfo.surfaceId) {
+              needsRecreate = true;
+              console.log('[MultiPaneChart] Source surface changed, recreating overview', {
+                old: lastSource.surfaceId,
+                new: currentSourceInfo.surfaceId
+              });
+            }
+          }
+          
+          // If overview exists but source changed, delete and recreate
+          if (refs.overview && needsRecreate) {
+            try {
+              refs.overview.delete();
+              refs.overview = null;
+              lastOverviewSourceRef.current = null;
+            } catch (e) {
+              console.warn('[MultiPaneChart] Error deleting old overview:', e);
+            }
+          }
+          
+          // Create new overview if it doesn't exist or was recreated
+          if (!refs.overview) {
+            // CRITICAL: Wait for series to be added to the surface before creating overview
+            // When layout changes, series might not be on the surface yet
+            let retries = 0;
+            const maxRetries = 10; // 10 retries * 200ms = 2 seconds max wait
+            let surfaceHasSeries = false;
             
-          } else {
-            // Create new overview (only once, then keep it alive)
+            while (retries < maxRetries && !surfaceHasSeries && !isCancelled) {
+              // Check if source surface has any renderable series
+              const seriesCount = sourceSurface.renderableSeries.size();
+              surfaceHasSeries = seriesCount > 0;
+              
+              if (!surfaceHasSeries) {
+                // Wait a bit for series to be added
+                await new Promise(resolve => setTimeout(resolve, 200));
+                retries++;
+                
+                // Re-check source surface in case it changed during wait
+                if (plotLayout?.minimapSourceSeries) {
+                  minimapSourceSeriesId = plotLayout.minimapSourceSeries;
+                  
+                  // Try layout first
+                  const sourceSeriesAssignment = plotLayout.layout.series.find(
+                    s => s.series_id === minimapSourceSeriesId
+                  );
+                  if (sourceSeriesAssignment?.pane) {
+                    const paneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane);
+                    if (paneSurface && paneSurface.surface !== sourceSurface) {
+                      sourceSurface = paneSurface.surface;
+                    }
+                  } else {
+                    // Fallback to dataSeriesStore
+                    const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+                    if (sourceSeriesEntry?.paneId) {
+                      const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
+                      if (paneSurface && paneSurface.surface !== sourceSurface) {
+                        sourceSurface = paneSurface.surface;
+                      }
+                    }
+                  }
+                } else if (!sourceSurface && refs.tickSurface) {
+                  sourceSurface = refs.tickSurface;
+                }
+              }
+            }
+            
+            if (isCancelled) return;
+            
+            // Create overview even if no series yet (it will show empty until series are added)
+            // But log a warning if we had to wait
+            if (retries > 0) {
+              console.log(`[MultiPaneChart] Waited ${retries * 200}ms for series to be added to source surface before creating overview`);
+            }
+            
             const overview = await SciChartOverview.create(sourceSurface, overviewContainerId, {
               theme: chartTheme,
             });
@@ -1219,6 +1362,12 @@ export function useMultiPaneChart({
             if (!isCancelled) {
               refs.overview = overview;
               overviewContainerIdRef.current = overviewContainerId; // Store the ID used
+              
+              // Track the source info for future comparisons
+              lastOverviewSourceRef.current = {
+                surfaceId: sourceSurface?.id || (sourceSurface as any)?._id || undefined,
+                minimapSourceSeries: minimapSourceSeriesId
+              };
               
               // Check if minimap source series has data and show/hide "Waiting for Data" overlay
               if (minimapSourceSeriesId) {
@@ -1258,7 +1407,9 @@ export function useMultiPaneChart({
 
     // NO CLEANUP HERE - we only delete on component unmount (see main useEffect cleanup)
     // This prevents the overview from being deleted when overviewContainerId changes
-  }, [overviewContainerId, isReady]);
+    // Note: plotLayout is included so overview recreates when layout changes
+    // Note: overviewNeedsRefresh triggers recreation when series are added
+  }, [overviewContainerId, isReady, plotLayout, overviewNeedsRefresh]);
 
   // Separate cleanup effect that only runs on component unmount
   useEffect(() => {
@@ -1282,6 +1433,7 @@ export function useMultiPaneChart({
               refs.overview.delete();
               refs.overview = null;
               overviewContainerIdRef.current = null;
+              lastOverviewSourceRef.current = null;
             }
             refs.tickSurface.resumeUpdates();
             if (refs.ohlcSurface) {
@@ -1760,6 +1912,67 @@ export function useMultiPaneChart({
       // Invalidate all dynamic panes
       for (const [paneId, paneSurface] of refs.paneSurfaces) {
         paneSurface.surface.invalidateElement();
+      }
+      
+      // If overview exists, check if it needs to be recreated because series were just added
+      // This handles the case where overview was created before series were added to the new surface
+      if (refs.overview && plotLayout?.minimapSourceSeries && newSeriesCount > 0) {
+        const minimapSourceSeriesId = plotLayout.minimapSourceSeries;
+        
+        // Find the correct source surface from layout
+        const sourceSeriesAssignment = plotLayout.layout.series.find(
+          s => s.series_id === minimapSourceSeriesId
+        );
+        let correctPaneSurface: PaneSurface | null = null;
+        
+        if (sourceSeriesAssignment?.pane) {
+          correctPaneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane) || null;
+        } else {
+          // Fallback to dataSeriesStore
+          const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+          if (sourceSeriesEntry?.paneId) {
+            correctPaneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId) || null;
+          }
+        }
+        
+        if (correctPaneSurface && correctPaneSurface.surface.renderableSeries.size() > 0) {
+          // Check if overview is pointing to the correct surface
+          try {
+            const overviewSurface = (refs.overview as any).sciChartSurface;
+            const currentSourceSurface = (overviewSurface as any)?._sourceSurface || 
+                                        (overviewSurface as any)?.parentSurface;
+            
+            // If overview is pointing to wrong surface, or if it's pointing to correct surface but empty, recreate
+            const isWrongSurface = currentSourceSurface !== correctPaneSurface.surface;
+            const hasNoSeries = overviewSurface?.renderableSeries?.size() === 0;
+            
+            if (isWrongSurface || hasNoSeries) {
+              console.log('[MultiPaneChart] Overview needs recreation after series added:', {
+                isWrongSurface,
+                hasNoSeries,
+                correctSurfaceId: correctPaneSurface.surface?.id,
+                currentSourceId: currentSourceSurface?.id,
+                seriesCount: correctPaneSurface.surface.renderableSeries.size()
+              });
+              
+              // Delete and recreate overview
+              try {
+                refs.overview.delete();
+                refs.overview = null;
+                lastOverviewSourceRef.current = null;
+                // Trigger overview recreation by incrementing refresh counter
+                setOverviewNeedsRefresh(prev => prev + 1);
+              } catch (e) {
+                console.warn('[MultiPaneChart] Error deleting overview for recreation:', e);
+              }
+            } else {
+              // Just refresh the overview
+              overviewSurface.invalidateElement();
+            }
+          } catch (e) {
+            console.warn('[MultiPaneChart] Error checking overview state:', e);
+          }
+        }
       }
     }
   }, [registry, visibleSeries, isReady, plotLayout]);
@@ -2573,6 +2786,7 @@ export function useMultiPaneChart({
 
   // Process accumulated samples and update chart
   const processBatchedSamples = useCallback(() => {
+    const processStartTime = performance.now();
     const refs = chartRefs.current;
     const isTabHidden = document.hidden;
     
@@ -2609,33 +2823,45 @@ export function useMultiPaneChart({
      
     }
     
-    // Batch sizing: allow reasonably large batches for smooth auto-scroll without overloading WASM.
-    // Batch size from UI config
-    // CRITICAL: When tab is hidden, use larger batches to process data faster
-    // This ensures we keep up with incoming data even when tab is hidden
+    // OPTIMIZATION: Dynamic batch sizing based on data rate and backlog
+    // For high data rates (5000+ samples/sec), we need much larger batches to keep up
     const baseBatchSize = config.performance.batchSize;
+    const backlogSize = allSamples.length;
     
-    // Adjust batch size based on number of active series (multiple instruments = more data)
-    // With multiple instruments, we need larger batches to keep up with higher data rates
-    // But keep it reasonable to avoid CPU spikes
+    // Calculate estimated data rate from backlog growth
+    // If backlog is growing, increase batch size aggressively
     const activeSeriesCount = refs.dataSeriesStore.size;
     const isMultipleInstruments = activeSeriesCount > 10;
-    // Moderate multiplier for multiple instruments (2x instead of 3x to reduce CPU load)
-    const multiInstrumentMultiplier = isMultipleInstruments ? 2 : 1;
-    const adjustedBaseBatchSize = baseBatchSize * multiInstrumentMultiplier;
     
-    // When tab is hidden, use much larger batches to catch up faster
-    // If there's a large backlog (>10000 samples), process even larger batches
-    // For multiple instruments, be more aggressive with batch sizes
-    const backlogSize = allSamples.length;
-    const backlogThreshold = isMultipleInstruments ? 2000 : 5000; // Lower threshold for multiple instruments
-    const MAX_BATCH_SIZE = isTabHidden 
-      ? (backlogSize > 10000 
-          ? Math.min(10000, backlogSize) // Process up to 10k at once for large backlogs
-          : Math.min(adjustedBaseBatchSize * 5, 5000)) // 5x batch size when hidden, max 5000
-      : (backlogSize > backlogThreshold 
-          ? Math.min(backlogThreshold * 2, backlogSize) // Process larger batches if backlog is building up
-          : adjustedBaseBatchSize);
+    // CRITICAL: For high data rates, process much larger batches
+    // At 5347 samples/sec, we need to process ~89 samples per frame at 60fps
+    // But we should batch more to reduce overhead (aim for 200-500 per batch)
+    let MAX_BATCH_SIZE: number;
+    
+    // AGGRESSIVE OPTIMIZATION: Cap batch sizes to prevent overwhelming the system
+    // Even with large backlogs, process in smaller chunks to maintain responsiveness
+    const MAX_SAFE_BATCH_SIZE = 2000; // Cap at 2k to prevent lag spikes
+    
+    if (isTabHidden) {
+      // When hidden, process more aggressively but still cap
+      MAX_BATCH_SIZE = backlogSize > 10000 
+        ? Math.min(MAX_SAFE_BATCH_SIZE * 2, backlogSize) // Very large backlogs: up to 4k
+        : backlogSize > 5000
+        ? Math.min(MAX_SAFE_BATCH_SIZE, backlogSize) // Large backlogs: up to 2k
+        : Math.min(baseBatchSize * 3, MAX_SAFE_BATCH_SIZE); // Normal: 3x batch size, max 2k
+    } else {
+      // When visible, prioritize smooth rendering over catching up
+      if (backlogSize > 5000) {
+        // Critical backlog: process in chunks to prevent lag
+        MAX_BATCH_SIZE = Math.min(MAX_SAFE_BATCH_SIZE, backlogSize);
+      } else if (backlogSize > 2000) {
+        // Large backlog: process 1.5x batch size
+        MAX_BATCH_SIZE = Math.min(baseBatchSize * 1.5, backlogSize);
+      } else {
+        // Normal operation: use base batch size
+        MAX_BATCH_SIZE = baseBatchSize;
+      }
+    }
     
     const samples = allSamples.length > MAX_BATCH_SIZE
       ? allSamples.slice(0, MAX_BATCH_SIZE)
@@ -2834,14 +3060,50 @@ export function useMultiPaneChart({
           // Continue anyway - surface might already be suspended
         }
         
-        // Suspend all dynamic panes
-        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+        // OPTIMIZATION: When using SubCharts, suspend the parent surface instead of individual subsurfaces
+        // This is more efficient and reduces overhead
+        const paneManager = paneManagerRef.current;
+        if (paneManager && refs.paneSurfaces.size > 0) {
           try {
-            paneSurface.surface.suspendUpdates();
-            suspendedPanes.set(paneId, true);
+            const parentSurface = (paneManager as any).parentSurface;
+            if (parentSurface) {
+              parentSurface.suspendUpdates();
+              // Mark all panes as suspended via parent
+              for (const [paneId] of refs.paneSurfaces) {
+                suspendedPanes.set(paneId, true);
+              }
+            } else {
+              // Fallback: suspend individual panes if parent not available
+              for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                try {
+                  paneSurface.surface.suspendUpdates();
+                  suspendedPanes.set(paneId, true);
+                } catch (suspendError) {
+                  console.warn(`[MultiPaneChart] Error suspending pane ${paneId}:`, suspendError);
+                }
+              }
+            }
           } catch (suspendError) {
-            console.warn(`[MultiPaneChart] Error suspending pane ${paneId}:`, suspendError);
-            // Continue anyway
+            console.warn('[MultiPaneChart] Error suspending parent surface, falling back to individual panes:', suspendError);
+            // Fallback: suspend individual panes
+            for (const [paneId, paneSurface] of refs.paneSurfaces) {
+              try {
+                paneSurface.surface.suspendUpdates();
+                suspendedPanes.set(paneId, true);
+              } catch (suspendError2) {
+                console.warn(`[MultiPaneChart] Error suspending pane ${paneId}:`, suspendError2);
+              }
+            }
+          }
+        } else {
+          // No pane manager or no panes - suspend individual panes if they exist
+          for (const [paneId, paneSurface] of refs.paneSurfaces) {
+            try {
+              paneSurface.surface.suspendUpdates();
+              suspendedPanes.set(paneId, true);
+            } catch (suspendError) {
+              console.warn(`[MultiPaneChart] Error suspending pane ${paneId}:`, suspendError);
+            }
           }
         }
       }
@@ -2875,6 +3137,11 @@ export function useMultiPaneChart({
       const panesNeedingUpdate = new Set<string>();
       let minimapNeedsUpdate = false;
 
+      // OPTIMIZATION: Reuse Float64Array buffers to reduce allocations
+      // Create buffer pool for common sizes (reuse across appends)
+      // Note: We still need to create new arrays for each append since appendRange may modify them
+      // But we can optimize by directly using Float64Array.from which is faster than new Float64Array
+
       // Append data to all series using unified store
       for (const [seriesId, buf] of seriesBuffers) {
         const seriesEntry = refs.dataSeriesStore.get(seriesId);
@@ -2887,12 +3154,13 @@ export function useMultiPaneChart({
           if (seriesEntry.seriesType === 'ohlc-bar') {
             // OHLC bar data - use OhlcDataSeries.appendRange
             if (buf.x.length > 0 && buf.o && buf.h && buf.l && buf.c) {
-              // OPTIMIZATION: Create typed arrays directly (already arrays from buffer)
-              const xArr = new Float64Array(buf.x);
-              const oArr = new Float64Array(buf.o);
-              const hArr = new Float64Array(buf.h);
-              const lArr = new Float64Array(buf.l);
-              const cArr = new Float64Array(buf.c);
+              // OPTIMIZATION: Use Float64Array.from which is optimized for array conversion
+              // This is faster than new Float64Array() for array inputs
+              const xArr = Float64Array.from(buf.x);
+              const oArr = Float64Array.from(buf.o!);
+              const hArr = Float64Array.from(buf.h!);
+              const lArr = Float64Array.from(buf.l!);
+              const cArr = Float64Array.from(buf.c!);
 
               (seriesEntry.dataSeries as OhlcDataSeries).appendRange(xArr, oArr, hArr, lArr, cArr);
 
@@ -2914,9 +3182,10 @@ export function useMultiPaneChart({
           } else {
             // All other series (tick, indicators, strategy) use XyDataSeries.appendRange
             if (buf.x.length > 0 && buf.y) {
-              // OPTIMIZATION: Create typed arrays directly
-              const xArr = new Float64Array(buf.x);
-              const yArr = new Float64Array(buf.y);
+              // OPTIMIZATION: Use Float64Array.from which is optimized for array conversion
+              // This is faster than new Float64Array() for array inputs
+              const xArr = Float64Array.from(buf.x);
+              const yArr = Float64Array.from(buf.y!);
 
               (seriesEntry.dataSeries as XyDataSeries).appendRange(xArr, yArr);
 
@@ -2942,6 +3211,7 @@ export function useMultiPaneChart({
                   const duplicateEntry = refs.dataSeriesStore.get(duplicateKey);
                   if (duplicateEntry) {
                     try {
+                      // Reuse the same buffers for duplicates (no need to recreate)
                       (duplicateEntry.dataSeries as XyDataSeries).appendRange(xArr, yArr);
 
                       if (duplicateEntry.paneId) {
@@ -2978,18 +3248,39 @@ export function useMultiPaneChart({
       }
 
       // OPTIMIZATION: Batch DOM updates after the loop (not inside it)
-      for (const paneId of panesNeedingUpdate) {
-        updatePaneWaitingOverlay(refs, layoutManager, paneId, plotLayout);
-      }
-
-      if (minimapNeedsUpdate) {
-        const waitingOverlay = document.getElementById('overview-chart-waiting');
-        if (waitingOverlay) {
-          waitingOverlay.style.display = 'none';
-        }
+      // Defer DOM updates to next frame to avoid blocking rendering
+      if (panesNeedingUpdate.size > 0 || minimapNeedsUpdate) {
+        requestAnimationFrame(() => {
+          for (const paneId of panesNeedingUpdate) {
+            updatePaneWaitingOverlay(refs, layoutManager, paneId, plotLayout);
+          }
+          if (minimapNeedsUpdate) {
+            const waitingOverlay = document.getElementById('overview-chart-waiting');
+            if (waitingOverlay) {
+              waitingOverlay.style.display = 'none';
+            }
+          }
+        });
       }
 
       // OPTIMIZATION: Removed verbose logging to reduce CPU
+      
+      // OPTIMIZATION: Check if processing took too long - if so, skip next frame
+      const processTime = performance.now() - processStartTime;
+      const MAX_FRAME_TIME_MS = FRAME_INTERVAL_MS * 1.2; // Stricter: only 20% overhead allowed
+      if (processTime > MAX_FRAME_TIME_MS) {
+        // Processing took too long - skip next frame to prevent lag accumulation
+        frameSkipCountRef.current++;
+        // AGGRESSIVE: Increase delay when falling behind to let browser catch up
+        const delay = processTime > FRAME_INTERVAL_MS * 2 ? 16 : 8;
+        if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
+          pendingUpdateRef.current = setTimeout(() => {
+            pendingUpdateRef.current = null;
+            processBatchedSamples();
+          }, delay);
+        }
+        return;
+      }
     } catch (error) {
       console.error('[MultiPaneChart] WASM memory error in data append:', error);
       // Critical error - likely WASM out of memory
@@ -3039,10 +3330,36 @@ export function useMultiPaneChart({
         resumeWithRetry(refs.tickSurface, 'tickSurface', tickSuspended);
         resumeWithRetry(refs.ohlcSurface, 'ohlcSurface', ohlcSuspended);
         
-        // Resume all dynamic panes
-        for (const [paneId, paneSurface] of refs.paneSurfaces) {
-          if (suspendedPanes.get(paneId)) {
-            resumeWithRetry(paneSurface.surface, `pane-${paneId}`, true);
+        // OPTIMIZATION: Resume parent surface if we suspended it, otherwise resume individual panes
+        const paneManager = paneManagerRef.current;
+        if (paneManager && refs.paneSurfaces.size > 0 && suspendedPanes.size > 0) {
+          try {
+            const parentSurface = (paneManager as any).parentSurface;
+            if (parentSurface) {
+              resumeWithRetry(parentSurface, 'parentSurface', true);
+            } else {
+              // Fallback: resume individual panes
+              for (const [paneId, paneSurface] of refs.paneSurfaces) {
+                if (suspendedPanes.get(paneId)) {
+                  resumeWithRetry(paneSurface.surface, `pane-${paneId}`, true);
+                }
+              }
+            }
+          } catch (resumeError) {
+            console.warn('[MultiPaneChart] Error resuming parent surface, falling back to individual panes:', resumeError);
+            // Fallback: resume individual panes
+            for (const [paneId, paneSurface] of refs.paneSurfaces) {
+              if (suspendedPanes.get(paneId)) {
+                resumeWithRetry(paneSurface.surface, `pane-${paneId}`, true);
+              }
+            }
+          }
+        } else {
+          // Resume individual panes
+          for (const [paneId, paneSurface] of refs.paneSurfaces) {
+            if (suspendedPanes.get(paneId)) {
+              resumeWithRetry(paneSurface.surface, `pane-${paneId}`, true);
+            }
           }
         }
       }
@@ -3055,21 +3372,38 @@ export function useMultiPaneChart({
       // This ensures background processing continues even during range restoration
       if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
         const isTabHidden = document.hidden;
-        if (isTabHidden) {
-          isUsingTimeoutRef.current = true;
-          pendingUpdateRef.current = setTimeout(() => {
-            pendingUpdateRef.current = null;
-            processBatchedSamples();
-          }, 16);
-        } else {
-          isUsingTimeoutRef.current = false;
-          pendingUpdateRef.current = requestAnimationFrame(() => {
-            pendingUpdateRef.current = null;
-            processBatchedSamples();
-          });
-        }
+        // OPTIMIZATION: Use shorter timeout for faster processing when hidden
+        const delay = isTabHidden ? 8 : FRAME_INTERVAL_MS;
+        isUsingTimeoutRef.current = true;
+        pendingUpdateRef.current = setTimeout(() => {
+          pendingUpdateRef.current = null;
+          processBatchedSamples();
+        }, delay);
       }
       return; // Skip chart rendering but data is already appended
+    }
+    
+    // OPTIMIZATION: Schedule next update more efficiently
+    // If we have more samples, schedule immediately with minimal delay
+    if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
+      const isTabHidden = document.hidden;
+      const backlogSize = sampleBufferRef.current.length;
+      
+      // For large backlogs, use setTimeout with shorter delay to process faster
+      if (backlogSize > 5000 || isTabHidden) {
+        isUsingTimeoutRef.current = true;
+        pendingUpdateRef.current = setTimeout(() => {
+          pendingUpdateRef.current = null;
+          processBatchedSamples();
+        }, 8); // Very short delay for fast processing
+      } else {
+        // Normal operation: use requestAnimationFrame for smooth rendering
+        isUsingTimeoutRef.current = false;
+        pendingUpdateRef.current = requestAnimationFrame(() => {
+          pendingUpdateRef.current = null;
+          processBatchedSamples();
+        });
+      }
     }
     
     // CRITICAL: If Y-axis scaling was requested (e.g., on live transition), do it now after data is processed
@@ -3663,19 +3997,31 @@ export function useMultiPaneChart({
                   }
                   
                   // Determine the range to show based on actual data
+                  // Check if plot layout specifies a default X-axis range
                   let liveRange: NumberRange;
                   
                   if (hasData && dataMax > 0) {
-                    // CRITICAL: In live mode, always show the latest data with a small, focused window
-                    // Use a fixed 2-minute window to ensure latest data is always visible
-                    // This ensures users can always see the live data, regardless of history size
-                    const windowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-                    
-                    // Show latest data: range ends at latest data point (or slightly ahead for padding)
-                    // This ensures the latest series line is always in the current view
-                    const latestDataTime = dataMax;
-                    const padding = 10 * 1000; // 10 seconds padding after latest data
-                    liveRange = new NumberRange(latestDataTime - windowMs, latestDataTime + padding);
+                    // Check for default range from plot layout
+                    const defaultRange = plotLayout?.xAxisDefaultRange;
+                    const calculatedRange = defaultRange 
+                      ? calculateDefaultXAxisRange(defaultRange, dataMax, dataMin, dataMax)
+                      : null;
+
+                    if (calculatedRange) {
+                      // Use range from plot layout
+                      liveRange = calculatedRange;
+                    } else {
+                      // CRITICAL: In live mode, always show the latest data with a small, focused window
+                      // Use a fixed 2-minute window to ensure latest data is always visible
+                      // This ensures users can always see the live data, regardless of history size
+                      const windowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
+                      
+                      // Show latest data: range ends at latest data point (or slightly ahead for padding)
+                      // This ensures the latest series line is always in the current view
+                      const latestDataTime = dataMax;
+                      const padding = 10 * 1000; // 10 seconds padding after latest data
+                      liveRange = new NumberRange(latestDataTime - windowMs, latestDataTime + padding);
+                    }
                     
                 
                     

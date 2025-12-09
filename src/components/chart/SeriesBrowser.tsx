@@ -118,7 +118,7 @@ export function SeriesBrowser({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-80 bg-sidebar border-sidebar-border">
+      <SheetContent side="right" className="w-[500px] sm:w-[600px] sm:max-w-[600px] bg-sidebar border-sidebar-border">
         <SheetHeader>
           <SheetTitle className="text-sidebar-foreground">Discovered Series</SheetTitle>
         </SheetHeader>

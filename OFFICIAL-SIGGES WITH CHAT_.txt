@@ -1,0 +1,720 @@
+to achieve the best performance using SciChart Sub Chart API for large data streams from a WebSocket over an extended period (like 8 hours) with your described data parameters, here are recommended best practices:
+
+
+Use Streaming and Partial Data Updates:
+
+Leverage SciChart's real-time continuous streaming capabilities to append data points incrementally rather than reloading the entire dataset.
+Batch incoming data in chunks (e.g., your --live-batch 2048) and append them to the chart to reduce rendering overhead.
+
+Optimize Data Structures and Ring Buffers:
+
+Utilize a ring buffer for your series data (as indicated by --ring-capacity 12000000) to manage memory efficiently and prevent uncontrolled memory growth over time.
+Make sure to use append-only, FIFO data structures supported by SciChart for high throughput.
+
+Sub-second GPU-Accelerated Rendering:
+
+SciChart's GPU acceleration and WebAssembly-powered architecture enable sub-second rendering even with millions of points.
+Ensure your setup enables GPU acceleration and optimize chart settings to utilize hardware acceleration.
+
+Minimize Redraw Operations:
+
+Reduce unnecessary chart redraws by freezing updates during batch data processing and then unfreezing for a single redraw.
+Avoid expensive operations inside the render loop, e.g., heavy annotations or complex interactions that are not needed every frame.
+
+Use Multi-Channel and Linked Charts Sparingly:
+
+While SciChart supports multiple linked charts, limit the number to what is essential to reduce processing overhead.
+Optimize viewport and zoom/pan syncing for multiple subcharts carefully.
+
+Memory Management:
+
+Set limits on displayed data points for visualization (e.g., viewport window) to keep only recent data visible but keep full data in buffers.
+Periodically clear old data outside the viewport if it's no longer needed for analysis.
+
+Efficient Data Transfer from WebSocket:
+
+Use efficient data encoding (binary or compressed text) if possible to reduce processing time on the client.
+Batch updates before sending to the chart, matching your --emit-samples-per-sec 20000 data velocity.
+
+Testing & Profiling:
+
+Regularly test your application's memory and CPU usage over long durations.
+Profile render times and adjust parameters like batch size, redraw frequency, and data retention accordingly.
+
+SciChart shows industry-leading performance characteristics such as handling 100M+ points per dataset and sustaining 200K points per second, so following these principles will help you run multiple-hour sessions smoothly.
+
+
+----------
+
+
+Best Practices for Using SciChart.js in React with Large Data Streams
+
+Use the scichart-react Component:
+
+This package manages chart lifecycle in React efficiently and avoids memory leaks or unnecessary re-renders.
+Wrap your chart inside <SciChartReact /> for best integration with React.
+
+Batch Data Updates:
+
+Buffer incoming WebSocket data and update the chart in batches (e.g., your live-batch size of 2048).
+Avoid updating on every single data point to reduce CPU load and chart re-renders.
+
+Use appendData Method on DataSeries:
+
+Append points incrementally to the underlying IXyDataSeries or similar rather than replacing or resetting the series.
+This ensures minimal overhead and smooth real-time streaming.
+
+Limit Visible Data (Viewport):
+
+Keep only a window of data points visible using xAxis.visibleRange to improve rendering speed.
+Store full data in memory if needed, but restrict the visible range for the GPU rendering.
+
+Debounce or Throttle Renders:
+
+Control how often the chart updates in React state or effects based on data frequency.
+Use appropriate debounce/throttle techniques to avoid flooding the UI update cycle.
+
+Enable Hardware Acceleration:
+
+SciChart.js internally uses WebAssembly and WebGL; ensure your environment supports this.
+Avoid disabling GPU rendering options.
+
+Detach Heavy Operations from Render Cycle:
+
+Push heavy calculations, indicators, and data preparation away from the React render thread.
+Use Web Workers if needed to preprocess or aggregate data before pushing to the chart.
+
+Use useEffect Hooks Wisely:
+
+Use React hooks to initialize the chart once and avoid recreating chart components on every render.
+Use context (SciChartSurfaceContext) if sharing chart references is needed in complex layouts.
+
+
+Example Code Snippet for React Streaming Update
+
+Copy
+import React, { useEffect, useRef } from "react";
+import { SciChartReact, SciChartSurface, NumericAxis, XyDataSeries, FastLineRenderableSeries } from "scichart-react";
+
+const RealTimeChart = () => {
+ const sciChartSurfaceRef = useRef(null);
+ const dataSeriesRef = useRef(null);
+
+ useEffect(() => {
+ const initializeChart = async () => {
+ const sciChartSurface = await SciChartSurface.create("scichart-root");
+ sciChartSurfaceRef.current = sciChartSurface;
+
+ // Setup axes
+ sciChartSurface.xAxes.add(new NumericAxis(sciChartSurface.webAssemblyContext));
+ sciChartSurface.yAxes.add(new NumericAxis(sciChartSurface.webAssemblyContext));
+
+ // DataSeries for appending new data
+ const dataSeries = new XyDataSeries(sciChartSurface.webAssemblyContext);
+ dataSeriesRef.current = dataSeries;
+
+ // Line series rendering data
+ const lineSeries = new FastLineRenderableSeries(sciChartSurface.webAssemblyContext, {
+ dataSeries,
+ stroke: "blue",
+ strokeThickness: 2,
+ });
+ sciChartSurface.renderableSeries.add(lineSeries);
+
+ // Add to chart
+ sciChartSurface.zoomExtents();
+
+ // Simulated streaming data
+ let count = 0;
+ const appendPoints = () => {
+ const batchSize = 100;
+ const points = [];
+ for (let i = 0; i < batchSize; i++) {
+ points.push({ x: count, y: Math.sin(count / 10) });
+ count++;
+ }
+ dataSeries.appendRange(
+ points.map(p => p.x),
+ points.map(p => p.y)
+ );
+
+ sciChartSurface.zoomExtents();
+
+ requestAnimationFrame(appendPoints);
+ };
+ appendPoints();
+ };
+
+ initializeChart();
+
+ return () => {
+ sciChartSurfaceRef.current?.delete();
+ };
+ }, []);
+
+ return <div id="scichart-root" style={{ width: "100%", height: "400px" }}></div>;
+};
+
+export default RealTimeChart;
+
+Recommended Approach for Your Setup
+
+Initialize SciChart Only Once: Use useEffect with an empty dependency array to create and initialize the SciChartSurface and series only once on component mount.
+Manage DataSeries with useRef: Keep references to your SciChart data series in useRef so that you can append data directly without triggering React re-renders.
+Batch and Append Data Efficiently: Process incoming WebSocket data in batches (using your live-batch like 2048 samples) before calling .appendRange on the data series to minimize overhead and keep UI smooth.
+Avoid Prop Drilling Large Data for Chart Updates: Since React Query manages your server state, you can subscribe to data updates separately, but do not push large data arrays through React props on every update. Instead, feed data directly to chart refs.
+Use useCallback for Data Handlers: Wrap your WebSocket data handler and batch processing function in useCallback to ensure stable references and avoid unnecessary effect re-runs.
+Minimal React State Updates: Manage only UI state (like filters, selected variables) in React state (useState). For the chart data, let SciChart's data series handle the internal state.
+Integrate with React Query Smartly: Use React Query to fetch and cache any initial or historic data before real-time streaming starts. Once streaming, update data series directly.
+Clean-up on Component Unmount: Ensure you delete the SciChartSurface instance in the cleanup function in useEffect to prevent memory leaks.
+
+
+Small Code Concept for Streaming Using React Hooks
+
+Copy
+import React, { useEffect, useRef, useCallback } from "react";
+import { SciChartSurface, NumericAxis, XyDataSeries, FastLineRenderableSeries } from "scichart";
+
+const StreamingChart = ({ websocket }) => {
+ const sciChartSurfaceRef = useRef(null);
+ const dataSeriesRef = useRef(null);
+ const batchBufferRef = useRef({ x: [], y: [] });
+
+ // Initialize chart once
+ useEffect(() => {
+ async function initSciChart() {
+ const { sciChartSurface, wasmContext } = await SciChartSurface.create("scichart-root");
+ sciChartSurfaceRef.current = sciChartSurface;
+ sciChartSurface.xAxes.add(new NumericAxis(wasmContext));
+ sciChartSurface.yAxes.add(new NumericAxis(wasmContext));
+
+ const dataSeries = new XyDataSeries(wasmContext);
+ dataSeriesRef.current = dataSeries;
+
+ sciChartSurface.renderableSeries.add(
+ new FastLineRenderableSeries(wasmContext, {
+ dataSeries,
+ strokeThickness: 2,
+ stroke: "DodgerBlue",
+ })
+ );
+
+ sciChartSurface.zoomExtents();
+ }
+
+ initSciChart();
+
+ return () => sciChartSurfaceRef.current?.delete();
+ }, []);
+
+ // Data appending in batches
+ const appendBatch = useCallback(() => {
+ const ds = dataSeriesRef.current;
+ if (ds && batchBufferRef.current.x.length > 0) {
+ ds.appendRange(batchBufferRef.current.x, batchBufferRef.current.y);
+ batchBufferRef.current = { x: [], y: [] };
+ sciChartSurfaceRef.current.zoomExtents();
+ }
+ }, []);
+
+ // WebSocket message handler - push data to batch buffers
+ const onMessage = useCallback((msg) => {
+ // assuming msg provides { x, y } points or array of points
+ const points = Array.isArray(msg) ? msg : [msg];
+ points.forEach(({ x, y }) => {
+ batchBufferRef.current.x.push(x);
+ batchBufferRef.current.y.push(y);
+ });
+
+ if (batchBufferRef.current.x.length >= 2048) {
+ appendBatch();
+ }
+ }, [appendBatch]);
+
+ // Attach WebSocket event listener
+ useEffect(() => {
+ if (!websocket) return;
+ websocket.addEventListener("message", (evt) => {
+ const data = JSON.parse(evt.data); // adjust parsing as needed
+ onMessage(data);
+ });
+ return () => websocket.removeEventListener("message", onMessage);
+ }, [websocket, onMessage]);
+
+ // Final flush on unmount or at intervals
+ useEffect(() => {
+ const flushInterval = setInterval(() => {
+ appendBatch();
+ }, 100); // flush every 100ms
+
+ return () => clearInterval(flushInterval);
+ }, [appendBatch]);
+
+ return <div id="scichart-root" style={{ width: "100%", height: 400 }}></div>;
+};
+
+export default StreamingChart;
+
+
+
+-> Load 1 Million Points Performance Demo
+import {
+    EAxisAlignment,
+    EAutoRange,
+    ECoordinateMode,
+    EHorizontalAnchorPoint,
+    EAnnotationLayer,
+    EVerticalAnchorPoint,
+    FastLineRenderableSeries,
+    MouseWheelZoomModifier,
+    NumericAxis,
+    NumberRange,
+    SciChartSurface,
+    TextAnnotation,
+    XyDataSeries,
+    ZoomExtentsModifier,
+    ZoomPanModifier,
+} from "scichart";
+
+import { appTheme } from "../../../theme";
+
+export type TTimeSpan = {
+    title: string;
+    durationMs: number;
+};
+
+export const drawExample = async (rootElement: string | HTMLDivElement) => {
+    const { wasmContext, sciChartSurface } = await SciChartSurface.create(rootElement, {
+        theme: appTheme.SciChartJsTheme,
+    });
+
+    sciChartSurface.xAxes.add(
+        new NumericAxis(wasmContext, {
+            // axisTitle: "X Axis",
+            visibleRange: new NumberRange(0, 1000000),
+            autoRange: EAutoRange.Never,
+            useNativeText: true,
+        })
+    );
+    sciChartSurface.yAxes.add(
+        new NumericAxis(wasmContext, {
+            // axisTitle: "Y Axis",
+            axisAlignment: EAxisAlignment.Left,
+            visibleRange: new NumberRange(-5000, 5000),
+            autoRange: EAutoRange.Never,
+            useNativeText: true,
+        })
+    );
+
+    const watermarkAnnotation = (text: string, offset: number = 0) => {
+        const annotation = new TextAnnotation({
+            text,
+            fontSize: 42,
+            fontWeight: "Bold",
+            textColor: appTheme.ForegroundColor,
+            x1: 0.5,
+            y1: 0.5,
+            yCoordShift: offset,
+            opacity: 0.33,
+            horizontalAnchorPoint: EHorizontalAnchorPoint.Center,
+            verticalAnchorPoint: EVerticalAnchorPoint.Center,
+            xCoordinateMode: ECoordinateMode.Relative,
+            yCoordinateMode: ECoordinateMode.Relative,
+            annotationLayer: EAnnotationLayer.BelowChart,
+        });
+
+        return annotation;
+    };
+    // add a title annotation
+    sciChartSurface.annotations.add(watermarkAnnotation("SciChart.js Performance Demo"));
+    sciChartSurface.annotations.add(watermarkAnnotation("1 Million Data-Points", 52));
+
+    const POINTS = 1_000_000;
+
+    const dataSeries = new XyDataSeries(wasmContext, { capacity: POINTS, isSorted: true, containsNaN: false });
+    sciChartSurface.renderableSeries.add(
+        new FastLineRenderableSeries(wasmContext, {
+            dataSeries,
+            stroke: appTheme.VividSkyBlue,
+            strokeThickness: 2,
+        })
+    );
+
+    sciChartSurface.chartModifiers.add(
+        new ZoomExtentsModifier(),
+        new ZoomPanModifier({ enableZoom: true }),
+        new MouseWheelZoomModifier()
+    );
+
+    let updateTimeSpans: (newTimeSpans: TTimeSpan[]) => void = () => null;
+
+    const xValues = new Float64Array(POINTS);
+    const yValues = new Float64Array(POINTS);
+
+    // Buttons for chart
+    const loadPoints = () => {
+        // Clear state
+        dataSeries.clear();
+        const newTimeSpans: TTimeSpan[] = [];
+
+        // Start clouting Points generation time
+        const generateTimestamp = Date.now();
+
+        let prevYValue = 0;
+        for (let i = 0; i < POINTS; i++) {
+            const curYValue = Math.random() * 10 - 5;
+
+            xValues[i] = i;
+            yValues[i] = prevYValue + curYValue;
+
+            prevYValue += curYValue;
+        }
+
+        // Add the first time span: Generating 1M data points
+        newTimeSpans.push({
+            title: "Generate 1M Data Points",
+            durationMs: Date.now() - generateTimestamp,
+        });
+
+        // Start counting batch append time
+        const appendTimestamp = Date.now();
+        dataSeries.appendRange(xValues, yValues);
+
+        // Add the second time span: Generation of data point
+        newTimeSpans.push({
+            title: "Append 1M Data Points",
+            durationMs: Date.now() - appendTimestamp,
+        });
+
+        // Subscribe to sciChartSurface.rendered event,
+        // and calculate time duration between the append and
+        // the first frame after it
+        const firstFrameTimestamp = Date.now();
+        let frameIndex: number = 0;
+        let nextFramesTimestamp: number;
+        const handler = () => {
+            if (frameIndex === 0) {
+                // Add the third time span: Render the first frame
+                newTimeSpans.push({
+                    title: "Render the frame",
+                    durationMs: Date.now() - firstFrameTimestamp,
+                });
+                nextFramesTimestamp = Date.now();
+            } else {
+                // Unsubscribe from sciChartSurface.rendered
+                updateTimeSpans(newTimeSpans);
+                sciChartSurface.rendered.unsubscribe(handler);
+
+                // Zoom extents at the end of performance measurement
+                sciChartSurface.zoomExtents(250);
+            }
+            setTimeout(sciChartSurface.invalidateElement, 0);
+            // Increment frame index
+            frameIndex++;
+        };
+        sciChartSurface.rendered.subscribe(handler);
+    };
+
+    let timerId: NodeJS.Timeout;
+    const startUpdate = () => {
+        timerId = setInterval(loadPoints, 200);
+    };
+
+    const stopUpdate = () => {
+        clearInterval(timerId);
+    };
+
+    const reloadOnce = () => {
+        loadPoints();
+    };
+
+    const subscribeToInfo = (listener: (newTimeSpans: TTimeSpan[]) => void) => {
+        updateTimeSpans = listener;
+    };
+
+    return { sciChartSurface, controls: { startUpdate, stopUpdate, reloadOnce, subscribeToInfo } };
+};
+
+
+import Button from "@mui/material/Button";
+import Alert from "@mui/material/Alert";
+import AlertTitle from "@mui/material/AlertTitle";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PauseIcon from "@mui/icons-material/Pause";
+import { appTheme } from "../../../theme";
+import commonClasses from "./styles/Examples.module.scss";
+import { SciChartReact, TResolvedReturnType } from "scichart-react";
+import { drawExample, TTimeSpan } from "./drawExample";
+import { useRef, useState } from "react";
+
+export default function Load1MillionPointsChart() {
+    const [timeSpans, setTimeSpans] = useState<TTimeSpan[]>([]);
+    const [isStarted, setIsStarted] = useState(false);
+    const controlsRef = useRef<TResolvedReturnType<typeof drawExample>["controls"]>(null);
+
+    const updateTimeSpans = (newTimeSpans: TTimeSpan[]) => {
+        setTimeSpans([...newTimeSpans]);
+    };
+
+    return (
+        <div className={commonClasses.ChartWithToolbar}>
+            <SciChartReact
+                initChart={drawExample}
+                onInit={({ controls }: TResolvedReturnType<typeof drawExample>) => {
+                    controlsRef.current = controls;
+                    controls.subscribeToInfo(updateTimeSpans);
+                    controls.startUpdate();
+                    setIsStarted(true);
+
+                    return controls.stopUpdate;
+                }}
+            />
+            <div className={commonClasses.ToolbarRow} style={{ gap: "0px", paddingRight: "0px" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                        height: "100%",
+                    }}
+                >
+                    <Button
+                        onClick={() => {
+                            if (isStarted) {
+                                controlsRef.current.stopUpdate();
+                            } else {
+                                controlsRef.current.startUpdate();
+                            }
+                            setIsStarted(!isStarted);
+                        }}
+                        title="Toggle reload every 200 milliseconds"
+                    >
+                        {isStarted ? <PauseIcon /> : <PlayArrowIcon />}
+                    </Button>
+                    <Button
+                        onClick={() => {
+                            controlsRef.current.reloadOnce();
+                        }}
+                        style={{ color: appTheme.ForegroundColor }}
+                        title="Reload Test"
+                    >
+                        <RefreshIcon />
+                    </Button>
+                </div>
+                <div style={{ width: "100%" }}>
+                    {timeSpans.length > 0 && (
+                        <Alert
+                            key="0"
+                            className={commonClasses.Notification}
+                            sx={{
+                                backgroundColor: appTheme.Indigo,
+                                color: appTheme.ForegroundColor,
+                                textAlign: "left",
+                            }}
+                            severity="info"
+                        >
+                            <AlertTitle className={commonClasses.NotificationTitle}>Performance Results</AlertTitle>
+                            {timeSpans.map((ts, index) => (
+                                <div key={index}>
+                                    {ts.title}: {ts.durationMs.toFixed(0)} ms
+                                </div>
+                            ))}
+                        </Alert>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
+React Chart Performance Demo - Loading 1 Million Points
+Overview
+The Load 1 Million Points example demonstrates how to render and interact with one million data points using SciChart.js within a React framework. The focus is on achieving high-performance rendering and efficient real-time updates, making it ideal for applications that require rapid data processing and dynamic chart interactions.
+
+Technical Implementation
+The chart is set up using the <SciChartReact/> component which leverages an asynchronous onInit callback to initialize the chart on a specified DOM element. This process is managed with React Hooks such as useState and useRef for state management and control subscription. The drawExample function configures the chart by setting NumericAxis, TextAnnotation, and a FastLineRenderableSeries. WebGL rendering is utilized to achieve high performance when handling large datasets. For more details on how to integrate SciChart.js with React, see React Charts with SciChart.js: Introducing “SciChart React”. The asynchronous operations and side-effect management are handled in accordance with best practices outlined in Creating a SciChart React Component from the Ground Up.
+
+Features and Capabilities
+This example showcases several advanced features including:
+
+Real-time Data Updates: Efficiently generates, appends, and renders one million data points with performance metrics collected for generation, data appending, and rendering. This demonstrates real-time chart updates capabilities.
+Dynamic Control Subscription: Provides both single reload and automated interval-based updates to further simulate and evaluate performance under continuous data streaming.
+Material UI Integration: Utilizes Material UI components to create a responsive user interface with controls such as buttons and alerts for an enhanced user experience.
+Integration and Best Practices
+The implementation adheres to React best practices by employing useRef for managing external chart controls and useState for handling performance timing metrics. The use of asynchronous hooks ensures that event subscriptions are properly managed and cleaned up, thus preventing memory leaks and unnecessary re-renders. Developers are encouraged to optimize their applications further by leveraging memoization techniques and efficient state updates as discussed in Performance Optimisation of JavaScript Applications & Charts.
+
+Overall, this example provides a comprehensive demonstration of leveraging SciChart.js in a React environment to achieve exceptional performance in large-scale data visualization, combining advanced configuration, real-time updating, and modern UI integration
+
+
+---> Dynamic Layout Showcase
+
+import {
+    SciChartSurface,
+    NumericAxis,
+    EAxisAlignment,
+    NumberRange,
+    FastLineRenderableSeries,
+    XyDataSeries,
+    AUTO_COLOR,
+    SweepAnimation,
+    ZoomExtentsModifier,
+    MouseWheelZoomModifier,
+    ZoomPanModifier,
+    RolloverModifier,
+} from "scichart";
+import { RandomWalkGenerator } from "../../../ExampleData/RandomWalkGenerator";
+import { GridLayoutModifier } from "./GridLayoutModifier";
+
+export const drawExample = async (rootElement: string | HTMLDivElement) => {
+    // Create a SciChartSurface
+    const { wasmContext, sciChartSurface } = await SciChartSurface.create(rootElement);
+
+    // Create an XAxis and YAxis
+    sciChartSurface.xAxes.add(new NumericAxis(wasmContext));
+    sciChartSurface.yAxes.add(
+        new NumericAxis(wasmContext, {
+            axisAlignment: EAxisAlignment.Left,
+            growBy: new NumberRange(0.05, 0.05),
+        })
+    );
+
+    const POINTS = 1000;
+    for (let i = 0; i < 10; i++) {
+        // Create arrays of x, y values (just arrays of numbers)
+        const { xValues, yValues } = new RandomWalkGenerator().getRandomWalkSeries(POINTS);
+
+        // Create a Series and add to the chart
+        sciChartSurface.renderableSeries.add(
+            new FastLineRenderableSeries(wasmContext, {
+                dataSeries: new XyDataSeries(wasmContext, { xValues, yValues, dataSeriesName: `Series ${i + 1}` }),
+                stroke: AUTO_COLOR,
+                strokeThickness: 3,
+                animation: new SweepAnimation({ duration: 500, fadeEffect: true }),
+            })
+        );
+    }
+
+    // Optional: Add some interactivity to the chart
+    sciChartSurface.chartModifiers.add(
+        new ZoomExtentsModifier({ modifierGroup: "chart" }),
+        new MouseWheelZoomModifier({ modifierGroup: "chart" }),
+        new ZoomPanModifier({ modifierGroup: "chart" }),
+        new RolloverModifier({ modifierGroup: "chart" })
+    );
+
+    const glm = new GridLayoutModifier();
+    sciChartSurface.chartModifiers.add(glm);
+
+    sciChartSurface.zoomExtents();
+
+    const setIsGridLayoutMode = (value: boolean) => {
+        glm.isGrid = value;
+    };
+
+    return { wasmContext, sciChartSurface, setIsGridLayoutMode };
+};
+
+
+import { ToggleButton, ToggleButtonGroup } from "@mui/material";
+import * as React from "react";
+import { useContext } from "react";
+import { SciChartReact, SciChartSurfaceContext, TResolvedReturnType } from "scichart-react";
+import commonClasses from "./styles/Examples.module.scss";
+import { appTheme } from "../../../theme";
+import { drawExample } from "./drawExample";
+
+// React component needed as our examples app is react.
+// SciChart can be used in Angular, Vue, Blazor and vanilla JS! See our Github repo for more info
+export default function DynamicLayout() {
+    return (
+        <SciChartReact className={commonClasses.ChartWithNestedToolbar} initChart={drawExample}>
+            <ChartToolbar />
+        </SciChartReact>
+    );
+}
+
+const ChartToolbar = () => {
+    const initResult = useContext(SciChartSurfaceContext) as TResolvedReturnType<typeof drawExample>;
+    const [isGrid, setIsGrid] = React.useState<boolean>(false);
+
+    const handleToggleButtonChanged = (event: any, value: boolean) => {
+        initResult.setIsGridLayoutMode(value);
+        setIsGrid(value);
+    };
+    return (
+        <ToggleButtonGroup
+            className={commonClasses.ToolbarRow}
+            style={{ order: 1 }}
+            exclusive
+            value={isGrid}
+            onChange={handleToggleButtonChanged}
+            size="medium"
+            color="primary"
+            aria-label="small outlined button group"
+        >
+            <ToggleButton value={false} style={{ color: appTheme.ForegroundColor }}>
+                Single Chart
+            </ToggleButton>
+            <ToggleButton value={true} style={{ color: appTheme.ForegroundColor }}>
+                Chart Per Series
+            </ToggleButton>
+        </ToggleButtonGroup>
+    );
+};
+
+
+export class RandomWalkGenerator {
+    private readonly bias: number;
+    private last: number;
+    private i: number;
+    private _seed: number;
+    constructor(bias: number = 0.01) {
+        this.bias = bias;
+        this.reset();
+    }
+
+    public Seed(seed: number) {
+        this._seed = seed % 2147483647;
+        if (this._seed <= 0) this._seed += 2147483646;
+        return this;
+    }
+
+    public reset() {
+        this.i = 0;
+        this.last = 0;
+    }
+
+    public getRandomWalkSeries(count: number): { xValues: number[]; yValues: number[] } {
+        const xValues: number[] = [];
+        const yValues: number[] = [];
+        const random = () => (this._seed === undefined ? Math.random() : (this.nextSeeded() - 1) / 2147483646);
+        for (let i = 0; i < count; i++) {
+            const next: number = this.last + (random() - 0.5 + this.bias);
+            xValues.push(this.i++);
+            yValues.push(next);
+            this.last = next;
+        }
+
+        return { xValues, yValues };
+    }
+
+    private nextSeeded() {
+        return (this._seed = (this._seed * 16807) % 2147483647);
+    }
+}
+
+
+Dynamic Chart Layout in React
+Overview
+This example demonstrates a dynamic layout switcher built with SciChart.js and React. The implementation features a custom chart modifier that converts a single chart into a grid layout and back, providing an interactive charting experience with smooth animated transitions using the SubCharts API to create the grid layout with nested charts.
+
+Technical Implementation
+The example integrates the <SciChartReact/> component from the scichart-react package with React's context API using the useContext hook for state management. A custom modifier, implemented as GridLayoutModifier in TypeScript, is responsible for converting the parent chart into a series of sub-charts arranged in a grid. Animated layout transitions are managed with the GenericAnimation class, ensuring that sub-charts adjust their positions and styles smoothly. For further details on React integration with SciChart, refer to React Charts with SciChart.js: Introducing "SciChart React".
+
+Features and Capabilities
+Key features include dynamic switching between a single chart view and a grid layout that displays individual charts per data series. Each sub-chart is animated during the transition, enhancing the interactivity and user experience. The smooth animations are supported by advanced chart animation capabilities demonstrated in the React Generic Animation demo, while the custom modifier follows guidelines from the Custom Chart Modifier API.
+
+Integration and Best Practices
+The example integrates Material-UI's ToggleButtonGroup to provide an interactive chart toolbar, showcasing how to combine modern UI components with <SciChartReact/> for dynamic layout updates. React’s context API plays a crucial role in sharing the SciChartSurface state between components, a technique well explained in Mastering React's useContext Hook: Simplifying State Management. Additionally, by enabling dynamic grid and single chart layouts, the implementation reflects modern performance optimization practices in rendering multiple animated sub-charts as illustrated in the Dynamic Layout Showcase | SciChart.js Demo. Please also refer to the SubCharts API
