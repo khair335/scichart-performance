@@ -28,6 +28,37 @@ export function DynamicPlotGrid({
   const gridReadyNotifiedRef = useRef<boolean>(false);
   const lastLayoutIdRef = useRef<string | null>(null);
   const [gridStyle, setGridStyle] = useState<React.CSSProperties>({});
+  
+  // Calculate hasMinHeight once for consistent use
+  const hasMinHeight = layout?.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+  const minHeight = layout?.layout.min_height;
+
+  // Keep container sizing in sync with layout min_height even when the layout object is reused
+  useEffect(() => {
+    const minHeightValue = layout?.layout.min_height ?? 0;
+    const minHeightActive = minHeightValue > 0;
+
+    // Update state-driven grid styles so React re-renders when min_height changes
+    setGridStyle(prev => ({
+      ...prev,
+      height: minHeightActive ? 'auto' : '100%',
+      minHeight: minHeightActive ? `${minHeightValue}px` : undefined,
+      overflow: minHeightActive ? 'visible' : 'hidden',
+    }));
+
+    // Apply imperative styles to parent/grid to cover cases where the layout reference doesn't change
+    if (parentRef.current) {
+      parentRef.current.style.minHeight = minHeightActive ? `${minHeightValue}px` : '';
+      parentRef.current.style.height = minHeightActive ? 'auto' : '';
+      parentRef.current.style.overflow = minHeightActive ? 'visible' : '';
+      parentRef.current.style.overflowX = minHeightActive ? 'hidden' : '';
+    }
+
+    if (gridRef.current) {
+      gridRef.current.style.overflow = minHeightActive ? 'visible' : '';
+      gridRef.current.style.overflowX = minHeightActive ? 'hidden' : '';
+    }
+  }, [layout?.layout.min_height]);
 
   useEffect(() => {
     if (!layout) {
@@ -38,16 +69,21 @@ export function DynamicPlotGrid({
       containerIdsRef.current.clear();
       gridReadyNotifiedRef.current = false;
       lastLayoutIdRef.current = null;
+      // Reset parent container styles
+      if (parentRef.current) {
+        parentRef.current.style.minHeight = '';
+      }
       return;
     }
 
     // Grid format: [M, N] where M = rows, N = columns (like a matrix)
     const [rows, cols] = layout.layout.grid;
 
-    // Create a layout ID to detect changes
+    // Create a layout ID to detect changes (include min_height to detect changes)
     const layoutId = JSON.stringify({
       panes: layout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
-      grid: layout.layout.grid
+      grid: layout.layout.grid,
+      min_height: layout.layout.min_height
     });
 
     // Reset notification flag if layout changed
@@ -58,14 +94,46 @@ export function DynamicPlotGrid({
     }
 
     // Set CSS Grid layout
+    const currentHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+    const currentMinHeight = layout.layout.min_height;
+    
     setGridStyle({
       display: 'grid',
       gridTemplateRows: `repeat(${rows}, 1fr)`,
       gridTemplateColumns: `repeat(${cols}, 1fr)`,
       width: '100%',
-      height: '100%',
+      height: currentHasMinHeight ? 'auto' : '100%',
+      minHeight: currentHasMinHeight ? `${currentMinHeight}px` : undefined,
       gap: '1px',
+      overflow: currentHasMinHeight ? 'visible' : 'hidden', // Allow scrolling when min_height is set
     });
+    
+    // Apply min-height to parent container (also done in separate useEffect for reliability)
+    if (parentRef.current) {
+      if (currentHasMinHeight && currentMinHeight) {
+        console.log('[DynamicPlotGrid] Setting min-height in main effect:', currentMinHeight);
+        parentRef.current.style.minHeight = `${currentMinHeight}px`;
+        parentRef.current.style.height = 'auto';
+        parentRef.current.style.overflow = 'visible'; // Allow scrolling when min_height > page height
+        parentRef.current.style.overflowX = 'hidden'; // Prevent horizontal scroll
+      } else {
+        parentRef.current.style.minHeight = '';
+        parentRef.current.style.height = '';
+        parentRef.current.style.overflow = '';
+        parentRef.current.style.overflowX = '';
+      }
+    }
+    
+    // Also update grid container overflow
+    if (gridRef.current) {
+      if (currentHasMinHeight) {
+        gridRef.current.style.overflow = 'visible';
+        gridRef.current.style.overflowX = 'hidden';
+      } else {
+        gridRef.current.style.overflow = '';
+        gridRef.current.style.overflowX = '';
+      }
+    }
 
     // Create container divs for each pane
     if (gridRef.current) {
@@ -88,7 +156,9 @@ export function DynamicPlotGrid({
           paneDiv.style.gridRow = `${pane.row + 1} / span ${pane.height}`;
           paneDiv.style.gridColumn = `${pane.col + 1} / span ${pane.width}`;
           paneDiv.style.position = 'relative';
-          paneDiv.style.overflow = 'hidden';
+          // Remove overflow-hidden when min_height is set to allow scrolling
+          const paneHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+          paneDiv.style.overflow = paneHasMinHeight ? 'visible' : 'hidden';
           
           // Add pane title if provided
           if (pane.title) {
@@ -104,6 +174,11 @@ export function DynamicPlotGrid({
           chartContainer.className = 'w-full h-full relative';
           if (pane.title) {
             chartContainer.style.paddingTop = '24px'; // Space for title
+          }
+          // When min_height is set, ensure chart container can grow
+          if (paneHasMinHeight) {
+            chartContainer.style.minHeight = '0'; // Allow flex/grid to control sizing
+            chartContainer.style.height = '100%'; // Fill parent pane
           }
           paneDiv.appendChild(chartContainer);
 
@@ -142,13 +217,30 @@ export function DynamicPlotGrid({
             }, 10);
           }
         } else {
-          // Pane already exists in DOM - check if we need to update it
-          // (e.g., if grid position changed, but for now we'll just skip)
+          // Pane already exists in DOM - update overflow based on current layout's min_height
+          const existingPaneDiv = document.getElementById(containerId);
+          const paneHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+          
+          if (existingPaneDiv) {
+            // Always update overflow based on current min_height setting
+            existingPaneDiv.style.overflow = paneHasMinHeight ? 'visible' : 'hidden';
+          }
+          
           // Only notify if not already notified (shouldn't happen, but safety check)
           if (onPaneReady && !notifiedPanesRef.current.has(pane.id)) {
             notifiedPanesRef.current.add(pane.id);
             onPaneReady(pane.id, `${containerId}-chart`);
           }
+        }
+      }
+      
+      // Update overflow for ALL existing panes (in case layout changed but panes are reused)
+      const allPanesHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+      for (const [paneId, containerId] of containerIdsRef.current) {
+        const existingPaneDiv = document.getElementById(containerId);
+        if (existingPaneDiv) {
+          // Update overflow based on current layout's min_height
+          existingPaneDiv.style.overflow = allPanesHasMinHeight ? 'visible' : 'hidden';
         }
       }
       
@@ -183,6 +275,53 @@ export function DynamicPlotGrid({
     }
   }, [layout, onGridReady, onPaneReady, onPaneDestroyed]);
 
+  // Ensure parent container styles are always updated when layout/min_height changes
+  useEffect(() => {
+    if (parentRef.current && layout) {
+      const currentHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+      const currentMinHeight = layout.layout.min_height;
+      
+      if (currentHasMinHeight && currentMinHeight) {
+        console.log('[DynamicPlotGrid] Setting min-height:', currentMinHeight);
+        parentRef.current.style.minHeight = `${currentMinHeight}px`;
+        parentRef.current.style.height = 'auto';
+        parentRef.current.style.overflow = 'visible'; // Allow scrolling when min_height > page height
+        parentRef.current.style.overflowX = 'hidden'; // Prevent horizontal scroll
+      } else {
+        console.log('[DynamicPlotGrid] Clearing min-height');
+        parentRef.current.style.minHeight = '';
+        parentRef.current.style.height = '';
+        parentRef.current.style.overflow = '';
+        parentRef.current.style.overflowX = '';
+      }
+    }
+    
+    // Also update grid container overflow
+    if (gridRef.current && layout) {
+      const currentHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+      if (currentHasMinHeight) {
+        gridRef.current.style.overflow = 'visible';
+        gridRef.current.style.overflowX = 'hidden';
+      } else {
+        gridRef.current.style.overflow = '';
+        gridRef.current.style.overflowX = '';
+      }
+    }
+    
+    // Update all chart containers to ensure they respect min-height
+    if (layout) {
+      const currentHasMinHeight = layout.layout.min_height !== undefined && (layout.layout.min_height ?? 0) > 0;
+      for (const [paneId, containerId] of containerIdsRef.current) {
+        const chartContainer = document.getElementById(`${containerId}-chart`);
+        if (chartContainer) {
+          // Chart containers should fill their parent pane
+          chartContainer.style.height = '100%';
+          chartContainer.style.minHeight = '0'; // Allow flex/grid to control sizing
+        }
+      }
+    }
+  }, [layout]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -192,6 +331,16 @@ export function DynamicPlotGrid({
       containerIdsRef.current.clear();
     };
   }, []);
+
+  // Determine container classes based on min_height (use the same hasMinHeight calculated above)
+  // Remove h-full from className if min_height is set to allow growth
+  const baseClassName = className.replace(/\bh-full\b/g, '').trim();
+  const parentClassName = hasMinHeight 
+    ? `w-full relative ${baseClassName}` 
+    : `w-full h-full relative ${className}`;
+  const gridClassName = hasMinHeight 
+    ? "relative w-full" 
+    : "absolute inset-0 w-full h-full";
 
   if (!layout) {
     return (
@@ -208,11 +357,11 @@ export function DynamicPlotGrid({
     <div
       ref={parentRef}
       id="dynamic-plot-parent"
-      className={`w-full h-full relative ${className}`}
+      className={parentClassName}
     >
       <div
         ref={gridRef}
-        className="absolute inset-0 w-full h-full"
+        className={gridClassName}
         style={gridStyle}
       />
     </div>

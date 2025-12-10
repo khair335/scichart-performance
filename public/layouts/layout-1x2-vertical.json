@@ -1,6 +1,7 @@
 {
   "layout_mode": "multi_surface",
   "grid": [2, 1],
+  "min_height": 2000,
   "minimap": {
     "source": {
       "series_id": "MESU5:ticks",

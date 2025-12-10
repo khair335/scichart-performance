@@ -6,6 +6,7 @@
 export interface PlotLayout {
   layout_mode: 'multi_surface';
   grid: [number, number]; // [M, N] where M = number of rows, N = number of columns (like a matrix). e.g., [2, 3] = 2 rows × 3 columns
+  min_height?: number; // Minimum height in pixels for chart container. If 0 or not set, fits to page height. If set and > page height, allows scrolling.
   minimap?: {
     source: {
       series_id: string;

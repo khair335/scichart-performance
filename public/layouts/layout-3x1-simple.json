@@ -1,6 +1,7 @@
 {
   "layout_mode": "multi_surface",
   "grid": [3, 1],
+  "min_height": 2000,
   "panes": [
     {
       "id": "price-pane",

@@ -785,9 +785,31 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
 
   const isConnected = demoMode || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta';
   const currentStage = demoMode ? 'demo' : feedState.stage;
+  
+  // Check if min_height is set in layout (if > 0, remove overflow-hidden to allow scrolling)
+  const hasMinHeight = plotLayout?.layout.min_height !== undefined && (plotLayout.layout.min_height ?? 0) > 0;
+
+  // Ensure the page can scroll when a layout requests a minimum height
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+
+    if (hasMinHeight) {
+      html.style.overflowY = 'auto';
+      body.style.overflowY = 'auto';
+    } else {
+      html.style.overflowY = '';
+      body.style.overflowY = '';
+    }
+
+    return () => {
+      html.style.overflowY = '';
+      body.style.overflowY = '';
+    };
+  }, [hasMinHeight]);
 
   return (
-    <div className={cn('flex flex-col h-screen overflow-hidden relative', className)}>
+    <div className={cn('flex flex-col h-screen relative', hasMinHeight ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden', className)}>
       {/* Top Toolbar */}
       <Toolbar
         isLive={isLive}
@@ -839,7 +861,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       )}
 
       {/* Main Chart Area */}
-      <div className="flex-1 min-h-0 flex flex-col relative z-10">
+      <div className={cn('flex-1 flex flex-col relative z-10', hasMinHeight ? 'min-h-0 overflow-visible' : 'min-h-0 overflow-hidden')}>
         {/* Dynamic Plot Grid - renders based on layout */}
         {/* CRITICAL: UI must not plot any data unless a plot layout JSON is loaded */}
         {/* Requirement 0.1: Layout-Driven Rendering - no plotting without layout */}
