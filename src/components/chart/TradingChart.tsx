@@ -787,9 +787,11 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const currentStage = demoMode ? 'demo' : feedState.stage;
   
   // Check if min_height is set in layout (if > 0, remove overflow-hidden to allow scrolling)
-  const hasMinHeight = plotLayout?.layout.min_height !== undefined && (plotLayout.layout.min_height ?? 0) > 0;
+  const minHeightValue = plotLayout?.layout.min_height ?? 0;
+  const hasMinHeight = minHeightValue > 0;
 
   // Ensure the page can scroll when a layout requests a minimum height
+  // Use minHeightValue in dependency to catch changes even if plotLayout reference changes
   useEffect(() => {
     const html = document.documentElement;
     const body = document.body;
@@ -806,7 +808,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       html.style.overflowY = '';
       body.style.overflowY = '';
     };
-  }, [hasMinHeight]);
+  }, [hasMinHeight, minHeightValue]);
 
   return (
     <div className={cn('flex flex-col h-screen relative', hasMinHeight ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden', className)}>
