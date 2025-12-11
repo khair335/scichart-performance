@@ -2817,128 +2817,80 @@ export function useMultiPaneChart({
     }
   }, [visibleSeries]);
 
-  // Process accumulated samples and update chart
+  // OPTIMIZATION: Persistent caches across batches (moved outside callback to prevent GC)
+  const seriesInfoCacheRef = useRef(new Map<string, ReturnType<typeof parseSeriesType>>());
+  const markerConsolidationMapRef = useRef(new Map<string, string>());
+  const markerMapComputedForLayoutRef = useRef<string | null>(null);
+
+  // Process accumulated samples and update chart - OPTIMIZED following new-index.html pattern
   const processBatchedSamples = useCallback(() => {
-    const processStartTime = performance.now();
     const refs = chartRefs.current;
-    const isTabHidden = document.hidden;
     
     // Check if we have either legacy surfaces OR dynamic panes
     const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface;
     const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
     
     if (!hasLegacySurfaces && !hasDynamicPanes) {
-      if (isTabHidden && sampleBufferRef.current.length > 0) {
-        console.warn(`[MultiPaneChart] Background processing: Surfaces not ready, ${sampleBufferRef.current.length} samples pending`);
-      }
       return;
     }
     
     // Don't process if overview is being cleaned up (prevents race conditions)
     if (isCleaningUpOverviewRef.current) {
-      if (isTabHidden && sampleBufferRef.current.length > 0) {
-        console.warn(`[MultiPaneChart] Background processing: Overview cleanup in progress, ${sampleBufferRef.current.length} samples pending`);
-      }
       return;
     }
-    
-    // Skip chart updates during range restoration to prevent shaking
-    // But still update time tracking for clock display
-    // CRITICAL: Don't skip processing when tab is hidden - match new-index.html behavior
-    // Range restoration should not block background data processing
-    const skipChartUpdates = isRestoringRangeRef.current && !document.hidden;
     
     const allSamples = sampleBufferRef.current;
     if (allSamples.length === 0) return;
     
-    // Log when processing in background - more frequent logging to diagnose issues
-    if (isTabHidden && allSamples.length > 100) {
-     
-    }
-    
-    // OPTIMIZATION: Dynamic batch sizing based on data rate and backlog
-    // SciChart can handle 10M+ points with proper batching - use large batches for efficiency
-    const baseBatchSize = config.performance.batchSize;
-    const backlogSize = allSamples.length;
-    
-    // PERF: With SciChart's 10M point performance, we can use much larger batches
-    // appendRange with Float64Array is highly optimized - larger batches = fewer render cycles
-    let MAX_BATCH_SIZE: number;
-    
-    // AGGRESSIVE: SciChart handles large batches efficiently via WebGL/WASM
-    const MAX_SAFE_BATCH_SIZE = 10000; // SciChart can handle 10k+ points per batch easily
-    
-    if (isTabHidden) {
-      // When hidden, process maximum efficiency (no rendering overhead)
-      MAX_BATCH_SIZE = Math.min(MAX_SAFE_BATCH_SIZE * 2, backlogSize); // Up to 20k when hidden
-    } else {
-      // When visible, still use large batches for smooth 60fps
-      if (backlogSize > 10000) {
-        // Large backlog: process aggressively to catch up
-        MAX_BATCH_SIZE = Math.min(MAX_SAFE_BATCH_SIZE, backlogSize);
-      } else if (backlogSize > 5000) {
-        // Medium backlog: use increased batch size  
-        MAX_BATCH_SIZE = Math.min(baseBatchSize * 2, backlogSize);
-      } else {
-        // Normal operation: use configured batch size
-        MAX_BATCH_SIZE = baseBatchSize;
-      }
-    }
-    
-    const samples = allSamples.length > MAX_BATCH_SIZE
-      ? allSamples.slice(0, MAX_BATCH_SIZE)
-      : allSamples;
-    
-    // Keep remaining samples for next frame
-    sampleBufferRef.current = allSamples.length > MAX_BATCH_SIZE
-      ? allSamples.slice(MAX_BATCH_SIZE)
-      : [];
+    // OPTIMIZATION: Process ALL samples at once like new-index.html
+    // SciChart handles large batches efficiently via WebGL/WASM
+    const samples = allSamples;
+    sampleBufferRef.current = [];
     pendingUpdateRef.current = null;
 
-    // Unified buffer map: series_id → { x: [], y: [] } or { x: [], o: [], h: [], l: [], c: [] }
-    // This replaces separate tickX/tickY/ohlcX/etc arrays
-    const seriesBuffers: Map<string, { 
+    // OPTIMIZATION: Use persistent cache for series info (survives across batches)
+    const seriesInfoCache = seriesInfoCacheRef.current;
+    
+    // OPTIMIZATION: Compute marker consolidation map ONCE per layout change (not per batch)
+    const layoutKey = plotLayout ? JSON.stringify(plotLayout.layout.series.map(s => s.series_id)) : '';
+    if (markerMapComputedForLayoutRef.current !== layoutKey) {
+      markerConsolidationMapRef.current.clear();
+      if (plotLayout) {
+        const allMarkerIds = Array.from(refs.dataSeriesStore.keys()).filter(id => {
+          if (!seriesInfoCache.has(id)) {
+            seriesInfoCache.set(id, parseSeriesType(id));
+          }
+          const info = seriesInfoCache.get(id)!;
+          return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+        });
+        if (allMarkerIds.length > 0) {
+          const markerGroups = groupStrategyMarkers(allMarkerIds);
+          for (const [, group] of markerGroups) {
+            const consolidatedId = getConsolidatedSeriesId(group);
+            for (const seriesId of group.seriesIds) {
+              markerConsolidationMapRef.current.set(seriesId, consolidatedId);
+            }
+          }
+        }
+      }
+      markerMapComputedForLayoutRef.current = layoutKey;
+    }
+    const markerConsolidationMap = markerConsolidationMapRef.current;
+
+    // OPTIMIZATION: Pre-build series buffers Map once (reuse across samples)
+    const seriesBuffers = new Map<string, { 
       x: number[]; 
       y?: number[]; 
       o?: number[]; 
       h?: number[]; 
       l?: number[]; 
       c?: number[]; 
-    }> = new Map();
+    }>();
 
     let latestTime = lastDataTimeRef.current;
 
-    // OPTIMIZATION: Pre-compute strategy marker consolidation map ONCE before processing loop
-    // This avoids expensive groupStrategyMarkers() calls for every sample
-    const markerConsolidationMap = new Map<string, string>();
-    if (plotLayout) {
-      const allMarkerIds = Array.from(refs.dataSeriesStore.keys()).filter(id => {
-        const info = parseSeriesType(id);
-        return info.type === 'strategy-marker' || info.type === 'strategy-signal';
-      });
-      if (allMarkerIds.length > 0) {
-        const markerGroups = groupStrategyMarkers(allMarkerIds);
-        for (const [, group] of markerGroups) {
-          const consolidatedId = getConsolidatedSeriesId(group);
-          for (const seriesId of group.seriesIds) {
-            markerConsolidationMap.set(seriesId, consolidatedId);
-          }
-        }
-      }
-    }
-
-    // OPTIMIZATION: Cache series info to avoid parseSeriesType() for every sample
-    const seriesInfoCache = new Map<string, ReturnType<typeof parseSeriesType>>();
-    const getSeriesInfo = (id: string) => {
-      let info = seriesInfoCache.get(id);
-      if (!info) {
-        info = parseSeriesType(id);
-        seriesInfoCache.set(id, info);
-      }
-      return info;
-    };
-
-    // Process all samples in batch (OPTIMIZED loop - no downsampling, cached lookups)
+    // OPTIMIZED INNER LOOP - following new-index.html's simple pattern
+    // Minimize function calls, use simple string checks where possible
     const samplesLength = samples.length;
     for (let i = 0; i < samplesLength; i++) {
       const sample = samples[i];
@@ -2948,30 +2900,43 @@ export function useMultiPaneChart({
         latestTime = t_ms;
       }
 
-      // Use cached series info instead of parsing every time
-      const seriesInfo = getSeriesInfo(series_id);
+      // OPTIMIZATION: Fast path using simple string includes (like new-index.html)
+      // Avoid parseSeriesType() call for common series types
+      let isOhlc = false;
+      let isTick = false;
+      let isIndicator = false;
+      let isStrategyMarker = false;
+      
+      // Fast string-based type detection (matches new-index.html approach)
+      if (series_id.includes(':ohlc_')) {
+        isOhlc = true;
+      } else if (series_id.includes(':ticks')) {
+        isTick = true;
+      } else if (series_id.includes(':strategy:')) {
+        isStrategyMarker = true;
+      } else {
+        // Indicators: sma_, ema_, vwap, etc. - anything else that's not special
+        isIndicator = true;
+      }
 
-      // OPTIMIZATION: Use pre-computed consolidation map for strategy markers
+      // Handle strategy marker consolidation only when needed
       let effectiveSeriesId = series_id;
-      if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal')) {
+      if (isStrategyMarker) {
         const consolidatedId = markerConsolidationMap.get(series_id);
         if (consolidatedId) {
           effectiveSeriesId = consolidatedId;
         }
       }
       
-      // Get series entry from unified store (preallocated by registry listener)
-      let seriesEntry = refs.dataSeriesStore.get(effectiveSeriesId);
-      if (!seriesEntry && effectiveSeriesId !== series_id) {
-        seriesEntry = refs.dataSeriesStore.get(series_id);
-      }
+      // Get series entry from unified store (direct Map lookup - O(1))
+      const seriesEntry = refs.dataSeriesStore.get(effectiveSeriesId) || 
+                          (effectiveSeriesId !== series_id ? refs.dataSeriesStore.get(series_id) : null);
       if (!seriesEntry) {
-        // Series not preallocated - skip (will be created via preallocation when surfaces ready)
         continue;
       }
 
-      // OHLC bar data - special handling for OHLC format
-      if (seriesInfo.type === 'ohlc-bar') {
+      // OHLC bar data
+      if (isOhlc) {
         const o = payload.o as number;
         const h = payload.h as number;
         const l = payload.l as number;
@@ -2989,15 +2954,14 @@ export function useMultiPaneChart({
           buf.c!.push(c);
         }
       } else {
-        // All XY series: tick, indicators, strategy (NO DOWNSAMPLING - plot all data)
+        // XY series: tick, indicators, strategy - direct value extraction
         let value: number | undefined;
         
-        // OPTIMIZATION: Direct property access without type checks
-        if (seriesInfo.type === 'tick') {
+        if (isTick) {
           value = payload.price as number;
-        } else if (seriesInfo.isIndicator || seriesInfo.type === 'strategy-pnl') {
+        } else if (isIndicator || series_id.includes(':pnl')) {
           value = payload.value as number;
-        } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
+        } else if (isStrategyMarker) {
           value = (payload.price as number) || (payload.value as number);
         }
         
@@ -3033,25 +2997,7 @@ export function useMultiPaneChart({
       }
     }
     if (!hasData) {
-      // No data to append, but ensure we continue processing if there are more samples in buffer
-      // This is critical for background processing when tab is hidden
-      if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
-        const isTabHidden = document.hidden;
-        if (isTabHidden) {
-          isUsingTimeoutRef.current = true;
-          pendingUpdateRef.current = setTimeout(() => {
-            pendingUpdateRef.current = null;
-            processBatchedSamples();
-          }, 16);
-        } else {
-          isUsingTimeoutRef.current = false;
-          pendingUpdateRef.current = requestAnimationFrame(() => {
-            pendingUpdateRef.current = null;
-            processBatchedSamples();
-          });
-        }
-      }
-      return; // No data to append, skip chart updates but time is already updated
+      return; // No data to append, skip chart updates
     }
 
     // During range restoration: append data to DataSeries but skip chart rendering
@@ -3138,17 +3084,22 @@ export function useMultiPaneChart({
         }
       }
 
-      // OPTIMIZATION: Pre-compute strategy marker mappings ONCE before the loop
+      // OPTIMIZATION: Pre-compute strategy marker mappings using persistent cache
       const strategyMarkerDuplicates = new Map<string, string[]>();
       if (plotLayout) {
+        const seriesInfoCache = seriesInfoCacheRef.current;
         const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
           .filter(id => {
-            const info = parseSeriesType(id);
+            // Use cached series info
+            if (!seriesInfoCache.has(id)) {
+              seriesInfoCache.set(id, parseSeriesType(id));
+            }
+            const info = seriesInfoCache.get(id)!;
             return info.type === 'strategy-marker' || info.type === 'strategy-signal';
           });
         if (allMarkerIds.length > 0) {
           const markerGroups = groupStrategyMarkers(allMarkerIds);
-          for (const [groupKey, group] of markerGroups) {
+          for (const [, group] of markerGroups) {
             const consolidatedId = getConsolidatedSeriesId(group);
             const duplicateKeys: string[] = [];
             for (const [key] of refs.dataSeriesStore) {
@@ -3293,24 +3244,7 @@ export function useMultiPaneChart({
         });
       }
 
-      // OPTIMIZATION: Removed verbose logging to reduce CPU
-      
-      // OPTIMIZATION: Check if processing took too long - if so, skip next frame
-      const processTime = performance.now() - processStartTime;
-      const MAX_FRAME_TIME_MS = FRAME_INTERVAL_MS * 1.2; // Stricter: only 20% overhead allowed
-      if (processTime > MAX_FRAME_TIME_MS) {
-        // Processing took too long - skip next frame to prevent lag accumulation
-        // Processing took too long - skip next frame to prevent lag accumulation
-        // AGGRESSIVE: Increase delay when falling behind to let browser catch up
-        const delay = processTime > FRAME_INTERVAL_MS * 2 ? 16 : 8;
-        if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
-          pendingUpdateRef.current = setTimeout(() => {
-            pendingUpdateRef.current = null;
-            processBatchedSamples();
-          }, delay);
-        }
-        return;
-      }
+      // OPTIMIZATION: Removed performance timing check - process as fast as possible
     } catch (error) {
       // Silently handle WASM memory errors
       // Critical error - likely WASM out of memory
@@ -3397,43 +3331,7 @@ export function useMultiPaneChart({
 
     // Skip auto-scroll and Y-axis updates during restoration to prevent shaking
     if (skipChartRendering) {
-      // Data is appended, but no chart updates during restoration
-      // CRITICAL: Still continue processing if there are more samples in buffer
-      // This ensures background processing continues even during range restoration
-      if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
-        const isTabHidden = document.hidden;
-        // OPTIMIZATION: Use shorter timeout for faster processing when hidden
-        const delay = isTabHidden ? 8 : FRAME_INTERVAL_MS;
-        isUsingTimeoutRef.current = true;
-        pendingUpdateRef.current = setTimeout(() => {
-          pendingUpdateRef.current = null;
-          processBatchedSamples();
-        }, delay);
-      }
       return; // Skip chart rendering but data is already appended
-    }
-    
-    // OPTIMIZATION: Schedule next update more efficiently
-    // If we have more samples, schedule immediately with minimal delay
-    if (sampleBufferRef.current.length > 0 && pendingUpdateRef.current === null) {
-      const isTabHidden = document.hidden;
-      const backlogSize = sampleBufferRef.current.length;
-      
-      // For large backlogs, use setTimeout with shorter delay to process faster
-      if (backlogSize > 5000 || isTabHidden) {
-        isUsingTimeoutRef.current = true;
-        pendingUpdateRef.current = setTimeout(() => {
-          pendingUpdateRef.current = null;
-          processBatchedSamples();
-        }, 8); // Very short delay for fast processing
-      } else {
-        // Normal operation: use requestAnimationFrame for smooth rendering
-        isUsingTimeoutRef.current = false;
-        pendingUpdateRef.current = requestAnimationFrame(() => {
-          pendingUpdateRef.current = null;
-          processBatchedSamples();
-        });
-      }
     }
     
     // CRITICAL: If Y-axis scaling was requested (e.g., on live transition), do it now after data is processed
@@ -4968,80 +4866,16 @@ export function useMultiPaneChart({
       }
     }
     
-    // Schedule batched update if not already scheduled
-    // Use setTimeout fallback when tab is hidden (requestAnimationFrame is throttled)
+    // SIMPLIFIED SCHEDULING - following new-index.html pattern
+    // Schedule processing via RAF if not already scheduled
+    // new-index.html approach: simple scheduleFlush that just uses RAF
     if (pendingUpdateRef.current === null) {
-      const scheduleNext = () => {
+      // Use requestAnimationFrame for smooth 60fps rendering
+      // Unlike the previous complex scheduling, just use RAF consistently
+      pendingUpdateRef.current = requestAnimationFrame(() => {
         pendingUpdateRef.current = null;
-        const isTabHidden = document.hidden;
-        const bufferSize = sampleBufferRef.current.length;
-        
-        // Log background processing activity for debugging
-        if (isTabHidden && bufferSize > 0) {
-         
-        }
-        
-        // Process the batch - this will append data to DataSeries even when tab is hidden
         processBatchedSamples();
-        
-        // CRITICAL: Always continue processing if there are more samples, regardless of tab visibility
-        // Hybrid approach: requestAnimationFrame when visible (smooth), setTimeout when hidden (fast)
-        // requestAnimationFrame is throttled to ~1fps when hidden, which is too slow for data processing
-        // Use setTimeout(16ms) when hidden to maintain 60fps processing rate
-        // With multiple instruments, use faster processing to keep up with higher data rates
-        if (sampleBufferRef.current.length > 0) {
-          const bufferSize = sampleBufferRef.current.length;
-          const activeSeriesCount = chartRefs.current.dataSeriesStore.size;
-          const isMultipleInstruments = activeSeriesCount > 10;
-          // More aggressive detection for multiple instruments
-          // Lower threshold (1000 instead of 2000) to catch backlogs earlier
-          const isHighDataRate = isMultipleInstruments || bufferSize > 1000;
-          // Use faster processing (8ms) for high data rates or when backlog is building
-          // For multiple instruments, always use fast processing to prevent falling behind
-          const nextFrameDelay = isHighDataRate ? 8 : 16;
-          
-          if (isTabHidden) {
-            // When hidden, use setTimeout for faster processing (60fps or 125fps for high rates)
-            // This ensures we keep up with incoming data even when tab is hidden
-            isUsingTimeoutRef.current = true;
-            pendingUpdateRef.current = setTimeout(scheduleNext, nextFrameDelay);
-          } else {
-            // When visible, use setTimeout for high data rates to prevent UI freezing
-            // Otherwise use requestAnimationFrame for smooth rendering
-            if (isHighDataRate && bufferSize > 1000) {
-              isUsingTimeoutRef.current = true;
-              pendingUpdateRef.current = setTimeout(scheduleNext, nextFrameDelay);
-            } else {
-              isUsingTimeoutRef.current = false;
-              pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
-            }
-          }
-        } else {
-          // No more samples - reset timeout flag
-          isUsingTimeoutRef.current = false;
-        }
-      };
-      
-      const now = performance.now();
-      const timeSinceLastRender = now - lastRenderTimeRef.current;
-      const isTabHidden = document.hidden;
-      
-      if (timeSinceLastRender >= FRAME_INTERVAL_MS) {
-        // Render immediately if enough time has passed
-        scheduleNext();
-      } else {
-        // Schedule for next frame - use setTimeout when hidden for faster processing
-        if (isTabHidden) {
-          // When hidden, use setTimeout for faster processing (60fps)
-          // requestAnimationFrame is throttled to ~1fps when hidden, which is too slow
-          isUsingTimeoutRef.current = true;
-          pendingUpdateRef.current = setTimeout(scheduleNext, 16);
-        } else {
-          // When visible, use requestAnimationFrame for smooth rendering
-          isUsingTimeoutRef.current = false;
-          pendingUpdateRef.current = requestAnimationFrame(scheduleNext);
-        }
-      }
+      });
     }
   }, [onDataClockUpdate, processBatchedSamples, config]);
 
