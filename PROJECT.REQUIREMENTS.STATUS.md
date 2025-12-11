@@ -37,6 +37,7 @@ Target throughput:
   * ✅ Vertical-only zoom (Y hotkey to switch mode)
   * ✅ Mouse wheel zoom (X-axis default, Shift+wheel for Y-axis)
   * ✅ Axis dragging - XAxisDragModifier, YAxisDragModifier (stretch/shrink axes)
+  * ✅ **Zoom Extents / Fit All Data (Z key)** - Works on all dynamic pane surfaces
 * ✅ **SciChartOverview minimap** controls full-range navigation and Live/Paused window anchoring. Now implemented as a floating, draggable panel.
 * ✅ Automatic switching to live from paused mode. Floating minimap can be freely dragged and repositioned anywhere on the screen.
 
@@ -115,6 +116,8 @@ Target throughput:
   * ✅ Theme toggle (dark/light)
   * ✅ Minimap toggle
   * ✅ Jump-to-Live
+  * ✅ Zoom Extents / Fit All Data (Z button) - Now works on all panes
+  * ✅ Zoom mode selection (Box/X-only/Y-only with B/X/Y hotkeys)
   * ✅ Programmable "Last X" Time Windows: Configurable time-window presets defined in ui-config.json (Last 15 min, 30 min, 1 hour, 4 hours). "Entire Session" always included.
   * ✅ Show Loaded Plot Layouts: Display a list of recently loaded layouts in a dropdown menu for quick reselection.
 * ✅ **Command palette (Ctrl/⌘+K)** for quick actions.
@@ -156,14 +159,14 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| Multi-Pane Charting | ✅ 95% | Fully functional |
-| Live/Paused Modes | ✅ 100% | All zoom modes implemented |
+| Multi-Pane Charting | ✅ 100% | Fully functional with dynamic panes |
+| Live/Paused Modes | ✅ 100% | All zoom modes + Zoom Extents working |
 | Dynamic JSON Layout | ✅ 100% | Fully implemented |
-| Strategy Markers | ✅ 90% | Annotations + consolidator complete |
+| Strategy Markers | ✅ 95% | Annotations + consolidator complete |
 | Data Ingest Pipeline | ✅ 100% | Fully implemented |
-| UI Config File | ✅ 100% | All settings loaded from config |
+| UI Config File | ✅ 95% | All settings loaded (timezone label partial) |
 | UI Features (HUD) | ✅ 100% | All metrics including gaps |
-| UI Features (Toolbar) | ✅ 100% | Time presets + layout history |
+| UI Features (Toolbar) | ✅ 100% | All buttons functional including Z/Fit All |
 | UI Features (Other) | ✅ 100% | Auto-hide + floating minimap |
 | Performance | ⌛ 75% | Optimized batching, needs scale testing |
 
@@ -171,10 +174,26 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 
 ---
 
-## **Critical Remaining Items**
+## **Remaining Items**
 
-1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points (ongoing optimization)
-2. ✅ **All UI Features Complete**: HUD gaps, toolbar, auto-hide, floating minimap, command palette
-3. ✅ **All Interaction Features**: Zoom modes (box/x-only/y-only), axis drag, pan/zoom separation
-4. ✅ **Strategy Markers Rendering**: Annotation rendering with pooling for performance
-5. ✅ **Layout System**: Full JSON layout support with history navigation
+### High Priority (Performance)
+1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points
+2. ⌛ **Long Session Testing**: Verify no memory leaks over 8-hour session
+3. ⌛ **UI Responsiveness**: Eliminate any remaining sluggishness under load
+
+### Low Priority (Polish)
+1. ⌛ **Timezone Label Formatting**: Apply timezone from config to axis labels
+2. ✅ ~~Zoom Extents for Dynamic Panes~~: Fixed - now works on all paneSurfaces
+
+---
+
+## **Recently Completed**
+
+- ✅ Zoom Extents (Z key) now works on all dynamic pane surfaces (paneSurfaces)
+- ✅ All zoom modes (Box/X-only/Y-only) functional with keyboard shortcuts
+- ✅ Axis drag modifiers for X and Y axes
+- ✅ Floating minimap with drag/resize/minimize
+- ✅ Layout history dropdown for quick switching
+- ✅ Auto-hide functionality for HUD and toolbar
+- ✅ Command palette (Ctrl/Cmd+K)
+- ✅ Series browser with visibility controls
