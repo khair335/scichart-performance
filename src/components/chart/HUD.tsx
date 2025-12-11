@@ -208,30 +208,41 @@ export function HUD({
       )}
 
       {/* Gaps */}
-      {totalGaps > 0 && (
-        <div className={cn(
-          'flex items-center gap-2 px-2 py-1 rounded-lg border',
-          totalGaps > 10 ? 'bg-destructive/10 border-destructive/30' :
-          totalGaps > 0 ? 'bg-warning/10 border-warning/30' :
-          'bg-muted/20 border-border/30'
+      <div className={cn(
+        'flex items-center gap-2 px-2 py-1 rounded-lg border group relative',
+        totalGaps > 10 ? 'bg-destructive/10 border-destructive/30' :
+        totalGaps > 0 ? 'bg-warning/10 border-warning/30' :
+        'bg-muted/20 border-border/30'
+      )}>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Gaps</span>
+        <span className={cn(
+          'font-bold',
+          totalGaps > 10 ? 'text-destructive' : totalGaps > 0 ? 'text-warning' : 'text-foreground'
         )}>
-          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Gaps</span>
-          <span className={cn(
-            'font-bold',
-            totalGaps > 10 ? 'text-destructive' : totalGaps > 0 ? 'text-warning' : 'text-foreground'
-          )}>
-            {totalGaps}
-          </span>
-        </div>
-      )}
+          {totalGaps}
+        </span>
+        {/* Per-series gaps tooltip */}
+        {seriesGaps.length > 0 && (
+          <div className="absolute left-0 top-full mt-1 hidden group-hover:block z-50 min-w-48 max-h-48 overflow-auto bg-popover border border-border rounded-lg shadow-lg p-2">
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1">Per-Series Gaps</div>
+            {seriesGaps.map((s) => (
+              <div key={s.id} className="flex justify-between text-xs py-0.5 border-b border-border/30 last:border-0">
+                <span className="text-foreground truncate max-w-32">{s.id}</span>
+                <span className="text-warning font-semibold ml-2">{s.gaps} / {s.missed}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Init Gap */}
-      {initGap > 0 && (
-        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-warning/10 border border-warning/30">
-          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">InitGap</span>
-          <span className="text-warning font-bold">{initGap}</span>
-        </div>
-      )}
+      <div className={cn(
+        'flex items-center gap-2 px-2 py-1 rounded-lg border',
+        initGap > 0 ? 'bg-warning/10 border-warning/30' : 'bg-muted/20 border-border/30'
+      )}>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">InitGap</span>
+        <span className={cn('font-bold', initGap > 0 ? 'text-warning' : 'text-foreground')}>{initGap}</span>
+      </div>
 
       <div className="flex-1" />
 

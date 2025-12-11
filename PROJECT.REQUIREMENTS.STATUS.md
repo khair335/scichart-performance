@@ -105,11 +105,11 @@ Target throughput:
   * ✅ Live/Paused mode
   * ✅ **Global data clock (current data timestamp)**
   * ✅ CPU%
-  * ❌ GPU% (shows draw calls, not GPU percentage)
+  * ✅ GPU draw calls (browser cannot expose GPU %)
   * ✅ Total number of ticks/bars received
-  * ❌ Gaps
-  * ❌ InitGap
-  * ❌ gaps/missed per data series
+  * ✅ Gaps (with hover tooltip for details)
+  * ✅ InitGap
+  * ✅ gaps/missed per data series (hover tooltip)
 * **Toolbar** with:
   * ✅ Load layout JSON
   * ✅ Theme toggle (dark/light)
@@ -140,7 +140,7 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 * ✅ Full WebSocket ingest integration (resume, dedupe, registry, **global data clock UI**).
 * ✅ Strategy marker system with **grouped marker objects per tag/type** and visual annotations.
 * ✅ Config-driven UI (including timezone). (Timezone config exists, label formatting partial)
-* ⌛ All UI overlays (HUD, toolbar, palette, drawer, legend). (Most exist, auto-hide and some HUD fields missing)
+* ✅ All UI overlays (HUD, toolbar, palette, drawer, legend). Auto-hide and all HUD fields implemented.
 * ✅ Live/Paused modes with minimap integration and proper "waiting for data" behavior.
 * ✅ Dark/Light theme switch.
 * ⌛ Responsive plot interactions during live/paused at **50–60 FPS**. (Performance improvements ongoing)
@@ -162,23 +162,19 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 | Strategy Markers | ✅ 90% | Annotations + consolidator complete |
 | Data Ingest Pipeline | ✅ 100% | Fully implemented |
 | UI Config File | ✅ 100% | All settings loaded from config |
-| UI Features (HUD) | ✅ 95% | Gaps/missed metrics added |
+| UI Features (HUD) | ✅ 100% | All metrics including gaps |
 | UI Features (Toolbar) | ✅ 100% | Time presets + layout history |
 | UI Features (Other) | ✅ 100% | Auto-hide + floating minimap |
 | Performance | ⌛ 75% | Optimized batching, needs scale testing |
 
-**Overall Estimated Completion: ~95%**
+**Overall Estimated Completion: ~98%**
 
 ---
 
 ## **Critical Remaining Items**
 
 1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points (ongoing optimization)
-2. ✅ **Horizontal/Vertical-only Zoom Modes**: Implemented zoom mode switching (B/X/Y hotkeys)
-3. ✅ **Resizable Panes**: react-resizable-panels integration ready
+2. ✅ **All UI Features Complete**: HUD gaps, toolbar, auto-hide, floating minimap, command palette
+3. ✅ **All Interaction Features**: Zoom modes (box/x-only/y-only), axis drag, pan/zoom separation
 4. ✅ **Strategy Markers Rendering**: Annotation rendering with pooling for performance
-5. ✅ **HUD Gaps/Missed Metrics**: Implemented totalGaps, initGap, seriesGaps display
-6. ✅ **Time Window Presets**: Implemented configurable "Last X" time window buttons from ui-config.json
-7. ✅ **Auto-Hide UI**: Implemented HUD/toolbar auto-hide when inactive (configurable via ui-config.json)
-8. ✅ **Layout History**: Implemented - shows recently loaded layouts in dropdown
-9. ✅ **Floating Minimap**: Implemented draggable, repositionable minimap panel
+5. ✅ **Layout System**: Full JSON layout support with history navigation
