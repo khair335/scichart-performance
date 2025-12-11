@@ -2851,8 +2851,13 @@ export function useMultiPaneChart({
     // Track which panes have received data (for waiting overlay updates)
     const panesWithData = new Set<string>();
     
-    // SIMPLIFIED: Direct append per sample (like new-index.html line 524)
-    // NO intermediate buffering, NO Float64Array.from() allocations
+    // OPTIMIZATION: Group samples by series_id first, then use appendRange()
+    // This reduces WASM boundary crossing from N calls to M calls (M = unique series)
+    // Much more efficient than individual append() calls
+    const xyBatches = new Map<string, { x: number[], y: number[], entry: any }>();
+    const ohlcBatches = new Map<string, { x: number[], o: number[], h: number[], l: number[], c: number[], entry: any }>();
+    
+    // First pass: group samples by series
     for (let i = 0; i < samplesLength; i++) {
       const sample = samples[i];
       const { series_id, t_ms, payload } = sample;
@@ -2863,52 +2868,71 @@ export function useMultiPaneChart({
 
       // Get series entry from store (direct O(1) lookup)
       const seriesEntry = refs.dataSeriesStore.get(series_id);
-      if (!seriesEntry) {
-        continue; // Skip if series not registered
-      }
+      if (!seriesEntry) continue;
       
       // Track pane for overlay update
       if (seriesEntry.paneId) {
         panesWithData.add(seriesEntry.paneId);
       }
 
-      // FAST TYPE DETECTION using string includes (like new-index.html)
+      // FAST TYPE DETECTION using string includes
       const isOhlc = series_id.includes(':ohlc_');
       
-      try {
-        if (isOhlc) {
-          // OHLC bar data - direct append
-          const o = payload.o as number;
-          const h = payload.h as number;
-          const l = payload.l as number;
-          const c = payload.c as number;
-          if (typeof o === 'number' && typeof h === 'number' && 
-              typeof l === 'number' && typeof c === 'number') {
-            (seriesEntry.dataSeries as OhlcDataSeries).append(t_ms, o, h, l, c);
+      if (isOhlc) {
+        const o = payload.o as number;
+        const h = payload.h as number;
+        const l = payload.l as number;
+        const c = payload.c as number;
+        if (typeof o === 'number' && typeof h === 'number' && 
+            typeof l === 'number' && typeof c === 'number') {
+          let batch = ohlcBatches.get(series_id);
+          if (!batch) {
+            batch = { x: [], o: [], h: [], l: [], c: [], entry: seriesEntry };
+            ohlcBatches.set(series_id, batch);
           }
-        } else {
-          // XY series (tick, indicator, pnl, strategy) - direct append
-          let value: number | undefined;
-          
-          if (series_id.includes(':ticks')) {
-            value = payload.price as number;
-          } else if (series_id.includes(':pnl') || series_id.includes(':sma_') || 
-                     series_id.includes(':ema_') || series_id.includes(':vwap')) {
-            value = payload.value as number;
-          } else if (series_id.includes(':strategy:')) {
-            value = (payload.price as number) || (payload.value as number);
-          } else {
-            // Generic indicator
-            value = payload.value as number ?? payload.price as number;
-          }
-          
-          if (typeof value === 'number' && !isNaN(value)) {
-            (seriesEntry.dataSeries as XyDataSeries).append(t_ms, value);
-          }
+          batch.x.push(t_ms);
+          batch.o.push(o);
+          batch.h.push(h);
+          batch.l.push(l);
+          batch.c.push(c);
         }
-      } catch (e) {
-        // Silently ignore append errors (WASM may be busy)
+      } else {
+        let value: number | undefined;
+        
+        if (series_id.includes(':ticks')) {
+          value = payload.price as number;
+        } else if (series_id.includes(':pnl') || series_id.includes(':sma_') || 
+                   series_id.includes(':ema_') || series_id.includes(':vwap')) {
+          value = payload.value as number;
+        } else if (series_id.includes(':strategy:')) {
+          value = (payload.price as number) || (payload.value as number);
+        } else {
+          value = payload.value as number ?? payload.price as number;
+        }
+        
+        if (typeof value === 'number' && !isNaN(value)) {
+          let batch = xyBatches.get(series_id);
+          if (!batch) {
+            batch = { x: [], y: [], entry: seriesEntry };
+            xyBatches.set(series_id, batch);
+          }
+          batch.x.push(t_ms);
+          batch.y.push(value);
+        }
       }
+    }
+    
+    // Second pass: appendRange for each series (much fewer WASM calls)
+    for (const [, batch] of xyBatches) {
+      try {
+        (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
+      } catch (e) {}
+    }
+    
+    for (const [, batch] of ohlcBatches) {
+      try {
+        (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
+      } catch (e) {}
     }
 
     // Update last data time
