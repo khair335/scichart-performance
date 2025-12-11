@@ -21,7 +21,7 @@ Target throughput:
 
 * ✅ Multi-surface charts with **line**, **OHLC**, and **PnL** plots.
 * ✅ Configurable **Multi-Pane Layouts**: Multi-pane grids are defined by the plot layout JSON file, e.g., 1x1 (only one pane), 4×3, 1×2, 2×1, 2×2, 4×4, 1x3, 3x1, etc..
-* ❌ Resizable panes with mouse drag.
+* ✅ Resizable panes with mouse drag (using react-resizable-panels).
 * ✅ **Each pane must have a toggleable plot title/legend**, provided by layout or auto-generated.
 * ✅ **Linked X-time window** across all panes; independent Y-axes per pane.
 * ✅ **Default Full-Range View**: The x-axis should initially display the entire collected dataset—whether that represents 10 seconds, 1 minute, 10 minutes, 1 hour, or a full 8-hour session.
@@ -37,8 +37,8 @@ Target throughput:
   * ✅ Vertical-only zoom (Y hotkey to switch mode)
   * ✅ Mouse wheel zoom (X-axis default, Shift+wheel for Y-axis)
   * ✅ Axis dragging - XAxisDragModifier, YAxisDragModifier (stretch/shrink axes)
-* ⌛ **SciChartOverview minimap** controls full-range navigation and Live/Paused window anchoring, and user-selected windowing/sliding — including the ability to display the entire collected dataset. (Basic minimap exists, floating panel not implemented)
-* ❌ Automatic switching to live from paused mode. SciChartOverview should be a floating panel that can be freely dragged and repositioned anywhere on the screen.
+* ✅ **SciChartOverview minimap** controls full-range navigation and Live/Paused window anchoring. Now implemented as a floating, draggable panel.
+* ✅ Automatic switching to live from paused mode. Floating minimap can be freely dragged and repositioned anywhere on the screen.
 
 ### **3. Dynamic JSON Layout (Runtime Reloadable)**
 
@@ -115,11 +115,11 @@ Target throughput:
   * ✅ Theme toggle (dark/light)
   * ✅ Minimap toggle
   * ✅ Jump-to-Live
-  * ❌ Programmable "Last X" Time Windows: Allow fully configurable time-window presets—such as "Last 15 minutes," "Last 30 minutes," "Last 1 hour," or "Last 4 hours"—defined in the UI JSON config file. The number of presets (e.g., 2 presets, 3 presets, etc.) is determined entirely by the config file. The "Entire Session" option is always included by default, while all other presets are customizable.
-  * ⌛ Show Loaded Plot Layouts: Display a list of previously loaded Plot Layout JSON files, allowing the user to reselect and automatically reapply any saved layout to the UI. (Current layout name shown, history not implemented)
+  * ✅ Programmable "Last X" Time Windows: Configurable time-window presets defined in ui-config.json (Last 15 min, 30 min, 1 hour, 4 hours). "Entire Session" always included.
+  * ✅ Show Loaded Plot Layouts: Display a list of recently loaded layouts in a dropdown menu for quick reselection.
 * ✅ **Command palette (Ctrl/⌘+K)** for quick actions.
-* ⌛ **Series browser drawer** for selecting which series are visible and to move series between panes. (Visibility toggle works, move between panes UI exists but functionality partial)
-* ❌ Overlays (HUD / toolbar / palette / drawers) auto-hide when inactive.
+* ✅ **Series browser drawer** for selecting which series are visible and to move series between panes.
+* ✅ Overlays (HUD / toolbar / palette / drawers) auto-hide when inactive (configurable via ui-config.json).
 
 ---
 
@@ -156,18 +156,18 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| Multi-Pane Charting | ✅ 85% | Resizable panes missing |
-| Live/Paused Modes | ✅ 80% | X-only/Y-only zoom modes missing |
+| Multi-Pane Charting | ✅ 90% | Resizable panes UI ready |
+| Live/Paused Modes | ✅ 95% | All zoom modes implemented |
 | Dynamic JSON Layout | ✅ 100% | Fully implemented |
-| Strategy Markers | ⌛ 40% | Consolidator exists, rendering incomplete |
+| Strategy Markers | ⌛ 50% | Consolidator + line series, annotations partial |
 | Data Ingest Pipeline | ✅ 100% | Fully implemented |
-| UI Config File | ✅ 90% | Timezone label formatting partial |
-| UI Features (HUD) | ⌛ 70% | Gaps/missed metrics missing |
-| UI Features (Toolbar) | ⌛ 70% | Time window presets missing |
-| UI Features (Other) | ✅ 85% | Auto-hide missing |
+| UI Config File | ✅ 95% | Auto-hide + time presets loaded from config |
+| UI Features (HUD) | ✅ 90% | Gaps/missed metrics added |
+| UI Features (Toolbar) | ✅ 95% | Time window presets + layout history |
+| UI Features (Other) | ✅ 95% | Auto-hide + floating minimap |
 | Performance | ⌛ 70% | Degrades after 50k+ ticks |
 
-**Overall Estimated Completion: ~80%**
+**Overall Estimated Completion: ~90%**
 
 ---
 

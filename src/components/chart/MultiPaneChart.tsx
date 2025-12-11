@@ -27,6 +27,11 @@ import {
   DpiHelper,
   EResamplingMode,
   EExecuteOn,
+  // Annotations for strategy markers
+  CustomAnnotation,
+  EHorizontalAnchorPoint,
+  EVerticalAnchorPoint,
+  ECoordinateMode,
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
