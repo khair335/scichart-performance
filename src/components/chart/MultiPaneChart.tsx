@@ -2955,114 +2955,75 @@ export function useMultiPaneChart({
       }
     }
     
-    // CRITICAL PERFORMANCE FIX: Suspend all surfaces before batch updates
-    // This prevents multiple redraws during data append operations
-    const surfacesToResume: SciChartSurface[] = [];
-    
-    // Suspend dynamic pane surfaces
-    for (const [, paneSurface] of refs.paneSurfaces) {
+    // Second pass: appendRange for each series (much fewer WASM calls)
+    for (const [, batch] of xyBatches) {
       try {
-        if (paneSurface.surface && !paneSurface.surface.isDeleted) {
-          paneSurface.surface.suspendUpdates();
-          surfacesToResume.push(paneSurface.surface);
-        }
+        (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
       } catch (e) {}
     }
     
-    // Suspend legacy surfaces
-    if (refs.tickSurface && !refs.tickSurface.isDeleted) {
+    for (const [, batch] of ohlcBatches) {
       try {
-        refs.tickSurface.suspendUpdates();
-        surfacesToResume.push(refs.tickSurface);
-      } catch (e) {}
-    }
-    if (refs.ohlcSurface && !refs.ohlcSurface.isDeleted) {
-      try {
-        refs.ohlcSurface.suspendUpdates();
-        surfacesToResume.push(refs.ohlcSurface);
+        (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
       } catch (e) {}
     }
     
-    try {
-      // Second pass: appendRange for each series (much fewer WASM calls)
-      for (const [, batch] of xyBatches) {
-        try {
-          (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
-        } catch (e) {}
-      }
-      
-      for (const [, batch] of ohlcBatches) {
-        try {
-          (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
-        } catch (e) {}
-      }
-      
-      // Third pass: Create strategy marker annotations (only if we have strategy samples)
-      // OPTIMIZATION: Only iterate samples if we might have strategy markers
-      if (plotLayout && refs.paneSurfaces.size > 0) {
+    // Third pass: Create strategy marker annotations
+    // Strategy markers are rendered as visual annotations (triangles/circles) in addition to line series
+    if (plotLayout && refs.paneSurfaces.size > 0) {
+      for (let i = 0; i < samplesLength; i++) {
+        const sample = samples[i];
+        const { series_id, t_ms, payload } = sample;
+        
+        // Only process strategy markers/signals
+        if (!series_id.includes(':strategy:')) continue;
+        if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
+        
+        // Get the pane(s) where this marker should appear
+        const seriesEntry = refs.dataSeriesStore.get(series_id);
+        if (!seriesEntry || !seriesEntry.paneId) continue;
+        
+        // Get all eligible panes for strategy markers
         const eligiblePanes = plotLayout.strategyMarkerPanes;
-        if (eligiblePanes && eligiblePanes.size > 0) {
-          for (let i = 0; i < samplesLength; i++) {
-            const sample = samples[i];
-            const { series_id, t_ms, payload } = sample;
+        
+        for (const paneId of eligiblePanes) {
+          const paneSurface = refs.paneSurfaces.get(paneId);
+          if (!paneSurface || !paneSurface.surface) continue;
+          
+          // Get or create annotation pool for this pane
+          let pool = refs.markerAnnotationPools.get(paneId);
+          if (!pool) {
+            pool = new MarkerAnnotationPool();
+            refs.markerAnnotationPools.set(paneId, pool);
+          }
+          
+          // Parse marker data
+          const markerData = parseMarkerFromSample({
+            t_ms,
+            v: (payload.price as number) || (payload.value as number) || 0,
+            type: payload.type as string,
+            direction: payload.direction as string,
+            label: payload.label as string,
+          });
+          
+          // Skip invalid markers
+          if (markerData.y === 0) continue;
+          
+          // Create unique key for this marker
+          const markerKey = `${series_id}:${t_ms}`;
+          
+          try {
+            // Get or create annotation
+            const annotation = pool.getAnnotation(markerData, markerKey, paneSurface.wasm);
             
-            // Only process strategy markers/signals - fast string check
-            if (!series_id.includes(':strategy:')) continue;
-            if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
-            
-            // Get the pane(s) where this marker should appear
-            const seriesEntry = refs.dataSeriesStore.get(series_id);
-            if (!seriesEntry || !seriesEntry.paneId) continue;
-            
-            for (const paneId of eligiblePanes) {
-              const paneSurface = refs.paneSurfaces.get(paneId);
-              if (!paneSurface || !paneSurface.surface) continue;
-              
-              // Get or create annotation pool for this pane
-              let pool = refs.markerAnnotationPools.get(paneId);
-              if (!pool) {
-                pool = new MarkerAnnotationPool();
-                refs.markerAnnotationPools.set(paneId, pool);
-              }
-              
-              // Parse marker data
-              const markerData = parseMarkerFromSample({
-                t_ms,
-                v: (payload.price as number) || (payload.value as number) || 0,
-                type: payload.type as string,
-                direction: payload.direction as string,
-                label: payload.label as string,
-              });
-              
-              // Skip invalid markers
-              if (markerData.y === 0) continue;
-              
-              // Create unique key for this marker
-              const markerKey = `${series_id}:${t_ms}`;
-              
-              try {
-                // Get or create annotation
-                const annotation = pool.getAnnotation(markerData, markerKey, paneSurface.wasm);
-                
-                // Add to surface if not already added
-                if (!paneSurface.surface.annotations.contains(annotation)) {
-                  paneSurface.surface.annotations.add(annotation);
-                }
-              } catch (e) {
-                // Silently ignore annotation creation errors
-              }
+            // Add to surface if not already added
+            if (!paneSurface.surface.annotations.contains(annotation)) {
+              paneSurface.surface.annotations.add(annotation);
             }
+          } catch (e) {
+            // Silently ignore annotation creation errors
           }
         }
-      }
-    } finally {
-      // CRITICAL: Always resume surfaces even if there was an error
-      for (const surface of surfacesToResume) {
-        try {
-          if (!surface.isDeleted) {
-            surface.resumeUpdates();
-          }
-        } catch (e) {}
       }
     }
 
@@ -3096,11 +3057,8 @@ export function useMultiPaneChart({
     if (isLive && autoScrollEnabled && latestTime > 0) {
       const now = performance.now();
       const windowMs = 300 * 1000; // 5 minutes window (matching new-index.html)
+      const X_SCROLL_THRESHOLD = 5000; // 5 seconds threshold
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
-      
-      // SMOOTH SCROLLING: Cap how much we can scroll per frame to prevent jarring jumps
-      // At 60fps, this is ~60 seconds of catchup per second (comfortable)
-      const MAX_SCROLL_PER_FRAME = 1000; // 1 second max jump per frame
       
       // Find actual data max from DataSeries
       let actualDataMax = 0;
@@ -3120,6 +3078,7 @@ export function useMultiPaneChart({
       if (!hasData) actualDataMax = latestTime;
       
       const padding = 10 * 1000;
+      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
       
       // Update all X-axes
       const axesToUpdate: Array<{ axis: any; surface: any }> = [];
@@ -3139,29 +3098,11 @@ export function useMultiPaneChart({
       for (const { axis, surface } of axesToUpdate) {
         try {
           const currentMax = axis.visibleRange?.max || 0;
-          const targetMax = actualDataMax + padding;
-          const diff = targetMax - currentMax;
-          
-          // SMOOTH SCROLL: If diff is too large, cap the movement per frame
-          // This prevents jarring jumps when catching up after freeze
-          let newMax: number;
-          if (diff > MAX_SCROLL_PER_FRAME) {
-            // Smoothly catch up - move by max allowed per frame
-            newMax = currentMax + MAX_SCROLL_PER_FRAME;
-          } else if (diff < -MAX_SCROLL_PER_FRAME) {
-            // Scrolling backwards (rare), also cap
-            newMax = currentMax - MAX_SCROLL_PER_FRAME;
-          } else if (Math.abs(diff) > 100) {
-            // Small diff, just jump to target
-            newMax = targetMax;
-          } else {
-            // Very small diff, skip update
-            continue;
+          const diff = Math.abs(currentMax - newRange.max);
+          if (!axis.visibleRange || diff > X_SCROLL_THRESHOLD) {
+            axis.visibleRange = newRange;
+            surface?.invalidateElement();
           }
-          
-          const newRange = new NumberRange(newMax - windowMs, newMax);
-          axis.visibleRange = newRange;
-          surface?.invalidateElement();
         } catch (e) {}
       }
       
