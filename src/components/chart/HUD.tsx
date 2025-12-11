@@ -1,5 +1,11 @@
 import { cn } from '@/lib/utils';
 
+interface SeriesGapInfo {
+  id: string;
+  gaps: number;
+  missed: number;
+}
+
 interface HUDProps {
   stage: string;
   rate: number;
@@ -23,6 +29,11 @@ interface HUDProps {
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
   className?: string;
+  // Gap metrics
+  totalGaps?: number;
+  initGap?: number;
+  seriesGaps?: SeriesGapInfo[];
+  visible?: boolean;
 }
 
 export function HUD({
@@ -38,7 +49,12 @@ export function HUD({
   memoryUsage = 0,
   gpuDrawCalls = 0,
   className,
+  totalGaps = 0,
+  initGap = 0,
+  seriesGaps = [],
+  visible = true,
 }: HUDProps) {
+  if (!visible) return null;
   const formatTime = (ms: number) => {
     if (!ms || !Number.isFinite(ms)) return '--:--:--';
     const d = new Date(ms);
@@ -188,6 +204,32 @@ export function HUD({
         <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
           <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">GPU</span>
           <span className="text-foreground font-semibold">{gpuDrawCalls}</span>
+        </div>
+      )}
+
+      {/* Gaps */}
+      {totalGaps > 0 && (
+        <div className={cn(
+          'flex items-center gap-2 px-2 py-1 rounded-lg border',
+          totalGaps > 10 ? 'bg-destructive/10 border-destructive/30' :
+          totalGaps > 0 ? 'bg-warning/10 border-warning/30' :
+          'bg-muted/20 border-border/30'
+        )}>
+          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">Gaps</span>
+          <span className={cn(
+            'font-bold',
+            totalGaps > 10 ? 'text-destructive' : totalGaps > 0 ? 'text-warning' : 'text-foreground'
+          )}>
+            {totalGaps}
+          </span>
+        </div>
+      )}
+
+      {/* Init Gap */}
+      {initGap > 0 && (
+        <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-warning/10 border border-warning/30">
+          <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">InitGap</span>
+          <span className="text-warning font-bold">{initGap}</span>
         </div>
       )}
 

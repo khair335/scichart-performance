@@ -1,9 +1,11 @@
 /**
  * DynamicPlotGrid Component
  * Renders a dynamic MxN grid of chart panes based on plot layout
+ * Supports resizable panes using react-resizable-panels
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
 interface DynamicPlotGridProps {
@@ -12,6 +14,7 @@ interface DynamicPlotGridProps {
   onPaneDestroyed?: (paneId: string) => void;
   onGridReady?: (parentContainerId: string, rows: number, cols: number) => void;
   className?: string;
+  resizable?: boolean; // Enable/disable resizable panes
 }
 
 export function DynamicPlotGrid({
@@ -19,7 +22,8 @@ export function DynamicPlotGrid({
   onPaneReady,
   onPaneDestroyed,
   onGridReady,
-  className = ''
+  className = '',
+  resizable = true,
 }: DynamicPlotGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);

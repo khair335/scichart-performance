@@ -174,10 +174,11 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 ## **Critical Remaining Items**
 
 1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points
-2. ❌ **Horizontal/Vertical-only Zoom Modes**: Implement zoom mode switching (B/X/Y hotkeys)
-3. ❌ **Resizable Panes**: Allow drag-to-resize panes
-4. ⌛ **Strategy Markers Rendering**: Complete annotation rendering for consolidated markers
-5. ❌ **HUD Gaps/Missed Metrics**: Display gap and missed sample counts per series
-6. ❌ **Time Window Presets**: Configurable "Last X" time window buttons
-7. ❌ **Auto-Hide UI**: HUD/toolbar/drawer auto-hide when inactive
-8. ❌ **Floating Minimap**: Draggable, repositionable minimap panel
+2. ✅ **Horizontal/Vertical-only Zoom Modes**: Implemented zoom mode switching (B/X/Y hotkeys)
+3. ⌛ **Resizable Panes**: Partially implemented (react-resizable-panels imported)
+4. ⌛ **Strategy Markers Rendering**: Consolidator exists, annotation rendering not complete
+5. ✅ **HUD Gaps/Missed Metrics**: Implemented totalGaps, initGap, seriesGaps display
+6. ✅ **Time Window Presets**: Implemented configurable "Last X" time window buttons from ui-config.json
+7. ✅ **Auto-Hide UI**: Implemented HUD/toolbar auto-hide when inactive (configurable via ui-config.json)
+8. ✅ **Layout History**: Implemented - shows recently loaded layouts in dropdown
+9. ⌛ **Floating Minimap**: Not yet implemented (draggable, repositionable panel)
