@@ -6,6 +6,7 @@ import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
 import { SeriesBrowser } from './SeriesBrowser';
 import { CommandPalette } from './CommandPalette';
+import { FloatingMinimap } from './FloatingMinimap';
 import { defaultChartConfig } from '@/types/chart';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -1108,23 +1109,15 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         )}
       </div>
 
-      {/* Overview/Minimap (always rendered, visibility controlled by CSS) */}
-      <div 
-        className={`shrink-0 border-t border-border/60 relative glass-card transition-all duration-200 ${
-          minimapEnabled 
-            ? 'h-20 opacity-100 overflow-visible' 
-            : 'h-0 opacity-0 overflow-hidden pointer-events-none'
-        }`}
+      {/* Floating Minimap (draggable) */}
+      <FloatingMinimap
+        visible={minimapEnabled}
+        onClose={() => setMinimapEnabled(false)}
+        defaultPosition={{ x: window.innerWidth - 340, y: window.innerHeight - 160 }}
+        defaultSize={{ width: 320, height: 120 }}
       >
-        <div id="overview-chart" className="w-full h-full rounded-b-lg" />
-        {/* "Waiting for Data" overlay for minimap */}
-        <div id="overview-chart-waiting" className="absolute inset-0 flex items-center justify-center bg-background/60 backdrop-blur-md z-20 pointer-events-none rounded-b-lg" style={{ display: 'none' }}>
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 border-primary/50 border-t-primary rounded-full animate-spin mx-auto mb-1"></div>
-            <p className="text-xs text-muted-foreground font-medium">Waiting for Data...</p>
-          </div>
-        </div>
-      </div>
+        <div id="overview-chart" className="w-full h-full" />
+      </FloatingMinimap>
 
       {/* Series Browser Drawer */}
       <SeriesBrowser
