@@ -831,6 +831,20 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         seriesCount={registry.length}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         isFullscreen={isFullscreen}
+        zoomMode={zoomMode}
+        onZoomModeChange={setZoomMode}
+        timeWindowPresets={[
+          { label: 'Last 15 min', minutes: 15 },
+          { label: 'Last 30 min', minutes: 30 },
+          { label: 'Last 1 hour', minutes: 60 },
+          { label: 'Last 4 hours', minutes: 240 },
+        ]}
+        onTimeWindowSelect={(minutes) => {
+          // Time window selection logic
+          // 0 = entire session, otherwise set to last N minutes
+          console.log('[TradingChart] Time window selected:', minutes);
+          // This will be implemented to adjust visible range
+        }}
         className="shrink-0 border-b border-border"
       />
 

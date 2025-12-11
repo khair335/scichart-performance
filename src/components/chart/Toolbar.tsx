@@ -13,8 +13,23 @@ import {
   Radio,
   RefreshCw,
   Command,
+  Box,
+  MoveHorizontal,
+  MoveVertical,
+  Clock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+
+export interface TimeWindowPreset {
+  label: string;
+  minutes: number; // 0 = entire session
+}
 
 interface ToolbarProps {
   isLive: boolean;
@@ -35,6 +50,12 @@ interface ToolbarProps {
   seriesCount?: number;
   isFullscreen?: boolean;
   className?: string;
+  // Zoom mode
+  zoomMode?: 'box' | 'x-only' | 'y-only';
+  onZoomModeChange?: (mode: 'box' | 'x-only' | 'y-only') => void;
+  // Time window presets
+  timeWindowPresets?: TimeWindowPreset[];
+  onTimeWindowSelect?: (minutes: number) => void;
 }
 
 export function Toolbar({
@@ -56,6 +77,10 @@ export function Toolbar({
   onOpenCommandPalette,
   isFullscreen = false,
   className,
+  zoomMode = 'box',
+  onZoomModeChange,
+  timeWindowPresets = [],
+  onTimeWindowSelect,
 }: ToolbarProps) {
   return (
     <div className={cn(
@@ -85,10 +110,112 @@ export function Toolbar({
         size="sm"
         onClick={onJumpToLive}
         className="h-8 px-3 gap-1.5 text-xs font-medium btn-modern rounded-lg hover:bg-primary/10 hover:text-primary transition-all"
-        title="Jump to latest data"
+        title="Jump to latest data (J)"
       >
         <Radio className="w-3.5 h-3.5" />
         <span className="hidden sm:inline">Jump to Live</span>
+      </Button>
+
+      <div className="w-px h-6 bg-border/60 mx-1" />
+
+      {/* Zoom Mode Buttons */}
+      {onZoomModeChange && (
+        <>
+          <div className="flex items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onZoomModeChange('box')}
+              className={cn(
+                'h-8 w-8 p-0 rounded-lg btn-modern transition-all',
+                zoomMode === 'box'
+                  ? 'text-primary bg-primary/10 border border-primary/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+              title="Box zoom mode (B)"
+            >
+              <Box className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onZoomModeChange('x-only')}
+              className={cn(
+                'h-8 w-8 p-0 rounded-lg btn-modern transition-all',
+                zoomMode === 'x-only'
+                  ? 'text-primary bg-primary/10 border border-primary/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+              title="X-only zoom mode (X)"
+            >
+              <MoveHorizontal className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onZoomModeChange('y-only')}
+              className={cn(
+                'h-8 w-8 p-0 rounded-lg btn-modern transition-all',
+                zoomMode === 'y-only'
+                  ? 'text-primary bg-primary/10 border border-primary/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+              title="Y-only zoom mode (Y)"
+            >
+              <MoveVertical className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+          <div className="w-px h-6 bg-border/60 mx-1" />
+        </>
+      )}
+
+      {/* Time Window Presets */}
+      {timeWindowPresets.length > 0 && onTimeWindowSelect && (
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-3 gap-1.5 text-xs font-medium btn-modern rounded-lg hover:bg-primary/10 hover:text-primary transition-all"
+                title="Time window presets"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Window</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[140px]">
+              {timeWindowPresets.map((preset, index) => (
+                <DropdownMenuItem
+                  key={index}
+                  onClick={() => onTimeWindowSelect(preset.minutes)}
+                  className="text-xs"
+                >
+                  {preset.label}
+                </DropdownMenuItem>
+              ))}
+              {/* Always include Entire Session */}
+              <DropdownMenuItem
+                onClick={() => onTimeWindowSelect(0)}
+                className="text-xs font-semibold"
+              >
+                Entire Session
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="w-px h-6 bg-border/60 mx-1" />
+        </>
+      )}
+
+      {/* Zoom Extents */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onZoomExtents}
+        className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 btn-modern transition-all"
+        title="Fit all data (Z)"
+      >
+        <ZoomIn className="w-3.5 h-3.5" />
       </Button>
 
       <div className="w-px h-6 bg-border/60 mx-1" />
@@ -159,7 +286,7 @@ export function Toolbar({
               ? 'text-primary bg-primary/10 border border-primary/30' 
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
           )}
-          title="Toggle minimap"
+          title="Toggle minimap (M)"
         >
           <Map className="w-3.5 h-3.5" />
         </Button>
@@ -181,7 +308,7 @@ export function Toolbar({
           size="sm"
           onClick={onToggleTheme}
           className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 btn-modern transition-all"
-          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme (T)`}
         >
           {theme === 'dark' ? (
             <Sun className="w-3.5 h-3.5" />
@@ -197,7 +324,7 @@ export function Toolbar({
             size="sm"
             onClick={onToggleFullscreen}
             className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 btn-modern transition-all"
-            title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen (F)' : 'Enter fullscreen (F)'}
           >
             {isFullscreen ? (
               <Minimize2 className="w-3.5 h-3.5" />
