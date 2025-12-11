@@ -2525,6 +2525,14 @@ export function useMultiPaneChart({
           onReadyChange?.(true);
         }
         
+        // CRITICAL: Trigger overview refresh after panes are created
+        // This ensures the minimap recreates with the new source surface
+        // Use a small delay to ensure series have been added to surfaces
+        setTimeout(() => {
+          console.log('[MultiPaneChart] Triggering overview refresh after pane creation');
+          setOverviewNeedsRefresh(prev => prev + 1);
+        }, 500);
+        
         // CRITICAL: After all panes are created, manually trigger preallocation for any series in registry
         // This ensures series are created immediately when panes are ready, even if the useEffect hasn't run yet
        
