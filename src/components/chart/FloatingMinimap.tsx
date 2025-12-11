@@ -101,15 +101,14 @@ export function FloatingMinimap({
     };
   }, [isDragging, isResizing, size.width, size.height]);
 
-  if (!visible) return null;
-
   return (
     <div
       ref={panelRef}
       className={cn(
         'fixed z-50 bg-card/95 backdrop-blur-md border border-border rounded-lg shadow-xl',
-        'transition-shadow duration-200',
+        'transition-all duration-200',
         isDragging && 'shadow-2xl cursor-grabbing',
+        !visible && 'opacity-0 pointer-events-none scale-95',
         className
       )}
       style={{
