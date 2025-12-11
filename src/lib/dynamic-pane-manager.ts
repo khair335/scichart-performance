@@ -22,6 +22,8 @@ import {
   EXyDirection,
   Rect,
   ESubSurfacePositionCoordinateMode,
+  SciChartDefaults,
+  DpiHelper,
 } from 'scichart';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
@@ -99,9 +101,15 @@ export class DynamicPaneManager {
     this.gridRows = gridRows;
     this.gridCols = gridCols;
 
+    // PERF: Apply global SciChart performance settings BEFORE creating surfaces
+    DpiHelper.IsDpiScaleEnabled = false; // Disable DPI scaling for 4x better performance on Retina
+    SciChartDefaults.useNativeText = true; // Use native WebGL text rendering
+    SciChartDefaults.useSharedCache = true; // Share label cache across charts
+    SciChartDefaults.performanceWarnings = false; // Disable perf warnings for production
+
     const result = await SciChartSurface.create(containerId, {
       theme: this.theme,
-      freezeWhenOutOfView: true, // Freeze charts when out of viewport for better performance
+      freezeWhenOutOfView: true, // PERF: Freeze charts when out of viewport
     });
 
     this.parentSurface = result.sciChartSurface;
