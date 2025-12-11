@@ -168,6 +168,7 @@ interface MultiPaneChartProps {
   registry?: Array<{ id: string; lastMs: number }>; // Data registry for global data clock
   plotLayout?: ParsedLayout | null; // Plot layout for dynamic pane assignment
   zoomMode?: 'box' | 'x-only' | 'y-only'; // Zoom mode for chart interactions
+  theme?: 'dark' | 'light'; // Theme for chart surfaces
 }
 
 // Unified DataSeries Store Entry
@@ -225,6 +226,7 @@ export function useMultiPaneChart({
   registry = [],
   plotLayout = null,
   zoomMode = 'box',
+  theme = 'dark',
 }: MultiPaneChartProps) {
   // Default UI config if not provided
   const defaultUIConfig: UIConfig = {
@@ -806,8 +808,8 @@ export function useMultiPaneChart({
   // which does GPU-side downsampling for display without losing source data
   
 
-  // Theme configuration - use 'Dark' as base and override with custom colors
-  const chartTheme = {
+  // Theme configuration - dynamic based on theme prop
+  const darkTheme = {
     type: 'Dark' as const,
     axisBorder: 'transparent',
     axisTitleColor: '#9fb2c9',
@@ -831,6 +833,33 @@ export function useMultiPaneChart({
     cursorLineBrush: '#50C7E0',
     rolloverLineStroke: '#50C7E0',
   };
+
+  const lightTheme = {
+    type: 'Light' as const,
+    axisBorder: 'transparent',
+    axisTitleColor: '#374151',
+    annotationsGripsBackgroundBrush: 'transparent',
+    annotationsGripsBorderBrush: 'transparent',
+    axis3DBandsFill: 'transparent',
+    axisBandsFill: 'transparent',
+    gridBackgroundBrush: 'transparent',
+    gridBorderBrush: 'transparent',
+    loadingAnimationBackground: '#ffffff',
+    loadingAnimationForeground: '#3b82f6',
+    majorGridLineBrush: '#e5e7eb',
+    minorGridLineBrush: '#f3f4f6',
+    sciChartBackground: '#ffffff',
+    tickTextBrush: '#374151',
+    labelBackgroundBrush: '#ffffff',
+    labelBorderBrush: '#d1d5db',
+    labelForegroundBrush: '#374151',
+    textAnnotationBackground: '#f9fafb',
+    textAnnotationForeground: '#1f2937',
+    cursorLineBrush: '#3b82f6',
+    rolloverLineStroke: '#3b82f6',
+  };
+
+  const chartTheme = theme === 'dark' ? darkTheme : lightTheme;
 
   // Initialize charts
   useEffect(() => {
@@ -2271,6 +2300,9 @@ export function useMultiPaneChart({
     
     // Update timezone when it changes
     paneManager.setTimezone(config.chart.timezone || 'UTC');
+    
+    // Update theme when it changes
+    paneManager.setTheme(chartTheme);
 
     // For dynamic layouts, we don't need to wait for legacy isReady
     // We'll set isReady after creating the first pane
@@ -2741,7 +2773,17 @@ export function useMultiPaneChart({
       isMounted = false;
       // Don't destroy panes here - let the layout change handler do it
     };
-  }, [plotLayout, config.performance.maxAutoTicks, config.chart.separateXAxes, zoomMode, parentSurfaceReady]); // Added parentSurfaceReady to trigger pane creation when parent surface is ready
+  }, [plotLayout, config.performance.maxAutoTicks, config.chart.separateXAxes, zoomMode, parentSurfaceReady, theme]); // Added parentSurfaceReady to trigger pane creation when parent surface is ready, theme for theme updates
+  
+  // Update theme for all surfaces when theme changes
+  useEffect(() => {
+    const paneManager = paneManagerRef.current;
+    
+    if (paneManager) {
+      // Update theme in pane manager (this updates all dynamic panes)
+      paneManager.setTheme(chartTheme);
+    }
+  }, [theme, chartTheme]);
   
   // Update zoom mode for all surfaces (legacy and dynamic)
   useEffect(() => {
