@@ -356,6 +356,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     setLiveMode,
     zoomExtents,
     jumpToLive,
+    setTimeWindow,
     handleGridReady,
   } = useMultiPaneChart({
     tickContainerId: 'tick-chart',
@@ -903,18 +904,14 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     if (minutes === 0) {
       // Entire session - zoom to fit all data
       zoomExtents();
+      setIsLive(false); // Pause auto-scroll when viewing entire session
     } else {
-      // Set visible range to last N minutes
-      const windowMs = minutes * 60 * 1000;
-      const endMs = dataClockMs || Date.now();
-      const startMs = endMs - windowMs;
-      
-      // This would need to be implemented in MultiPaneChart to set the X axis range
-      // For now, just log and jump to live
-      console.log('[TradingChart] Time window selected:', minutes, 'minutes, range:', startMs, '-', endMs);
-      handleJumpToLive();
+      // Set visible range to last N minutes using the actual data clock
+      const clockMs = dataClockMs || Date.now();
+      setTimeWindow(minutes, clockMs);
+      setIsLive(false); // Pause auto-scroll when user selects a time window
     }
-  }, [zoomExtents, dataClockMs, handleJumpToLive]);
+  }, [zoomExtents, dataClockMs, setTimeWindow]);
 
   // Handle loading layout from history
   const handleLoadHistoryLayout = useCallback(async (entry: { name: string; path?: string; loadedAt: number }) => {
