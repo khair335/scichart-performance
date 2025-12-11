@@ -24,7 +24,7 @@
   },
   "performance": {
     "targetFPS": 60,
-    "batchSize": 5000,
+    "batchSize": 2000,
     "downsampleRatio": 1,
     "maxAutoTicks": 6,
     "fifoEnabled": true,
