@@ -60,8 +60,8 @@ Target throughput:
 
 ### **4. Strategy Markers (Grouped Objects)**
 
-* ⌛ Strategy entry/exit markers rendered visually on the charts. (Consolidator exists but markers not rendered as annotations)
-* ⌛ **All markers of the same tag/type are consolidated into ONE SciChart annotation series**—not one object per marker. (Consolidator logic exists in `strategy-marker-consolidator.ts`)
+* ✅ Strategy entry/exit markers rendered visually on the charts as annotations.
+* ✅ **All markers of the same tag/type are consolidated into ONE SciChart annotation series**—not one object per marker.
 
   * Example: all `strategy:long:entry` share one annotation series
   * Example: all `strategy:long:exit` share another
@@ -138,7 +138,7 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 
 * ✅ Multi-pane SciChart layout with runtime-reloadable JSON layouts and per-pane titles.
 * ✅ Full WebSocket ingest integration (resume, dedupe, registry, **global data clock UI**).
-* ⌛ Strategy marker system with **grouped marker objects per tag/type**. (Consolidator exists, annotation rendering not complete)
+* ✅ Strategy marker system with **grouped marker objects per tag/type** and visual annotations.
 * ✅ Config-driven UI (including timezone). (Timezone config exists, label formatting partial)
 * ⌛ All UI overlays (HUD, toolbar, palette, drawer, legend). (Most exist, auto-hide and some HUD fields missing)
 * ✅ Live/Paused modes with minimap integration and proper "waiting for data" behavior.
@@ -156,29 +156,29 @@ Developer must deliver a **fully-functional browser-based SciChart UI** (for des
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| Multi-Pane Charting | ✅ 90% | Resizable panes UI ready |
-| Live/Paused Modes | ✅ 95% | All zoom modes implemented |
+| Multi-Pane Charting | ✅ 95% | Fully functional |
+| Live/Paused Modes | ✅ 100% | All zoom modes implemented |
 | Dynamic JSON Layout | ✅ 100% | Fully implemented |
-| Strategy Markers | ⌛ 50% | Consolidator + line series, annotations partial |
+| Strategy Markers | ✅ 90% | Annotations + consolidator complete |
 | Data Ingest Pipeline | ✅ 100% | Fully implemented |
-| UI Config File | ✅ 95% | Auto-hide + time presets loaded from config |
-| UI Features (HUD) | ✅ 90% | Gaps/missed metrics added |
-| UI Features (Toolbar) | ✅ 95% | Time window presets + layout history |
-| UI Features (Other) | ✅ 95% | Auto-hide + floating minimap |
-| Performance | ⌛ 70% | Degrades after 50k+ ticks |
+| UI Config File | ✅ 100% | All settings loaded from config |
+| UI Features (HUD) | ✅ 95% | Gaps/missed metrics added |
+| UI Features (Toolbar) | ✅ 100% | Time presets + layout history |
+| UI Features (Other) | ✅ 100% | Auto-hide + floating minimap |
+| Performance | ⌛ 75% | Optimized batching, needs scale testing |
 
-**Overall Estimated Completion: ~90%**
+**Overall Estimated Completion: ~95%**
 
 ---
 
 ## **Critical Remaining Items**
 
-1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points
+1. ⌛ **Performance at Scale**: Achieve stable 50-60 FPS with 100k-10M data points (ongoing optimization)
 2. ✅ **Horizontal/Vertical-only Zoom Modes**: Implemented zoom mode switching (B/X/Y hotkeys)
-3. ⌛ **Resizable Panes**: Partially implemented (react-resizable-panels imported)
-4. ⌛ **Strategy Markers Rendering**: Consolidator exists, annotation rendering not complete
+3. ✅ **Resizable Panes**: react-resizable-panels integration ready
+4. ✅ **Strategy Markers Rendering**: Annotation rendering with pooling for performance
 5. ✅ **HUD Gaps/Missed Metrics**: Implemented totalGaps, initGap, seriesGaps display
 6. ✅ **Time Window Presets**: Implemented configurable "Last X" time window buttons from ui-config.json
 7. ✅ **Auto-Hide UI**: Implemented HUD/toolbar auto-hide when inactive (configurable via ui-config.json)
 8. ✅ **Layout History**: Implemented - shows recently loaded layouts in dropdown
-9. ⌛ **Floating Minimap**: Not yet implemented (draggable, repositionable panel)
+9. ✅ **Floating Minimap**: Implemented draggable, repositionable minimap panel

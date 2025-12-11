@@ -41,6 +41,7 @@ import type { ParsedLayout, PlotLayout } from '@/types/plot-layout';
 import { DynamicPaneManager, type PaneSurface as DynamicPaneSurface } from '@/lib/dynamic-pane-manager';
 import { renderHorizontalLines, renderVerticalLines } from '@/lib/overlay-renderer';
 import { groupStrategyMarkers, getConsolidatedSeriesId, type MarkerGroup } from '@/lib/strategy-marker-consolidator';
+import { MarkerAnnotationPool, parseMarkerFromSample, type MarkerData } from '@/lib/strategy-marker-renderer';
 
 /**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
@@ -204,6 +205,8 @@ interface ChartRefs {
   overview: SciChartOverview | null;
   // Shared WASM context for all panes (created once)
   sharedWasm: TSciChart | null;
+  // Strategy marker annotation pools per pane
+  markerAnnotationPools: Map<string, MarkerAnnotationPool>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
 }
@@ -713,6 +716,7 @@ export function useMultiPaneChart({
     verticalGroup: null,
     overview: null,
     sharedWasm: null, // Shared WASM context for all dynamic panes
+    markerAnnotationPools: new Map<string, MarkerAnnotationPool>(), // Strategy marker annotation pools
   });
 
   const [isReady, setIsReady] = useState(false);
@@ -1112,6 +1116,8 @@ export function useMultiPaneChart({
           paneSurfaces: new Map<string, PaneSurface>(),
           // Shared WASM context (will be set from first pane when dynamic panes are created)
           sharedWasm: null,
+          // Strategy marker annotation pools
+          markerAnnotationPools: new Map<string, MarkerAnnotationPool>(),
         };
 
         // Note: Axis titles are intentionally omitted during initialization
@@ -2948,6 +2954,65 @@ export function useMultiPaneChart({
       try {
         (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
       } catch (e) {}
+    }
+    
+    // Third pass: Create strategy marker annotations
+    // Strategy markers are rendered as visual annotations (triangles/circles) in addition to line series
+    if (plotLayout && refs.paneSurfaces.size > 0) {
+      for (let i = 0; i < samplesLength; i++) {
+        const sample = samples[i];
+        const { series_id, t_ms, payload } = sample;
+        
+        // Only process strategy markers/signals
+        if (!series_id.includes(':strategy:')) continue;
+        if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
+        
+        // Get the pane(s) where this marker should appear
+        const seriesEntry = refs.dataSeriesStore.get(series_id);
+        if (!seriesEntry || !seriesEntry.paneId) continue;
+        
+        // Get all eligible panes for strategy markers
+        const eligiblePanes = plotLayout.strategyMarkerPanes;
+        
+        for (const paneId of eligiblePanes) {
+          const paneSurface = refs.paneSurfaces.get(paneId);
+          if (!paneSurface || !paneSurface.surface) continue;
+          
+          // Get or create annotation pool for this pane
+          let pool = refs.markerAnnotationPools.get(paneId);
+          if (!pool) {
+            pool = new MarkerAnnotationPool();
+            refs.markerAnnotationPools.set(paneId, pool);
+          }
+          
+          // Parse marker data
+          const markerData = parseMarkerFromSample({
+            t_ms,
+            v: (payload.price as number) || (payload.value as number) || 0,
+            type: payload.type as string,
+            direction: payload.direction as string,
+            label: payload.label as string,
+          });
+          
+          // Skip invalid markers
+          if (markerData.y === 0) continue;
+          
+          // Create unique key for this marker
+          const markerKey = `${series_id}:${t_ms}`;
+          
+          try {
+            // Get or create annotation
+            const annotation = pool.getAnnotation(markerData, markerKey, paneSurface.wasm);
+            
+            // Add to surface if not already added
+            if (!paneSurface.surface.annotations.contains(annotation)) {
+              paneSurface.surface.annotations.add(annotation);
+            }
+          } catch (e) {
+            // Silently ignore annotation creation errors
+          }
+        }
+      }
     }
 
     // Update last data time
