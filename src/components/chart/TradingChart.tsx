@@ -29,9 +29,9 @@ interface NoLayoutOverlayProps {
 
 const NoLayoutOverlay = ({ onLoadLayout }: NoLayoutOverlayProps) => {
   return (
-    <div className="absolute inset-0 flex items-center justify-center z-30">
+    <div className="absolute inset-0 flex items-start justify-center z-30">
       <div className="absolute inset-0 bg-gradient-to-br from-background/95 via-background/90 to-background/95 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
-      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in">
+      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in mt-10">
         {/* Grid Icon */}
         <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center mx-auto mb-6 border border-primary/30 shadow-lg">
           <Grid3x3 className="w-12 h-12 text-primary" />
@@ -116,9 +116,9 @@ const NoConnectionOverlay = ({ wsUrl, onStartDemo, autoReloadEnabled, onCancelAu
   }, [autoReloadEnabled]);
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center z-30">
+    <div className="absolute inset-0 flex items-start justify-center z-30">
       <div className="absolute inset-0 bg-gradient-to-br from-background/98 via-background/99 to-background/100 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
-      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in">
+      <div className="relative text-center max-w-md px-8 py-10 glass-card fade-in mt-10">
         {/* Cancel button */}
         {autoReloadEnabled && (
           <button
@@ -1077,9 +1077,9 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
 
         {/* Connecting Overlay */}
         {feedState.stage === 'connecting' && !demoMode && (
-          <div className="absolute inset-0 flex items-center justify-center z-30">
+          <div className="absolute inset-0 flex items-start justify-center z-30">
             <div className="absolute inset-0 bg-gradient-to-br from-background/98 via-background/99 to-background/100 dark:from-background/95 dark:via-background/90 dark:to-background/95 backdrop-blur-xl" />
-            <div className="relative text-center glass-card px-8 py-10 fade-in">
+            <div className="relative text-center glass-card px-8 py-10 fade-in mt-10">
               <div className="w-20 h-20 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-6 shadow-lg" />
               <h3 className="text-2xl font-bold text-foreground mb-2 gradient-text">Connecting...</h3>
               <p className="text-sm text-muted-foreground">
