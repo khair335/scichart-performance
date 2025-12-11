@@ -221,17 +221,17 @@ export function useMultiPaneChart({
   const defaultUIConfig: UIConfig = {
     data: {
       buffers: {
-        pointsPerSeries: 500_000, // Optimized for real-time performance (500K points)
+        pointsPerSeries: 2_000_000, // SciChart handles 10M+ points efficiently
         maxPointsTotal: 10_000_000, // Global cap across all series (10M points)
       },
     },
     performance: {
       targetFPS: 60,
-      batchSize: 500, // Reduced for better responsiveness
-      downsampleRatio: 2, // Enable 2:1 downsampling to reduce data volume
-      maxAutoTicks: 6, // Reduced for better performance
+      batchSize: 5000, // Large batches for SciChart's WebGL efficiency
+      downsampleRatio: 1, // CRITICAL: No downsampling - plot all data points
+      maxAutoTicks: 6,
       fifoEnabled: true,
-      fifoSweepSize: 50000, // FIFO sweep size for real-time data (50K points)
+      fifoSweepSize: 100000, // Larger FIFO sweep for high-throughput data
     },
     chart: {
       separateXAxes: false,
@@ -791,13 +791,10 @@ export function useMultiPaneChart({
   const TARGET_FPS = 60;
   const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
   
-  // Downsampling ratio from config (default 1 = no downsampling for maximum data fidelity)
-  // Can be increased if CPU usage is too high, but user requires all data to be plotted
-  const BASE_DOWNSAMPLE_RATIO = config.performance.downsampleRatio || 1;
-  const lastDownsampleIndexRef = useRef<Map<string, number>>(new Map());
+  // REMOVED: Downsampling disabled - all data points are plotted for accuracy
+  // SciChart's WebGL rendering handles millions of points efficiently via EResamplingMode.Auto
+  // which does GPU-side downsampling for display without losing source data
   
-  // Reusable buffers removed - not needed with direct Float64Array creation from batch
-  // Direct typed array creation from batch data is more efficient
 
   // Theme configuration - use 'Dark' as base and override with custom colors
   const chartTheme = {
@@ -2911,8 +2908,37 @@ export function useMultiPaneChart({
 
     let latestTime = lastDataTimeRef.current;
 
-    // Process all samples in batch (optimized loop)
-    // Now using unified store - all series go through the same code path
+    // OPTIMIZATION: Pre-compute strategy marker consolidation map ONCE before processing loop
+    // This avoids expensive groupStrategyMarkers() calls for every sample
+    const markerConsolidationMap = new Map<string, string>();
+    if (plotLayout) {
+      const allMarkerIds = Array.from(refs.dataSeriesStore.keys()).filter(id => {
+        const info = parseSeriesType(id);
+        return info.type === 'strategy-marker' || info.type === 'strategy-signal';
+      });
+      if (allMarkerIds.length > 0) {
+        const markerGroups = groupStrategyMarkers(allMarkerIds);
+        for (const [, group] of markerGroups) {
+          const consolidatedId = getConsolidatedSeriesId(group);
+          for (const seriesId of group.seriesIds) {
+            markerConsolidationMap.set(seriesId, consolidatedId);
+          }
+        }
+      }
+    }
+
+    // OPTIMIZATION: Cache series info to avoid parseSeriesType() for every sample
+    const seriesInfoCache = new Map<string, ReturnType<typeof parseSeriesType>>();
+    const getSeriesInfo = (id: string) => {
+      let info = seriesInfoCache.get(id);
+      if (!info) {
+        info = parseSeriesType(id);
+        seriesInfoCache.set(id, info);
+      }
+      return info;
+    };
+
+    // Process all samples in batch (OPTIMIZED loop - no downsampling, cached lookups)
     const samplesLength = samples.length;
     for (let i = 0; i < samplesLength; i++) {
       const sample = samples[i];
@@ -2922,38 +2948,25 @@ export function useMultiPaneChart({
         latestTime = t_ms;
       }
 
-      // Requirement 11.2: For strategy markers, check if this series is part of a consolidated group
-      // If so, route data to the consolidated series instead
+      // Use cached series info instead of parsing every time
+      const seriesInfo = getSeriesInfo(series_id);
+
+      // OPTIMIZATION: Use pre-computed consolidation map for strategy markers
       let effectiveSeriesId = series_id;
-      const seriesInfo = parseSeriesType(series_id);
-      if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') && plotLayout) {
-        // Find the consolidated series ID for this marker
-        // Get all strategy marker series IDs from the registry
-        const allMarkerIds = Array.from(refs.dataSeriesStore.keys())
-          .filter(id => {
-            const info = parseSeriesType(id);
-            return info.type === 'strategy-marker' || info.type === 'strategy-signal';
-          });
-        const markerGroups = groupStrategyMarkers([series_id, ...allMarkerIds]);
-        for (const [groupKey, group] of markerGroups) {
-          if (group.seriesIds.includes(series_id)) {
-            effectiveSeriesId = getConsolidatedSeriesId(group);
-            break;
-          }
+      if ((seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal')) {
+        const consolidatedId = markerConsolidationMap.get(series_id);
+        if (consolidatedId) {
+          effectiveSeriesId = consolidatedId;
         }
       }
       
       // Get series entry from unified store (preallocated by registry listener)
-      // Use consolidated series ID for strategy markers
       let seriesEntry = refs.dataSeriesStore.get(effectiveSeriesId);
       if (!seriesEntry && effectiveSeriesId !== series_id) {
-        // Try original series ID as fallback
         seriesEntry = refs.dataSeriesStore.get(series_id);
       }
       if (!seriesEntry) {
-        // Series not preallocated yet - create on-demand (fallback for when registry hasn't populated yet)
-        // DISABLED: On-demand creation causes WASM abort errors
-        // Skip this sample - series will be created via preallocation when surfaces are ready
+        // Series not preallocated - skip (will be created via preallocation when surfaces ready)
         continue;
       }
 
@@ -2976,34 +2989,26 @@ export function useMultiPaneChart({
           buf.c!.push(c);
         }
       } else {
-        // All other series (tick, indicators, strategy) use XyDataSeries
-        // Apply downsampling for tick and indicator data
-        let count = lastDownsampleIndexRef.current.get(series_id) || 0;
-        count++;
-        lastDownsampleIndexRef.current.set(series_id, count);
+        // All XY series: tick, indicators, strategy (NO DOWNSAMPLING - plot all data)
+        let value: number | undefined;
         
-        if (count >= BASE_DOWNSAMPLE_RATIO) {
-          let value: number | null = null;
-          
-          // Extract value based on series type
-          if (seriesInfo.type === 'tick') {
-            value = payload.price as number;
-          } else if (seriesInfo.isIndicator || seriesInfo.type === 'strategy-pnl') {
-            value = payload.value as number;
-          } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-            value = payload.price as number || payload.value as number;
+        // OPTIMIZATION: Direct property access without type checks
+        if (seriesInfo.type === 'tick') {
+          value = payload.price as number;
+        } else if (seriesInfo.isIndicator || seriesInfo.type === 'strategy-pnl') {
+          value = payload.value as number;
+        } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
+          value = (payload.price as number) || (payload.value as number);
+        }
+        
+        if (typeof value === 'number') {
+          let buf = seriesBuffers.get(series_id);
+          if (!buf) {
+            buf = { x: [], y: [] };
+            seriesBuffers.set(series_id, buf);
           }
-          
-          if (typeof value === 'number') {
-            let buf = seriesBuffers.get(series_id);
-            if (!buf) {
-              buf = { x: [], y: [] };
-              seriesBuffers.set(series_id, buf);
-            }
-            buf.x.push(t_ms);
-            buf.y!.push(value);
-            lastDownsampleIndexRef.current.set(series_id, 0);
-          }
+          buf.x.push(t_ms);
+          buf.y!.push(value);
         }
       }
     }
