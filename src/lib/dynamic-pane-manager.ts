@@ -43,7 +43,7 @@ export interface PaneSurface {
 }
 
 export interface ChartTheme {
-  type: 'Dark';
+  type: 'Dark' | 'Light';
   axisBorder: string;
   axisTitleColor: string;
   annotationsGripsBackgroundBrush: string;
@@ -153,6 +153,50 @@ export class DynamicPaneManager {
     for (const [paneId, paneSurface] of this.paneSurfaces) {
       this.updateAxisTimezone(paneSurface.xAxis);
     }
+  }
+
+  /**
+   * Update theme for all existing surfaces
+   */
+  setTheme(theme: ChartTheme): void {
+    this.theme = theme;
+    
+    // Update parent surface background
+    if (this.parentSurface) {
+      this.parentSurface.background = theme.sciChartBackground;
+    }
+    
+    // Update all pane surfaces
+    for (const [paneId, paneSurface] of this.paneSurfaces) {
+      const surface = paneSurface.surface;
+      
+      // Update surface background
+      surface.background = theme.sciChartBackground;
+      
+      // Update X-axis styles
+      const xAxis = paneSurface.xAxis;
+      xAxis.axisTitleStyle = { ...xAxis.axisTitleStyle, color: theme.axisTitleColor };
+      xAxis.labelStyle = { ...xAxis.labelStyle, color: theme.tickTextBrush };
+      xAxis.majorGridLineStyle = { ...xAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
+      xAxis.minorGridLineStyle = { ...xAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
+      
+      // Update Y-axis styles
+      const yAxis = paneSurface.yAxis;
+      yAxis.axisTitleStyle = { ...yAxis.axisTitleStyle, color: theme.axisTitleColor };
+      yAxis.labelStyle = { ...yAxis.labelStyle, color: theme.tickTextBrush };
+      yAxis.majorGridLineStyle = { ...yAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
+      yAxis.minorGridLineStyle = { ...yAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
+      
+      // Invalidate surface to trigger redraw
+      surface.invalidateElement();
+    }
+  }
+
+  /**
+   * Get current theme
+   */
+  getTheme(): ChartTheme {
+    return this.theme;
   }
 
   /**

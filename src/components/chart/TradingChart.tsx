@@ -371,6 +371,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     registry: registry, // Pass registry for global data clock calculation
     plotLayout: plotLayout, // Pass parsed layout
     zoomMode: zoomMode, // Pass zoom mode
+    theme: theme, // Pass theme for chart surfaces
   });
 
   // Update tick count from registry (total count, not just new samples)
