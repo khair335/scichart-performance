@@ -1,6 +1,12 @@
 {
   "layout_mode": "multi_surface",
   "grid": [2, 2],
+  "xAxis": {
+    "defaultRange": {
+      "mode": "lastMinutes",
+      "value": 2
+    }
+  },
   "minimap": {
     "source": {
       "series_id": "MESU5:ticks",
