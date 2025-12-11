@@ -3057,8 +3057,11 @@ export function useMultiPaneChart({
     if (isLive && autoScrollEnabled && latestTime > 0) {
       const now = performance.now();
       const windowMs = 300 * 1000; // 5 minutes window (matching new-index.html)
-      const X_SCROLL_THRESHOLD = 5000; // 5 seconds threshold
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
+      
+      // SMOOTH SCROLLING: Cap how much we can scroll per frame to prevent jarring jumps
+      // At 60fps, this is ~60 seconds of catchup per second (comfortable)
+      const MAX_SCROLL_PER_FRAME = 1000; // 1 second max jump per frame
       
       // Find actual data max from DataSeries
       let actualDataMax = 0;
@@ -3078,7 +3081,6 @@ export function useMultiPaneChart({
       if (!hasData) actualDataMax = latestTime;
       
       const padding = 10 * 1000;
-      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
       
       // Update all X-axes
       const axesToUpdate: Array<{ axis: any; surface: any }> = [];
@@ -3098,11 +3100,29 @@ export function useMultiPaneChart({
       for (const { axis, surface } of axesToUpdate) {
         try {
           const currentMax = axis.visibleRange?.max || 0;
-          const diff = Math.abs(currentMax - newRange.max);
-          if (!axis.visibleRange || diff > X_SCROLL_THRESHOLD) {
-            axis.visibleRange = newRange;
-            surface?.invalidateElement();
+          const targetMax = actualDataMax + padding;
+          const diff = targetMax - currentMax;
+          
+          // SMOOTH SCROLL: If diff is too large, cap the movement per frame
+          // This prevents jarring jumps when catching up after freeze
+          let newMax: number;
+          if (diff > MAX_SCROLL_PER_FRAME) {
+            // Smoothly catch up - move by max allowed per frame
+            newMax = currentMax + MAX_SCROLL_PER_FRAME;
+          } else if (diff < -MAX_SCROLL_PER_FRAME) {
+            // Scrolling backwards (rare), also cap
+            newMax = currentMax - MAX_SCROLL_PER_FRAME;
+          } else if (Math.abs(diff) > 100) {
+            // Small diff, just jump to target
+            newMax = targetMax;
+          } else {
+            // Very small diff, skip update
+            continue;
           }
+          
+          const newRange = new NumberRange(newMax - windowMs, newMax);
+          axis.visibleRange = newRange;
+          surface?.invalidateElement();
         } catch (e) {}
       }
       
