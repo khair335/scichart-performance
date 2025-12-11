@@ -19,11 +19,14 @@ import {
   ZoomExtentsModifier,
   MouseWheelZoomModifier,
   RubberBandXyZoomModifier,
+  XAxisDragModifier,
+  YAxisDragModifier,
   EXyDirection,
   Rect,
   ESubSurfacePositionCoordinateMode,
   SciChartDefaults,
   DpiHelper,
+  EExecuteOn,
 } from 'scichart';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 
@@ -184,58 +187,81 @@ export class DynamicPaneManager {
    * Update zoom modifiers based on current zoom mode
    */
   private updateZoomModifiers(surface: SciChartSurface): void {
-    // Remove existing zoom modifiers
+    // Remove existing zoom-related modifiers (but keep axis drag modifiers)
     const modifiersToRemove: any[] = [];
     surface.chartModifiers.asArray().forEach((mod: any) => {
       if (mod instanceof MouseWheelZoomModifier || 
-          mod instanceof RubberBandXyZoomModifier) {
+          mod instanceof RubberBandXyZoomModifier ||
+          mod instanceof ZoomPanModifier ||
+          mod instanceof ZoomExtentsModifier) {
         modifiersToRemove.push(mod);
       }
     });
     modifiersToRemove.forEach(mod => surface.chartModifiers.remove(mod));
 
     // Add modifiers based on zoom mode
+    // CRITICAL: Order matters - add in order of priority
     switch (this.zoomMode) {
       case 'x-only':
-        // X-only: wheel zooms X, box zoom disabled
+        // X-only mode: wheel zooms X only, no box zoom, right-click drag pans
         surface.chartModifiers.add(
-          new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection })
+          new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection }),
+          new ZoomPanModifier({ 
+            executeCondition: { button: EExecuteOn.MouseRightButton }
+          }),
+          new ZoomExtentsModifier()
         );
         break;
       case 'y-only':
-        // Y-only: wheel zooms Y, box zoom disabled
+        // Y-only mode: wheel zooms Y only, no box zoom, right-click drag pans
         surface.chartModifiers.add(
-          new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection })
+          new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection }),
+          new ZoomPanModifier({ 
+            executeCondition: { button: EExecuteOn.MouseRightButton }
+          }),
+          new ZoomExtentsModifier()
         );
         break;
       case 'box':
       default:
-        // Box mode: wheel zooms X (with Shift for Y), box zoom enabled
+        // Box mode: 
+        // - Left drag = box zoom (rubber band)
+        // - Right-click drag = pan
+        // - Wheel = X zoom
+        // - Shift+wheel = Y zoom
         const wheelModifier = new MouseWheelZoomModifier({ 
           xyDirection: EXyDirection.XDirection 
         });
-        // Override for Shift+wheel Y zoom
-        const originalOnWheel = (wheelModifier as any).onWheel;
-        if (originalOnWheel) {
-          (wheelModifier as any).onWheel = (args: any) => {
-            if (args.modifierKeyState?.shiftKey) {
+        
+        // Override wheel handler for Shift+wheel Y zoom
+        const originalModifierMouseWheel = (wheelModifier as any).modifierMouseWheel;
+        if (originalModifierMouseWheel) {
+          (wheelModifier as any).modifierMouseWheel = (args: any) => {
+            if (args.mouseArgs?.ctrlKey || args.mouseArgs?.shiftKey) {
+              // Temporarily switch to Y direction for Shift/Ctrl+wheel
               const tempDirection = wheelModifier.xyDirection;
               wheelModifier.xyDirection = EXyDirection.YDirection;
               try {
-                originalOnWheel.call(wheelModifier, args);
+                originalModifierMouseWheel.call(wheelModifier, args);
               } finally {
                 wheelModifier.xyDirection = tempDirection;
               }
             } else {
-              originalOnWheel.call(wheelModifier, args);
+              originalModifierMouseWheel.call(wheelModifier, args);
             }
           };
         }
+        
         surface.chartModifiers.add(
+          new RubberBandXyZoomModifier({ 
+            isAnimated: false,
+            executeCondition: { button: EExecuteOn.MouseLeftButton }
+          }),
+          new ZoomPanModifier({ 
+            executeCondition: { button: EExecuteOn.MouseRightButton }
+          }),
           wheelModifier,
-          new RubberBandXyZoomModifier({ isAnimated: false }),
-          new ZoomPanModifier(), // Enable pan with mouse drag
-          new ZoomExtentsModifier() // Enable double-click to zoom extents
+          new ZoomExtentsModifier()
         );
         break;
     }
@@ -355,17 +381,15 @@ export class DynamicPaneManager {
     surface.yAxes.add(yAxis);
 
     // Add chart modifiers for zoom/pan interaction
-    // Note: MouseWheelZoomModifier should be added before ZoomPanModifier to ensure it works
-    
-    const zoomExtentsModifier = new ZoomExtentsModifier();
-    
-    // Add base modifiers (pan, zoom extents)
+    // CRITICAL: Add axis drag modifiers FIRST for axis stretching/shrinking
+    // These allow users to drag on the axis to stretch/shrink the range
     surface.chartModifiers.add(
-      new ZoomPanModifier({ enableZoom: false }), // Enable pan (dragging) only, disable zoom gestures
-      zoomExtentsModifier,
+      new XAxisDragModifier(), // Drag on X-axis to stretch/shrink
+      new YAxisDragModifier(), // Drag on Y-axis to stretch/shrink
     );
     
     // Add zoom modifiers based on current zoom mode
+    // This adds the appropriate modifiers for panning, box zoom, wheel zoom
     this.updateZoomModifiers(surface);
     
     // Double-click = fit-all + pause

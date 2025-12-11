@@ -26,6 +26,7 @@ import {
   SciChartDefaults,
   DpiHelper,
   EResamplingMode,
+  EExecuteOn,
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
@@ -1034,10 +1035,19 @@ export function useMultiPaneChart({
 
         // Add modifiers to both surfaces - essential modifiers for good UX
         const addModifiers = (surface: SciChartSurface, wasm: TSciChart) => {
+          // Add axis drag modifiers for stretching/shrinking axes
+          surface.chartModifiers.add(
+            new XAxisDragModifier(), // Drag on X-axis to stretch/shrink
+            new YAxisDragModifier(), // Drag on Y-axis to stretch/shrink
+          );
+          
+          // Add zoom/pan modifiers
           surface.chartModifiers.add(
             new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection }),
             new RubberBandXyZoomModifier({ isAnimated: false }), // Box zoom without animation for performance
-            new ZoomPanModifier(), // Enable pan with mouse drag
+            new ZoomPanModifier({ 
+              executeCondition: { button: EExecuteOn.MouseRightButton } 
+            }), // Right-click drag to pan
             new ZoomExtentsModifier() // Enable double-click to zoom extents
           );
         };

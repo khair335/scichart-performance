@@ -33,10 +33,10 @@ Target throughput:
 * ✅ **Paused**: free exploration with pan/zoom.
 * Standard interactions:
   * ✅ **Box zoom** (rectangle) - RubberBandXyZoomModifier
-  * ❌ Horizontal-only zoom (mode switching not implemented)
-  * ❌ Vertical-only zoom (mode switching not implemented)
-  * ✅ Mouse wheel zoom
-  * ✅ Axis dragging - XAxisDragModifier, YAxisDragModifier
+  * ✅ Horizontal-only zoom (X hotkey to switch mode)
+  * ✅ Vertical-only zoom (Y hotkey to switch mode)
+  * ✅ Mouse wheel zoom (X-axis default, Shift+wheel for Y-axis)
+  * ✅ Axis dragging - XAxisDragModifier, YAxisDragModifier (stretch/shrink axes)
 * ⌛ **SciChartOverview minimap** controls full-range navigation and Live/Paused window anchoring, and user-selected windowing/sliding — including the ability to display the entire collected dataset. (Basic minimap exists, floating panel not implemented)
 * ❌ Automatic switching to live from paused mode. SciChartOverview should be a floating panel that can be freely dragged and repositioned anywhere on the screen.
 

@@ -50,7 +50,17 @@
     "theme": {
       "default": "dark",
       "allowToggle": true
-    }
+    },
+    "autoHide": {
+      "enabled": false,
+      "delayMs": 3000
+    },
+    "timeWindowPresets": [
+      { "label": "Last 15 min", "minutes": 15 },
+      { "label": "Last 30 min", "minutes": 30 },
+      { "label": "Last 1 hour", "minutes": 60 },
+      { "label": "Last 4 hours", "minutes": 240 }
+    ]
   },
   "defaultLayoutPath": "/layouts/layout-3x1-simple.json",
   "defaultLayout": {
