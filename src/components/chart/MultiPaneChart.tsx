@@ -2859,24 +2859,12 @@ export function useMultiPaneChart({
       return;
     }
     
-    const allSamples = sampleBufferRef.current;
-    if (allSamples.length === 0) return;
+    const samples = sampleBufferRef.current;
+    if (samples.length === 0) return;
     
-    // CHUNKED PROCESSING: Limit samples per frame to prevent UI freezes
-    // Process only up to maxSamplesPerFrame, leave rest for next frame
-    const maxSamplesPerFrame = config.performance.batchSize || 2000;
-    const hasMoreSamples = allSamples.length > maxSamplesPerFrame;
-    
-    // Take chunk for this frame, leave rest in buffer
-    const samples = hasMoreSamples 
-      ? allSamples.splice(0, maxSamplesPerFrame)  // Take first chunk
-      : allSamples;
-    
-    // Only clear buffer if we processed all samples
-    if (!hasMoreSamples) {
-      sampleBufferRef.current = [];
-    }
-    // Note: pendingUpdateRef is cleared in the scheduling code
+    // Clear buffer immediately (CRITICAL: prevents re-processing)
+    sampleBufferRef.current = [];
+    pendingUpdateRef.current = null;
 
     let latestTime = lastDataTimeRef.current;
     const samplesLength = samples.length;
@@ -4147,23 +4135,16 @@ export function useMultiPaneChart({
       }
     }
     
-    // CHUNKED SCHEDULING - prevents UI freezes on large data batches
-    // processBatchedSamples now processes chunks and leaves remaining in buffer
+    // SIMPLIFIED SCHEDULING - following new-index.html pattern
+    // Schedule processing via RAF if not already scheduled
+    // new-index.html approach: simple scheduleFlush that just uses RAF
     if (pendingUpdateRef.current === null) {
-      const processChunk = () => {
+      // Use requestAnimationFrame for smooth 60fps rendering
+      // Unlike the previous complex scheduling, just use RAF consistently
+      pendingUpdateRef.current = requestAnimationFrame(() => {
         pendingUpdateRef.current = null;
         processBatchedSamples();
-        
-        // If there are still samples remaining, schedule next chunk with yielding
-        if (sampleBufferRef.current.length > 0) {
-          // Use setTimeout(0) to yield to browser between chunks, keeps UI responsive
-          pendingUpdateRef.current = setTimeout(() => {
-            pendingUpdateRef.current = requestAnimationFrame(processChunk);
-          }, 0) as unknown as number;
-        }
-      };
-      
-      pendingUpdateRef.current = requestAnimationFrame(processChunk);
+      });
     }
   }, [onDataClockUpdate, processBatchedSamples, config]);
 
