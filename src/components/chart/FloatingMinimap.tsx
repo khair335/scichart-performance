@@ -157,34 +157,37 @@ export function FloatingMinimap({
         </div>
       </div>
 
-      {/* Content Area */}
-      {!isMinimized && (
-        <div className="relative w-full h-[calc(100%-36px)] overflow-hidden">
-          {children || (
-            <div 
-              id="floating-minimap-container"
-              className="w-full h-full"
-            />
+      {/* Content Area - use CSS to hide instead of unmounting to preserve SciChart surface */}
+      <div 
+        className={cn(
+          "relative w-full overflow-hidden transition-all duration-200",
+          isMinimized ? "h-0 opacity-0" : "h-[calc(100%-36px)] opacity-100"
+        )}
+      >
+        {children || (
+          <div 
+            id="floating-minimap-container"
+            className="w-full h-full"
+          />
+        )}
+        
+        {/* Resize Handle */}
+        <div
+          className={cn(
+            'absolute bottom-0 right-0 w-4 h-4 cursor-se-resize',
+            'hover:bg-primary/20 rounded-br-lg transition-colors'
           )}
-          
-          {/* Resize Handle */}
-          <div
-            className={cn(
-              'absolute bottom-0 right-0 w-4 h-4 cursor-se-resize',
-              'hover:bg-primary/20 rounded-br-lg transition-colors'
-            )}
-            onMouseDown={handleResizeStart}
+          onMouseDown={handleResizeStart}
+        >
+          <svg
+            className="w-full h-full text-muted-foreground/50"
+            viewBox="0 0 16 16"
+            fill="currentColor"
           >
-            <svg
-              className="w-full h-full text-muted-foreground/50"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-            >
-              <path d="M14 14H12V12H14V14ZM14 10H12V8H14V10ZM10 14H8V12H10V14Z" />
-            </svg>
-          </div>
+            <path d="M14 14H12V12H14V14ZM14 10H12V8H14V10ZM10 14H8V12H10V14Z" />
+          </svg>
         </div>
-      )}
+      </div>
     </div>
   );
 }
