@@ -3027,14 +3027,18 @@ export function useMultiPaneChart({
             refs.markerAnnotationPools.set(paneId, pool);
           }
           
-          // Parse marker data
+          // Parse marker data - map server fields to expected format
           const markerData = parseMarkerFromSample({
             t_ms,
             v: (payload.price as number) || (payload.value as number) || 0,
+            // Binary format: side, tag
+            side: payload.side as string,
+            tag: payload.tag as string,
+            // JSON format: type, direction, label
             type: payload.type as string,
             direction: payload.direction as string,
             label: payload.label as string,
-          });
+          }, series_id);
           
           // Skip invalid markers
           if (markerData.y === 0) continue;
