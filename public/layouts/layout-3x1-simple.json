@@ -2,6 +2,12 @@
   "layout_mode": "multi_surface",
   "grid": [3, 1],
   "min_height": 2000,
+  "xAxis": {
+    "defaultRange": {
+      "mode": "lastMinutes",
+      "value": 2
+    }
+  },
   "panes": [
     {
       "id": "price-pane",
