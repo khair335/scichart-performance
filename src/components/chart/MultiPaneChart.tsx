@@ -565,15 +565,17 @@ export function useMultiPaneChart({
       
       if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
           // OHLC bar series - must use OhlcDataSeries
+          // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
           dataSeries = new OhlcDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: true, // Time-series data is evenly spaced for better performance
+          dataEvenlySpacedInX: true,
         });
         
+        // PERF: Use Auto resampling for 10M+ point performance
         renderableSeries = new FastCandlestickRenderableSeries(wasm, {
           dataSeries: dataSeries as OhlcDataSeries,
           strokeUp: '#26a69a',
@@ -581,16 +583,18 @@ export function useMultiPaneChart({
           strokeDown: '#ef5350',
           brushDown: '#ef535088',
           strokeThickness: 1,
+          resamplingMode: EResamplingMode.Auto,
         });
       } else {
         // All other series (tick, indicators, strategy) use XyDataSeries
+        // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
         dataSeries = new XyDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
           fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
           capacity: capacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: true, // Time-series data is evenly spaced for better performance
+          dataEvenlySpacedInX: true,
         });
         
         // Get series assignment from layout for styling
@@ -886,13 +890,14 @@ export function useMultiPaneChart({
        
         SciChartSurface.useWasmFromCDN();
 
-        // Disable DPI scaling for better performance on Retina/High-DPI displays
+        // PERF: Disable DPI scaling for better performance on Retina/High-DPI displays
         // This prevents 4x pixel rendering which significantly improves FPS
         DpiHelper.IsDpiScaleEnabled = false;
         
-        // Enable performance optimizations globally (large performance boost)
+        // PERF: Enable global performance optimizations (large performance boost)
         SciChartDefaults.useNativeText = true; // Use native WebGL text for better performance
         SciChartDefaults.useSharedCache = true; // Share label cache across charts
+        SciChartDefaults.performanceWarnings = false; // Disable perf warnings for production
         
         // Wait for WASM to be fully loaded and initialized
         // This ensures fonts and other systems are ready
@@ -904,8 +909,10 @@ export function useMultiPaneChart({
 
        
         // Create tick/line surface with performance optimizations
+        // PERF: freezeWhenOutOfView prevents rendering when scrolled out of viewport
         const tickResult = await SciChartSurface.create(tickContainerId, { 
           theme: chartTheme,
+          freezeWhenOutOfView: true,
         });
         if (!isMounted) {
           tickResult.sciChartSurface.delete();
@@ -2853,41 +2860,30 @@ export function useMultiPaneChart({
     }
     
     // OPTIMIZATION: Dynamic batch sizing based on data rate and backlog
-    // For high data rates (5000+ samples/sec), we need much larger batches to keep up
+    // SciChart can handle 10M+ points with proper batching - use large batches for efficiency
     const baseBatchSize = config.performance.batchSize;
     const backlogSize = allSamples.length;
     
-    // Calculate estimated data rate from backlog growth
-    // If backlog is growing, increase batch size aggressively
-    const activeSeriesCount = refs.dataSeriesStore.size;
-    const isMultipleInstruments = activeSeriesCount > 10;
-    
-    // CRITICAL: For high data rates, process much larger batches
-    // At 5347 samples/sec, we need to process ~89 samples per frame at 60fps
-    // But we should batch more to reduce overhead (aim for 200-500 per batch)
+    // PERF: With SciChart's 10M point performance, we can use much larger batches
+    // appendRange with Float64Array is highly optimized - larger batches = fewer render cycles
     let MAX_BATCH_SIZE: number;
     
-    // AGGRESSIVE OPTIMIZATION: Cap batch sizes to prevent overwhelming the system
-    // Even with large backlogs, process in smaller chunks to maintain responsiveness
-    const MAX_SAFE_BATCH_SIZE = 2000; // Cap at 2k to prevent lag spikes
+    // AGGRESSIVE: SciChart handles large batches efficiently via WebGL/WASM
+    const MAX_SAFE_BATCH_SIZE = 10000; // SciChart can handle 10k+ points per batch easily
     
     if (isTabHidden) {
-      // When hidden, process more aggressively but still cap
-      MAX_BATCH_SIZE = backlogSize > 10000 
-        ? Math.min(MAX_SAFE_BATCH_SIZE * 2, backlogSize) // Very large backlogs: up to 4k
-        : backlogSize > 5000
-        ? Math.min(MAX_SAFE_BATCH_SIZE, backlogSize) // Large backlogs: up to 2k
-        : Math.min(baseBatchSize * 3, MAX_SAFE_BATCH_SIZE); // Normal: 3x batch size, max 2k
+      // When hidden, process maximum efficiency (no rendering overhead)
+      MAX_BATCH_SIZE = Math.min(MAX_SAFE_BATCH_SIZE * 2, backlogSize); // Up to 20k when hidden
     } else {
-      // When visible, prioritize smooth rendering over catching up
-      if (backlogSize > 5000) {
-        // Critical backlog: process in chunks to prevent lag
+      // When visible, still use large batches for smooth 60fps
+      if (backlogSize > 10000) {
+        // Large backlog: process aggressively to catch up
         MAX_BATCH_SIZE = Math.min(MAX_SAFE_BATCH_SIZE, backlogSize);
-      } else if (backlogSize > 2000) {
-        // Large backlog: process 1.5x batch size
-        MAX_BATCH_SIZE = Math.min(baseBatchSize * 1.5, backlogSize);
+      } else if (backlogSize > 5000) {
+        // Medium backlog: use increased batch size  
+        MAX_BATCH_SIZE = Math.min(baseBatchSize * 2, backlogSize);
       } else {
-        // Normal operation: use base batch size
+        // Normal operation: use configured batch size
         MAX_BATCH_SIZE = baseBatchSize;
       }
     }

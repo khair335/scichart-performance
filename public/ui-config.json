@@ -5,12 +5,12 @@
     "useWorker": false
   },
   "ingest": {
-    "targetTransferHz": 20,
-    "maxPointsPerBatch": 131072
+    "targetTransferHz": 60,
+    "maxPointsPerBatch": 262144
   },
   "uiDrain": {
-    "maxBatchesPerFrame": 8,
-    "maxMsPerFrame": 6
+    "maxBatchesPerFrame": 16,
+    "maxMsPerFrame": 10
   },
   "data": {
     "registry": {
@@ -18,18 +18,18 @@
       "maxRows": 5000
     },
     "buffers": {
-      "pointsPerSeries": 500000,
+      "pointsPerSeries": 2000000,
       "maxPointsTotal": 10000000
     }
   },
   "performance": {
     "targetFPS": 60,
-    "batchSize": 500,
-    "downsampleRatio": 2,
-    "maxAutoTicks": 4,
+    "batchSize": 5000,
+    "downsampleRatio": 1,
+    "maxAutoTicks": 6,
     "fifoEnabled": true,
-    "fifoSweepSize": 25000,
-    "updateIntervalMs": 100
+    "fifoSweepSize": 100000,
+    "updateIntervalMs": 16
   },
   "chart": {
     "separateXAxes": false,
