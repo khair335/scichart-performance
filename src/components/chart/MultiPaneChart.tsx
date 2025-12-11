@@ -4232,12 +4232,59 @@ export function useMultiPaneChart({
     }
   }, []);
 
+  // Set time window - sets X-axis visible range to last N minutes from current data clock
+  const setTimeWindow = useCallback((minutes: number, dataClockMs: number) => {
+    if (minutes <= 0) {
+      // Zero or negative means show all data (zoom extents)
+      zoomExtents();
+      return;
+    }
+
+    const windowMs = minutes * 60 * 1000;
+    const endMs = dataClockMs / 1000; // Convert to seconds for SciChart DateTimeNumericAxis
+    const startMs = endMs - (windowMs / 1000);
+    const padding = (windowMs / 1000) * 0.02; // 2% padding on right edge
+    const newRange = new NumberRange(startMs, endMs + padding);
+
+    console.log(`[setTimeWindow] Setting ${minutes} min window: ${new Date(startMs * 1000).toISOString()} - ${new Date(endMs * 1000).toISOString()}`);
+
+    // Pause auto-scroll when user explicitly selects a time window
+    isLiveRef.current = false;
+    userInteractedRef.current = true;
+
+    // Update all dynamic pane surfaces
+    for (const [paneId, paneSurface] of chartRefs.current.paneSurfaces) {
+      try {
+        if (paneSurface.xAxis) {
+          paneSurface.xAxis.visibleRange = newRange;
+          paneSurface.surface.invalidateElement();
+        }
+      } catch (e) {
+        console.warn(`[setTimeWindow] Failed to update pane ${paneId}:`, e);
+      }
+    }
+
+    // Also update legacy surfaces if they exist
+    const tickXAxis = chartRefs.current.tickSurface?.xAxes.get(0);
+    const ohlcXAxis = chartRefs.current.ohlcSurface?.xAxes.get(0);
+    
+    if (tickXAxis) {
+      tickXAxis.visibleRange = newRange;
+      chartRefs.current.tickSurface?.invalidateElement();
+    }
+    if (ohlcXAxis) {
+      ohlcXAxis.visibleRange = newRange;
+      chartRefs.current.ohlcSurface?.invalidateElement();
+    }
+  }, [zoomExtents]);
+
   return {
     isReady,
     appendSamples,
     setLiveMode,
     zoomExtents,
     jumpToLive,
+    setTimeWindow,
     chartRefs,
     handleGridReady,
   };
