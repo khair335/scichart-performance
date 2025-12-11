@@ -81,28 +81,42 @@ export function createMarkerAnnotation(
 
 /**
  * Parse marker data from a sample
- * Expected format: { t_ms, v, type?, direction?, label? }
+ * Server binary format sends: { strategy, side, tag, price, qty }
+ * Server may also send: { type, direction, label } for JSON format
  */
 export function parseMarkerFromSample(sample: {
   t_ms: number;
   v: number;
+  // Binary format fields
+  side?: string;
+  tag?: string;
+  // JSON format fields (alternative)
   type?: string;
   direction?: string;
   label?: string;
-}): MarkerData {
-  // Determine marker type from sample data or series ID
+}, seriesId?: string): MarkerData {
+  // Determine marker type from tag field (binary) or type field (JSON) or series_id
   let markerType: 'entry' | 'exit' | 'signal' = 'signal';
-  if (sample.type === 'entry' || sample.type === 'long_entry' || sample.type === 'short_entry') {
+  
+  // Check tag field first (binary format: "entry", "exit", etc.)
+  const tag = sample.tag?.toLowerCase() || sample.type?.toLowerCase() || '';
+  if (tag.includes('entry') || tag === 'buy' || tag === 'open') {
     markerType = 'entry';
-  } else if (sample.type === 'exit' || sample.type === 'long_exit' || sample.type === 'short_exit') {
+  } else if (tag.includes('exit') || tag === 'sell' || tag === 'close') {
     markerType = 'exit';
+  } else if (seriesId?.includes(':signals')) {
+    markerType = 'signal';
+  } else if (seriesId?.includes(':markers')) {
+    // Markers without explicit type default to entry
+    markerType = 'entry';
   }
 
-  // Determine direction
+  // Determine direction from side field (binary: "long"/"short") or direction field (JSON)
   let direction: 'long' | 'short' | undefined;
-  if (sample.direction === 'long' || sample.type?.includes('long')) {
+  const side = sample.side || sample.direction;
+  if (side === 'long' || side === 'L' || tag.includes('long')) {
     direction = 'long';
-  } else if (sample.direction === 'short' || sample.type?.includes('short')) {
+  } else if (side === 'short' || side === 'S' || tag.includes('short')) {
     direction = 'short';
   }
 
@@ -111,7 +125,7 @@ export function parseMarkerFromSample(sample: {
     y: sample.v,
     type: markerType,
     direction,
-    label: sample.label,
+    label: sample.tag || sample.label,
   };
 }
 
