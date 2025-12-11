@@ -17,6 +17,8 @@ import {
   MoveHorizontal,
   MoveVertical,
   Clock,
+  History,
+  ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -24,11 +26,18 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 
 export interface TimeWindowPreset {
   label: string;
   minutes: number; // 0 = entire session
+}
+
+export interface LayoutHistoryEntry {
+  name: string;
+  path?: string;
+  loadedAt: number;
 }
 
 interface ToolbarProps {
@@ -56,6 +65,11 @@ interface ToolbarProps {
   // Time window presets
   timeWindowPresets?: TimeWindowPreset[];
   onTimeWindowSelect?: (minutes: number) => void;
+  // Layout history
+  layoutHistory?: LayoutHistoryEntry[];
+  onLoadHistoryLayout?: (entry: LayoutHistoryEntry) => void;
+  // Auto-hide
+  visible?: boolean;
 }
 
 export function Toolbar({
@@ -81,7 +95,11 @@ export function Toolbar({
   onZoomModeChange,
   timeWindowPresets = [],
   onTimeWindowSelect,
+  layoutHistory = [],
+  onLoadHistoryLayout,
+  visible = true,
 }: ToolbarProps) {
+  if (!visible) return null;
   return (
     <div className={cn(
       'hud-panel px-4 py-2.5 flex items-center gap-2',
@@ -223,9 +241,9 @@ export function Toolbar({
       {/* Layout - Left Side */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layout</span>
-        {/* Layout Name with Reload Icon (when loaded) */}
+        {/* Layout Name with Reload and History */}
         {currentLayoutName && (
-          <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-muted/30 border border-border/50">
+          <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-muted/30 border border-border/50">
             {onReloadLayout && (
               <Button
                 variant="ghost"
@@ -238,6 +256,37 @@ export function Toolbar({
               </Button>
             )}
             <span className="text-xs font-semibold text-foreground gradient-text">{currentLayoutName}</span>
+            {/* Layout History Dropdown */}
+            {layoutHistory.length > 0 && onLoadHistoryLayout && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 hover:bg-primary/20 hover:text-primary rounded transition-all"
+                    title="Layout history"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-[200px]">
+                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                    Recent Layouts
+                  </div>
+                  <DropdownMenuSeparator />
+                  {layoutHistory.slice(0, 10).map((entry, index) => (
+                    <DropdownMenuItem
+                      key={`${entry.name}-${index}`}
+                      onClick={() => onLoadHistoryLayout(entry)}
+                      className="text-xs"
+                    >
+                      <History className="w-3 h-3 mr-2 text-muted-foreground" />
+                      {entry.name}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         )}
         {/* Load Layout Button (when no layout loaded) */}

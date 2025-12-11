@@ -185,13 +185,29 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const [demoRegistry, setDemoRegistry] = useState<RegistryRow[]>([]);
   const [autoReloadEnabled, setAutoReloadEnabled] = useState(true);
   const [hudVisible, setHudVisible] = useState(true);
+  const [toolbarVisible, setToolbarVisible] = useState(true);
   const [zoomMode, setZoomMode] = useState<'box' | 'x-only' | 'y-only'>('box');
   const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
-  const [currentLayoutName, setCurrentLayoutName] = useState<string | null>(null); // Track loaded layout name/filename
-  const [layoutError, setLayoutError] = useState<string | null>(null); // Track validation errors for UI display
+  const [currentLayoutName, setCurrentLayoutName] = useState<string | null>(null);
+  const [layoutError, setLayoutError] = useState<string | null>(null);
+  const [layoutHistory, setLayoutHistory] = useState<Array<{ name: string; path?: string; loadedAt: number }>>([]);
+  
+  // Time window presets from config
+  const [timeWindowPresets, setTimeWindowPresets] = useState<Array<{ label: string; minutes: number }>>([
+    { label: 'Last 15 min', minutes: 15 },
+    { label: 'Last 30 min', minutes: 30 },
+    { label: 'Last 1 hour', minutes: 60 },
+    { label: 'Last 4 hours', minutes: 240 },
+  ]);
+  
+  // Auto-hide configuration
+  const [autoHideEnabled, setAutoHideEnabled] = useState(false);
+  const [autoHideDelayMs, setAutoHideDelayMs] = useState(3000);
+  const autoHideTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
   
   // Performance metrics for HUD
   const [cpuUsage, setCpuUsage] = useState(0);
@@ -230,6 +246,19 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         }
 
         const config = await configResponse.json();
+        
+        // Load UI settings from config
+        if (config.ui && mounted) {
+          // Auto-hide settings
+          if (config.ui.autoHide) {
+            setAutoHideEnabled(config.ui.autoHide.enabled ?? false);
+            setAutoHideDelayMs(config.ui.autoHide.delayMs ?? 3000);
+          }
+          // Time window presets
+          if (config.ui.timeWindowPresets && Array.isArray(config.ui.timeWindowPresets)) {
+            setTimeWindowPresets(config.ui.timeWindowPresets);
+          }
+        }
 
         // Check for defaultLayoutPath
         if (config.defaultLayoutPath && mounted) {
@@ -257,6 +286,13 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
               setPlotLayout(parsed);
               setCurrentLayoutName(filename);
               setLayoutError(null);
+              // Add to layout history
+              setLayoutHistory(prev => {
+                const newEntry = { name: filename, path: config.defaultLayoutPath, loadedAt: Date.now() };
+                // Avoid duplicates
+                const filtered = prev.filter(e => e.name !== filename);
+                return [newEntry, ...filtered].slice(0, 10);
+              });
 
               if (validationErrors.warnings.length > 0) {
                 console.warn('[TradingChart] Default layout validation warnings:', validationErrors.warnings);
@@ -413,6 +449,76 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     const interval = setInterval(updatePerformanceMetrics, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Auto-hide UI effect
+  useEffect(() => {
+    if (!autoHideEnabled) {
+      setHudVisible(true);
+      setToolbarVisible(true);
+      return;
+    }
+
+    const handleActivity = () => {
+      lastActivityRef.current = Date.now();
+      setHudVisible(true);
+      setToolbarVisible(true);
+      
+      // Clear existing timer
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+      }
+      
+      // Set new timer
+      autoHideTimerRef.current = setTimeout(() => {
+        setHudVisible(false);
+        setToolbarVisible(false);
+      }, autoHideDelayMs);
+    };
+
+    // Initial timer
+    handleActivity();
+
+    // Add event listeners
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('mousedown', handleActivity);
+    window.addEventListener('keydown', handleActivity);
+    window.addEventListener('scroll', handleActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('mousedown', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('scroll', handleActivity);
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+      }
+    };
+  }, [autoHideEnabled, autoHideDelayMs]);
+
+  // Calculate gap metrics from registry
+  const gapMetrics = useMemo(() => {
+    let totalGaps = 0;
+    let initGap = 0;
+    const seriesGaps: Array<{ id: string; gaps: number; missed: number }> = [];
+
+    for (const row of registry) {
+      totalGaps += row.gaps || 0;
+      const seriesMissed = row.missed || 0;
+      if (row.gaps > 0 || seriesMissed > 0) {
+        seriesGaps.push({ id: row.id, gaps: row.gaps || 0, missed: seriesMissed });
+      }
+    }
+
+    // InitGap: gaps detected during initial history load
+    // This would need to be tracked separately during init_begin -> init_complete phase
+    // For now, we'll estimate based on first tick series
+    const firstTickSeries = registry.find(r => r.id.includes(':ticks'));
+    if (firstTickSeries && firstTickSeries.firstSeriesSeq !== null && firstTickSeries.firstSeriesSeq > 0) {
+      initGap = firstTickSeries.firstSeriesSeq;
+    }
+
+    return { totalGaps, initGap, seriesGaps };
+  }, [registry]);
 
   // Demo data generator
   useDemoDataGenerator({
@@ -729,6 +835,13 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
           setPlotLayout(parsed);
           setLayoutError(null); // Clear any previous errors
           
+          // Add to layout history
+          setLayoutHistory(prev => {
+            const newEntry = { name: layoutName, loadedAt: Date.now() };
+            const filtered = prev.filter(e => e.name !== layoutName);
+            return [newEntry, ...filtered].slice(0, 10);
+          });
+          
           // Update visible series based on layout
           // CRITICAL: Add all series from layout to visibleSeries, even if not in registry yet
           // They will be created when data arrives and should be visible by default
@@ -783,6 +896,54 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     setDemoRegistry([]);
   }, []);
 
+  // Handle time window selection
+  const handleTimeWindowSelect = useCallback((minutes: number) => {
+    if (minutes === 0) {
+      // Entire session - zoom to fit all data
+      zoomExtents();
+    } else {
+      // Set visible range to last N minutes
+      const windowMs = minutes * 60 * 1000;
+      const endMs = dataClockMs || Date.now();
+      const startMs = endMs - windowMs;
+      
+      // This would need to be implemented in MultiPaneChart to set the X axis range
+      // For now, just log and jump to live
+      console.log('[TradingChart] Time window selected:', minutes, 'minutes, range:', startMs, '-', endMs);
+      handleJumpToLive();
+    }
+  }, [zoomExtents, dataClockMs, handleJumpToLive]);
+
+  // Handle loading layout from history
+  const handleLoadHistoryLayout = useCallback(async (entry: { name: string; path?: string; loadedAt: number }) => {
+    if (entry.path) {
+      try {
+        const layoutResponse = await fetch(entry.path);
+        if (!layoutResponse.ok) {
+          throw new Error(`Failed to fetch layout: ${layoutResponse.statusText}`);
+        }
+        const layoutJson = await layoutResponse.json();
+        const parsed = parsePlotLayout(layoutJson);
+        
+        setPlotLayout(parsed);
+        setCurrentLayoutName(entry.name);
+        setLayoutError(null);
+        
+        // Move to front of history
+        setLayoutHistory(prev => {
+          const filtered = prev.filter(e => e.name !== entry.name);
+          return [{ ...entry, loadedAt: Date.now() }, ...filtered].slice(0, 10);
+        });
+      } catch (err) {
+        console.error('[TradingChart] Failed to load layout from history:', err);
+        alert(`Failed to load layout: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      // Layout was loaded from file, trigger file picker
+      handleLoadLayout();
+    }
+  }, [handleLoadLayout]);
+
   const isConnected = demoMode || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta';
   const currentStage = demoMode ? 'demo' : feedState.stage;
   
@@ -833,48 +994,49 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         isFullscreen={isFullscreen}
         zoomMode={zoomMode}
         onZoomModeChange={setZoomMode}
-        timeWindowPresets={[
-          { label: 'Last 15 min', minutes: 15 },
-          { label: 'Last 30 min', minutes: 30 },
-          { label: 'Last 1 hour', minutes: 60 },
-          { label: 'Last 4 hours', minutes: 240 },
-        ]}
-        onTimeWindowSelect={(minutes) => {
-          // Time window selection logic
-          // 0 = entire session, otherwise set to last N minutes
-          console.log('[TradingChart] Time window selected:', minutes);
-          // This will be implemented to adjust visible range
-        }}
-        className="shrink-0 border-b border-border"
+        timeWindowPresets={timeWindowPresets}
+        onTimeWindowSelect={handleTimeWindowSelect}
+        layoutHistory={layoutHistory}
+        onLoadHistoryLayout={handleLoadHistoryLayout}
+        visible={toolbarVisible}
+        className={cn(
+          "shrink-0 border-b border-border transition-opacity duration-300",
+          !toolbarVisible && "opacity-0 pointer-events-none"
+        )}
       />
 
       {/* HUD Status Bar */}
-      {hudVisible && (
-        <HUD
-          stage={currentStage}
-          rate={demoMode ? 50 : feedState.rate}
-          fps={fps}
-          heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
-          dataClockMs={dataClockMs}
-          isLive={isLive}
-          historyProgress={demoMode ? 100 : feedState.historyProgress}
-          tickCount={tickCount}
-          cpuUsage={cpuUsage}
-          memoryUsage={memoryUsage}
-          gpuDrawCalls={gpuMetrics.drawCalls}
-          currentLayoutName={currentLayoutName}
-          onReloadLayout={handleReloadLayout}
-          seriesCount={registry.length}
-          minimapEnabled={minimapEnabled}
-          onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
-          theme={theme}
-          onToggleTheme={handleToggleTheme}
-          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-          onToggleFullscreen={handleToggleFullscreen}
-          isFullscreen={isFullscreen}
-          className="shrink-0 border-b border-border"
-        />
-      )}
+      <HUD
+        stage={currentStage}
+        rate={demoMode ? 50 : feedState.rate}
+        fps={fps}
+        heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
+        dataClockMs={dataClockMs}
+        isLive={isLive}
+        historyProgress={demoMode ? 100 : feedState.historyProgress}
+        tickCount={tickCount}
+        cpuUsage={cpuUsage}
+        memoryUsage={memoryUsage}
+        gpuDrawCalls={gpuMetrics.drawCalls}
+        currentLayoutName={currentLayoutName}
+        onReloadLayout={handleReloadLayout}
+        seriesCount={registry.length}
+        minimapEnabled={minimapEnabled}
+        onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        onToggleFullscreen={handleToggleFullscreen}
+        isFullscreen={isFullscreen}
+        totalGaps={gapMetrics.totalGaps}
+        initGap={gapMetrics.initGap}
+        seriesGaps={gapMetrics.seriesGaps}
+        visible={hudVisible}
+        className={cn(
+          "shrink-0 border-b border-border transition-opacity duration-300",
+          !hudVisible && "opacity-0 pointer-events-none"
+        )}
+      />
 
       {/* Main Chart Area */}
       {/* When hasMinHeight, allow container to grow beyond flex-1 by using min-h-0 auto and removing flex-1 constraint */}
