@@ -4154,6 +4154,17 @@ export function useMultiPaneChart({
   }, []);
 
   const zoomExtents = useCallback(() => {
+    // Zoom all dynamic pane surfaces
+    for (const [paneId, paneSurface] of chartRefs.current.paneSurfaces) {
+      try {
+        paneSurface.surface.zoomExtents();
+        console.log(`[zoomExtents] Zoomed pane: ${paneId}`);
+      } catch (e) {
+        console.warn(`[zoomExtents] Failed to zoom pane ${paneId}:`, e);
+      }
+    }
+    
+    // Also zoom legacy surfaces if they exist
     chartRefs.current.tickSurface?.zoomExtents();
     chartRefs.current.ohlcSurface?.zoomExtents();
   }, []);
