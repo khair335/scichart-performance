@@ -2890,10 +2890,14 @@ export function useMultiPaneChart({
 
   // SIMPLIFIED: Removed complex caching refs - direct append pattern like new-index.html
 
-  // Process accumulated samples and update chart - SIMPLIFIED following new-index.html pattern
-  // KEY INSIGHT: new-index.html appends DIRECTLY per sample without intermediate buffering
-  // This avoids Float64Array.from() allocations that cause GC pressure at 50k+ ticks
-  const processBatchedSamples = useCallback(() => {
+  // CHUNKED batch processing to prevent UI freezes
+  // Processes samples in smaller chunks, yielding to browser between chunks
+  const CHUNK_SIZE = 5000; // Process 5000 samples per frame to prevent blocking
+  const processingQueueRef = useRef<Sample[]>([]);
+  const isProcessingRef = useRef(false);
+  
+  // Process a single chunk of samples
+  const processChunk = useCallback((samples: Sample[]) => {
     const refs = chartRefs.current;
     
     // Check if we have surfaces available
@@ -2909,12 +2913,7 @@ export function useMultiPaneChart({
       return;
     }
     
-    const samples = sampleBufferRef.current;
     if (samples.length === 0) return;
-    
-    // Clear buffer immediately (CRITICAL: prevents re-processing)
-    sampleBufferRef.current = [];
-    pendingUpdateRef.current = null;
 
     let latestTime = lastDataTimeRef.current;
     const samplesLength = samples.length;
@@ -3194,6 +3193,52 @@ export function useMultiPaneChart({
     
     lastRenderTimeRef.current = performance.now();
   }, [onDataClockUpdate, config, feedStage, plotLayout, layoutManager]);
+  
+  // Main processBatchedSamples - handles chunking to prevent UI freezes
+  const processBatchedSamples = useCallback(() => {
+    // Move samples from buffer to processing queue
+    if (sampleBufferRef.current.length > 0) {
+      processingQueueRef.current.push(...sampleBufferRef.current);
+      sampleBufferRef.current = [];
+    }
+    pendingUpdateRef.current = null;
+    
+    // If already processing, the current processing loop will handle new samples
+    if (isProcessingRef.current) {
+      return;
+    }
+    
+    if (processingQueueRef.current.length === 0) {
+      return;
+    }
+    
+    // Start chunked processing
+    isProcessingRef.current = true;
+    
+    const processNextChunk = () => {
+      if (processingQueueRef.current.length === 0) {
+        isProcessingRef.current = false;
+        return;
+      }
+      
+      // Take next chunk
+      const chunk = processingQueueRef.current.splice(0, CHUNK_SIZE);
+      
+      // Process this chunk
+      processChunk(chunk);
+      
+      // If more samples in queue, schedule next chunk with setTimeout(0)
+      // This yields to the browser, preventing UI freeze
+      if (processingQueueRef.current.length > 0) {
+        setTimeout(processNextChunk, 0);
+      } else {
+        isProcessingRef.current = false;
+      }
+    };
+    
+    // Start processing first chunk
+    processNextChunk();
+  }, [processChunk]);
   
   // Track feed stage changes and handle transitions
   useEffect(() => {
