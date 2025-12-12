@@ -477,20 +477,40 @@ export function useMultiPaneChart({
     
     // Fallback to namespace-based routing (backward compatibility for legacy mode)
     const seriesInfo = parseSeriesType(seriesId);
+    
+    // Try to find a matching pane from dynamic panes first
+    const paneEntries = Array.from(refs.paneSurfaces.entries());
+    
     if (seriesInfo.chartTarget === 'tick') {
-      // Try dynamic pane first, then legacy
-      const tickPane = refs.paneSurfaces.get('tick-pane');
+      // Try to find pane with 'tick', 'price', or 'indicator' in name
+      const tickPane = paneEntries.find(([id]) => 
+        id.includes('tick') || id.includes('price') || id.includes('indicator')
+      );
       if (tickPane) {
-        return { paneId: 'tick-pane', surface: tickPane.surface, wasm: tickPane.wasm };
+        return { paneId: tickPane[0], surface: tickPane[1].surface, wasm: tickPane[1].wasm };
       }
-      return { paneId: 'tick-pane', surface: refs.tickSurface, wasm: refs.tickWasm };
+      // Legacy fallback
+      if (refs.tickSurface && refs.tickWasm) {
+        return { paneId: 'tick-pane', surface: refs.tickSurface, wasm: refs.tickWasm };
+      }
     } else if (seriesInfo.chartTarget === 'ohlc') {
-      // Try dynamic pane first, then legacy
-      const ohlcPane = refs.paneSurfaces.get('ohlc-pane');
+      // Try to find pane with 'ohlc', 'candlestick', or 'bar' in name
+      const ohlcPane = paneEntries.find(([id]) => 
+        id.includes('ohlc') || id.includes('candlestick') || id.includes('bar')
+      );
       if (ohlcPane) {
-        return { paneId: 'ohlc-pane', surface: ohlcPane.surface, wasm: ohlcPane.wasm };
+        return { paneId: ohlcPane[0], surface: ohlcPane[1].surface, wasm: ohlcPane[1].wasm };
       }
-      return { paneId: 'ohlc-pane', surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
+      // Legacy fallback
+      if (refs.ohlcSurface && refs.ohlcWasm) {
+        return { paneId: 'ohlc-pane', surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
+      }
+    }
+    
+    // Final fallback: use first available pane (for strategy markers, etc.)
+    if (paneEntries.length > 0) {
+      const firstPane = paneEntries[0];
+      return { paneId: firstPane[0], surface: firstPane[1].surface, wasm: firstPane[1].wasm };
     }
     
     return { paneId: null, surface: null, wasm: null };
