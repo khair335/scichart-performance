@@ -3217,8 +3217,9 @@ export function useMultiPaneChart({
   // Main processBatchedSamples - handles chunking to prevent UI freezes
   const processBatchedSamples = useCallback(() => {
     // Move samples from buffer to processing queue
+    // Use concat instead of spread to avoid "Maximum call stack size exceeded" with large arrays
     if (sampleBufferRef.current.length > 0) {
-      processingQueueRef.current.push(...sampleBufferRef.current);
+      processingQueueRef.current = processingQueueRef.current.concat(sampleBufferRef.current);
       sampleBufferRef.current = [];
     }
     pendingUpdateRef.current = null;
