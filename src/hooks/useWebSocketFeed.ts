@@ -4,6 +4,7 @@ import { WsFeedClient, MemoryStorage, FeedStatus, RegistryRow, Sample } from '@/
 interface UseWebSocketFeedOptions {
   url: string;
   onSamples: (samples: Sample[]) => void;
+  onSessionComplete?: () => void;
   autoConnect?: boolean;
 }
 
@@ -15,11 +16,13 @@ interface FeedState {
   rate: number;
   heartbeatLag: number | null;
   registryCount: number;
+  sessionComplete: boolean;
 }
 
-export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebSocketFeedOptions) {
+export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnect = true }: UseWebSocketFeedOptions) {
   const clientRef = useRef<WsFeedClient | null>(null);
   const onSamplesRef = useRef(onSamples);
+  const onSessionCompleteRef = useRef(onSessionComplete);
   
   const [state, setState] = useState<FeedState>({
     stage: 'idle',
@@ -29,17 +32,22 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
     rate: 0,
     heartbeatLag: null,
     registryCount: 0,
+    sessionComplete: false,
   });
 
   const [registry, setRegistry] = useState<RegistryRow[]>([]);
 
-  // Keep onSamples ref up to date
+  // Keep refs up to date
   useEffect(() => {
     onSamplesRef.current = onSamples;
   }, [onSamples]);
 
+  useEffect(() => {
+    onSessionCompleteRef.current = onSessionComplete;
+  }, [onSessionComplete]);
+
   const handleStatus = useCallback((status: FeedStatus) => {
-    setState({
+    setState(prev => ({
       stage: status.stage,
       connected: status.stage === 'live' || status.stage === 'history' || status.stage === 'delta',
       lastSeq: status.lastSeq,
@@ -47,50 +55,54 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
       rate: status.rate.perSec,
       heartbeatLag: status.heartbeatLagMs,
       registryCount: status.registry.total,
-    });
+      sessionComplete: prev.sessionComplete, // Preserve session complete state
+    }));
   }, []);
 
   const handleRegistry = useCallback((rows: RegistryRow[]) => {
-  
     setRegistry(rows);
   }, []);
 
+  const handleEvent = useCallback((evt: { type: string; [key: string]: unknown }) => {
+    if (evt.type === 'error') {
+      console.error('[WebSocket Error]', evt);
+    }
+    
+    // Handle session completion (test_done event from server)
+    if (evt.type === 'test_done') {
+      console.log('[WebSocket] Session complete - server finished sending data');
+      setState(prev => ({ ...prev, sessionComplete: true, stage: 'complete' }));
+      onSessionCompleteRef.current?.();
+    }
+  }, []);
+
   const connect = useCallback(() => {
-   
     if (clientRef.current) {
-     
       clientRef.current.close();
     }
 
+    // Reset session complete state on new connection
+    setState(prev => ({ ...prev, sessionComplete: false }));
+
     // Use localStorage for data persistence across page refreshes
-    // This ensures the UI retrieves all historical + delta + live data even after refresh
     const storage = typeof window !== 'undefined' && window.localStorage
       ? window.localStorage
       : new MemoryStorage();
 
-   
     const client = new WsFeedClient({
       url,
       storage: storage,
       onSamples: (samples) => {
-       
         onSamplesRef.current(samples);
       },
       onStatus: handleStatus,
       onRegistry: handleRegistry,
-      onEvent: (evt) => {
-      
-        if (evt.type === 'error') {
-          console.error('[WebSocket Error]', evt);
-        }
-      },
+      onEvent: handleEvent,
     });
 
-   
     client.connect();
     clientRef.current = client;
- 
-  }, [url, handleStatus, handleRegistry]);
+  }, [url, handleStatus, handleRegistry, handleEvent]);
 
   const disconnect = useCallback(() => {
     clientRef.current?.close();
@@ -98,14 +110,11 @@ export function useWebSocketFeed({ url, onSamples, autoConnect = true }: UseWebS
 
   // Auto-connect on mount
   useEffect(() => {
-   
     if (autoConnect) {
-     
       connect();
-    } 
+    }
 
     return () => {
-   
       if (clientRef.current) {
         clientRef.current.close();
         clientRef.current = null;

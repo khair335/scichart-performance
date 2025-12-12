@@ -76,6 +76,13 @@ export function HUD({
             LIVE
           </span>
         );
+      case 'complete':
+        return (
+          <span className="status-pill bg-primary/20 text-primary">
+            <span className="w-1.5 h-1.5 bg-primary rounded-full mr-1.5 glow-primary" />
+            SESSION COMPLETE
+          </span>
+        );
       case 'demo':
         return (
           <span className="status-pill bg-primary/20 text-primary animate-pulse-subtle">
