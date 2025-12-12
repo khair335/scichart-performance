@@ -464,55 +464,15 @@ export function useMultiPaneChart({
           return { paneId, surface: paneSurface.surface, wasm: paneSurface.wasm };
         }
         
-        // Fallback: if pane not found in dynamic panes, try legacy surfaces
-        // This handles the case where layout specifies a pane that doesn't exist yet
-        // Pane not found, trying legacy fallback
-        if (paneId.includes('tick') || paneId.includes('price') || paneId.includes('indicator')) {
-          return { paneId, surface: refs.tickSurface, wasm: refs.tickWasm };
-        } else if (paneId.includes('ohlc') || paneId.includes('candlestick') || paneId.includes('bar')) {
-          return { paneId, surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
-        }
+        // Pane defined in layout but surface not created yet - return null (will be created later)
+        // NO FALLBACK: strict layout enforcement
+        return { paneId: null, surface: null, wasm: null };
       }
     }
     
-    // Fallback to namespace-based routing (backward compatibility for legacy mode)
-    const seriesInfo = parseSeriesType(seriesId);
-    
-    // Try to find a matching pane from dynamic panes first
-    const paneEntries = Array.from(refs.paneSurfaces.entries());
-    
-    if (seriesInfo.chartTarget === 'tick') {
-      // Try to find pane with 'tick', 'price', or 'indicator' in name
-      const tickPane = paneEntries.find(([id]) => 
-        id.includes('tick') || id.includes('price') || id.includes('indicator')
-      );
-      if (tickPane) {
-        return { paneId: tickPane[0], surface: tickPane[1].surface, wasm: tickPane[1].wasm };
-      }
-      // Legacy fallback
-      if (refs.tickSurface && refs.tickWasm) {
-        return { paneId: 'tick-pane', surface: refs.tickSurface, wasm: refs.tickWasm };
-      }
-    } else if (seriesInfo.chartTarget === 'ohlc') {
-      // Try to find pane with 'ohlc', 'candlestick', or 'bar' in name
-      const ohlcPane = paneEntries.find(([id]) => 
-        id.includes('ohlc') || id.includes('candlestick') || id.includes('bar')
-      );
-      if (ohlcPane) {
-        return { paneId: ohlcPane[0], surface: ohlcPane[1].surface, wasm: ohlcPane[1].wasm };
-      }
-      // Legacy fallback
-      if (refs.ohlcSurface && refs.ohlcWasm) {
-        return { paneId: 'ohlc-pane', surface: refs.ohlcSurface, wasm: refs.ohlcWasm };
-      }
-    }
-    
-    // Final fallback: use first available pane (for strategy markers, etc.)
-    if (paneEntries.length > 0) {
-      const firstPane = paneEntries[0];
-      return { paneId: firstPane[0], surface: firstPane[1].surface, wasm: firstPane[1].wasm };
-    }
-    
+    // STRICT LAYOUT ENFORCEMENT: If series is not in layout, do NOT plot it
+    // No fallback auto-routing based on series_id patterns
+    // Layout JSON is the single source of truth
     return { paneId: null, surface: null, wasm: null };
   };
   
@@ -2467,10 +2427,12 @@ export function useMultiPaneChart({
               
               // Requirement 0.3: PnL pane must have proper Y-axis scaling for negative/positive values
               // Check if this is a PnL pane by checking if it contains PnL series
+              // STRICT: PnL pane is ONLY determined by series assignment, not pane ID/title patterns
+              // Check if this pane has a strategy-pnl series explicitly assigned in layout
               const isPnLPane = plotLayout.layout.series.some(s => {
                 const seriesInfo = parseSeriesType(s.series_id);
                 return seriesInfo.type === 'strategy-pnl' && s.pane === paneConfig.id;
-              }) || paneConfig.id.toLowerCase().includes('pnl') || paneConfig.title?.toLowerCase().includes('pnl');
+              });
               
               if (isPnLPane) {
                 // Configure Y-axis for PnL: ensure it can handle both positive and negative values
