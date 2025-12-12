@@ -62,7 +62,7 @@
       { "label": "Last 4 hours", "minutes": 240 }
     ]
   },
-  "defaultLayoutPath": "/layouts/layout-3x1-simple.json",
+  "defaultLayoutPath": "/layouts/layout-mesu5-ticks-smas.json",
   "defaultLayout": {
     "layout_mode": "multi_surface",
     "grid": [2, 1],
