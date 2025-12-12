@@ -1639,6 +1639,8 @@ export function useMultiPaneChart({
       
       // Only preallocate series that should be plotted on charts
       if (seriesInfo.chartTarget === 'none') return;
+      
+      try {
         // Get pane and surface using layout manager or fallback
         const { paneId, surface, wasm } = getPaneForSeries(seriesId);
         
