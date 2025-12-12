@@ -950,7 +950,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     }
   }, [handleLoadLayout]);
 
-  const isConnected = demoMode || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta';
+  // Include 'complete' stage so session completion doesn't trigger the NoConnectionOverlay
+  const isConnected = demoMode || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta' || feedState.stage === 'complete';
   const currentStage = demoMode ? 'demo' : feedState.stage;
   
   // Check if min_height is set in layout (if > 0, remove overflow-hidden to allow scrolling)
