@@ -450,6 +450,16 @@ export function useMultiPaneChart({
       return null;
     }
   };
+  // Helper: Check if a series is defined in the current layout
+  // Returns true if series is in layout or no layout is loaded (legacy mode)
+  const isSeriesInLayout = (seriesId: string): boolean => {
+    if (!plotLayout || !layoutManager) {
+      // No layout loaded - allow all series (legacy mode)
+      return true;
+    }
+    // Check if series is explicitly defined in layout
+    return layoutManager.getPaneForSeries(seriesId) !== null;
+  };
 
   const getPaneForSeries = (seriesId: string): { paneId: string | null; surface: SciChartSurface | null; wasm: TSciChart | null } => {
     const refs = chartRefs.current;
@@ -1640,25 +1650,23 @@ export function useMultiPaneChart({
       // Only preallocate series that should be plotted on charts
       if (seriesInfo.chartTarget === 'none') return;
       
+      // IMPORTANT: Silently skip series not defined in the layout
+      // This prevents console errors for server-sent series that user doesn't want to visualize
+      if (!isSeriesInLayout(seriesId)) {
+        // Series not in layout - silently skip (layout is single source of truth)
+        return;
+      }
+      
       try {
         // Get pane and surface using layout manager or fallback
         const { paneId, surface, wasm } = getPaneForSeries(seriesId);
         
         if (!wasm || !surface || !paneId) {
-          console.error(`[MultiPaneChart] Cannot preallocate ${seriesId}: pane/surface not found`, {
-            seriesId,
-            paneId,
-            hasSurface: !!surface,
-            hasWasm: !!wasm,
-            availablePanes: Array.from(refs.paneSurfaces.keys()),
-            plotLayout: plotLayout ? { 
-              seriesCount: plotLayout.layout.series.length,
-              panes: plotLayout.layout.panes.map(p => p.id),
-              seriesAssignments: plotLayout.layout.series.map(s => ({ id: s.series_id, pane: s.pane }))
-            } : null,
-            isReady,
-            hasLegacySurfaces: !!(refs.tickSurface && refs.ohlcSurface)
-          });
+          // Pane defined in layout but surface not ready yet - this is expected during initialization
+          // Only log if we have panes but this specific one is missing
+          if (refs.paneSurfaces.size > 0 && paneId) {
+            console.warn(`[MultiPaneChart] Surface for pane "${paneId}" not ready yet for series ${seriesId}`);
+          }
           return;
         }
         
@@ -2566,14 +2574,13 @@ export function useMultiPaneChart({
               if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') return;
               if (seriesInfo.chartTarget === 'none') return;
               
+              // Silently skip series not defined in the layout
+              if (!isSeriesInLayout(seriesId)) return;
+              
               try {
                 const { paneId, surface, wasm } = getPaneForSeries(seriesId);
                 if (!wasm || !surface || !paneId) {
-                  console.warn(`[MultiPaneChart] Cannot preallocate ${seriesId} after pane creation: pane/surface not found`, {
-                    seriesId,
-                    paneId,
-                    availablePanes: Array.from(refs.paneSurfaces.keys())
-                  });
+                  // Surface not ready yet - will be created when panes are initialized
                   return;
                 }
                 
