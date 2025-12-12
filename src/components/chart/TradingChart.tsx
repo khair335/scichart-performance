@@ -134,9 +134,7 @@ const NoConnectionOverlay = ({ wsUrl, onStartDemo, autoReloadEnabled, onCancelAu
           <span className="text-destructive text-4xl font-bold">!</span>
         </div>
         <h3 className="text-2xl font-bold text-foreground mb-3">No Data Connection</h3>
-        <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
-          WebSocket server not available. Start the server or use demo mode.
-        </p>
+      
         <code className="text-xs text-muted-foreground font-mono bg-muted/50 border border-border/50 px-4 py-2 rounded-lg block mb-4 backdrop-blur-sm">
           {wsUrl}
         </code>
@@ -149,18 +147,7 @@ const NoConnectionOverlay = ({ wsUrl, onStartDemo, autoReloadEnabled, onCancelAu
           </div>
         )}
         
-        <div className="flex flex-col gap-3">
-          <Button 
-            onClick={onStartDemo}
-            className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold px-6 py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 btn-modern"
-          >
-            <Play className="w-4 h-4 mr-2" />
-            Start Demo Mode
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            Or run: <code className="bg-muted/50 border border-border/50 px-2 py-1 rounded font-mono">python server.py</code>
-          </p>
-        </div>
+      
       </div>
     </div>
   );
