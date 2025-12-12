@@ -262,7 +262,7 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
       continue;
     }
     
-    if (!['FastLineRenderableSeries', 'FastCandlestickRenderableSeries', 'FastMountainRenderableSeries'].includes(seriesAssignment.type)) {
+    if (!['FastLineRenderableSeries', 'FastCandlestickRenderableSeries', 'FastMountainRenderableSeries', 'FastOhlcRenderableSeries'].includes(seriesAssignment.type)) {
       validationErrors.errors.push(`Series "${seriesAssignment.series_id}": invalid type "${seriesAssignment.type}"`);
       continue;
     }
