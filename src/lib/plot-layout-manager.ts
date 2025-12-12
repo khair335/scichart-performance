@@ -75,89 +75,15 @@ export class PlotLayoutManager {
       return null;
     }
     
-    // First check explicit assignment in layout
+    // STRICT: Only return pane if series is explicitly assigned in layout JSON
+    // No fallback routing - layout is the single source of truth
     const assignedPane = this.seriesToPaneMap.get(seriesId);
     if (assignedPane) {
       return assignedPane;
     }
     
-    // Fallback: use namespace-based routing for backward compatibility
-    // This is used when layout has no explicit series assignments (e.g., default layout)
-    const seriesInfo = parseSeriesType(seriesId);
-    
-    // PnL should go to a dedicated pane if it exists
-    if (seriesInfo.type === 'strategy-pnl') {
-      const pnlPane = this.parsedLayout.layout.panes.find(p => 
-        p.id.includes('pnl') || p.title?.toLowerCase().includes('pnl')
-      );
-      if (pnlPane) {
-        return pnlPane.id;
-      }
-    }
-    
-    // Tick series and tick indicators go to tick/price/indicator panes
-    if (seriesInfo.type === 'tick' || seriesInfo.type === 'tick-indicator') {
-      const tickPane = this.parsedLayout.layout.panes.find(p => 
-        p.id.includes('tick') || 
-        p.id.includes('price') || 
-        p.id.includes('indicator') ||
-        p.title?.toLowerCase().includes('tick') ||
-        p.title?.toLowerCase().includes('price') ||
-        p.title?.toLowerCase().includes('indicator')
-      );
-      if (tickPane) {
-        return tickPane.id;
-      }
-    }
-    
-    // OHLC bars go to OHLC/candlestick/bar panes
-    if (seriesInfo.type === 'ohlc-bar' || seriesInfo.type === 'bar-indicator') {
-      const ohlcPane = this.parsedLayout.layout.panes.find(p => 
-        p.id.includes('ohlc') || 
-        p.id.includes('candlestick') || 
-        p.id.includes('bar') ||
-        p.title?.toLowerCase().includes('ohlc') ||
-        p.title?.toLowerCase().includes('candlestick')
-      );
-      if (ohlcPane) {
-        return ohlcPane.id;
-      }
-    }
-    
-    // Strategy markers/signals go to all panes except PnL and OHLC (unless excluded)
-    if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-      // Find first pane that should show strategy markers (not excluded)
-      const eligiblePane = this.parsedLayout.layout.panes.find(p => {
-        const isExcluded = this.parsedLayout?.strategyMarkerPanes.has(p.id) === false;
-        return !isExcluded && !p.id.includes('pnl') && !p.id.includes('ohlc');
-      });
-      if (eligiblePane) {
-        return eligiblePane.id;
-      }
-    }
-    
-    // Strategy markers go to all panes except PnL and bar plots
-    if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-      // Find panes that should show markers
-      for (const paneId of this.parsedLayout.strategyMarkerPanes) {
-        return paneId; // Return first matching pane (will be handled by overlay system)
-      }
-    }
-    
-    // Default routing based on namespace
-    if (seriesInfo.chartTarget === 'ohlc') {
-      // Find OHLC pane
-      const ohlcPane = this.parsedLayout.layout.panes.find(p => 
-        p.id.includes('ohlc') || p.title?.toLowerCase().includes('ohlc') || 
-        p.title?.toLowerCase().includes('candlestick')
-      );
-      if (ohlcPane) {
-        return ohlcPane.id;
-      }
-    }
-    
-    // Default to first pane (tick pane)
-    return this.parsedLayout.layout.panes[0]?.id || null;
+    // Series not defined in layout - do NOT plot it
+    return null;
   }
 
   /**
