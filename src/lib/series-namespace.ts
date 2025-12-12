@@ -33,7 +33,7 @@ export function parseSeriesType(seriesId: string): SeriesTypeInfo {
         isIndicator: false,
         isTickIndicator: false,
         isBarIndicator: false,
-        chartTarget: 'tick', // PnL typically goes on tick chart
+        chartTarget: 'tick', // PnL is plotted as a regular series (PnL pane via layout)
       };
     }
     if (seriesId.includes(':signals')) {
@@ -42,7 +42,7 @@ export function parseSeriesType(seriesId: string): SeriesTypeInfo {
         isIndicator: false,
         isTickIndicator: false,
         isBarIndicator: false,
-        chartTarget: 'tick', // Signals typically go on tick chart
+        chartTarget: 'none', // Signals are rendered as annotations only, never as chart series
       };
     }
     if (seriesId.includes(':markers')) {
@@ -51,7 +51,7 @@ export function parseSeriesType(seriesId: string): SeriesTypeInfo {
         isIndicator: false,
         isTickIndicator: false,
         isBarIndicator: false,
-        chartTarget: 'tick', // Markers typically go on tick chart
+        chartTarget: 'none', // Markers are rendered as annotations only, never as chart series
       };
     }
     return {
