@@ -41,29 +41,91 @@
       "series_id": "MESU5:ticks",
       "pane": "price-pane",
       "type": "FastLineRenderableSeries",
-      "color": "#50C7E0",
-      "strokeThickness": 1
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 1
+      }
     },
     {
       "series_id": "MESU5:sma_10",
       "pane": "price-pane",
       "type": "FastLineRenderableSeries",
-      "color": "#F48420",
-      "strokeThickness": 1
+      "style": {
+        "stroke": "#F48420",
+        "strokeThickness": 1
+      }
     },
     {
       "series_id": "MESU5:sma_20",
       "pane": "price-pane",
       "type": "FastLineRenderableSeries",
-      "color": "#26A69A",
-      "strokeThickness": 1
+      "style": {
+        "stroke": "#26A69A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_30",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#AB47BC",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_40",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FF7043",
+        "strokeThickness": 1
+      }
     },
     {
       "series_id": "MESU5:sma_50",
       "pane": "price-pane",
       "type": "FastLineRenderableSeries",
-      "color": "#AB47BC",
-      "strokeThickness": 2
+      "style": {
+        "stroke": "#7E57C2",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:sma_60",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#66BB6A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_70",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#42A5F5",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_80",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#EC407A",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_90",
+      "pane": "price-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FFCA28",
+        "strokeThickness": 1
+      }
     },
     {
       "series_id": "MESU5:ohlc_time:10000",
@@ -71,11 +133,19 @@
       "type": "FastCandlestickRenderableSeries"
     },
     {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    },
+    {
       "series_id": "MESU5:strategy:alpha:pnl",
       "pane": "pnl-pane",
       "type": "FastMountainRenderableSeries",
-      "color": "#4CAF50",
-      "strokeThickness": 2
+      "style": {
+        "stroke": "#4CAF50",
+        "fill": "#4CAF5044",
+        "strokeThickness": 2
+      }
     }
   ],
   "minimap": {
