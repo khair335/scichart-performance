@@ -464,9 +464,10 @@ export function useMultiPaneChart({
           return { paneId, surface: paneSurface.surface, wasm: paneSurface.wasm };
         }
         
-        // Pane defined in layout but surface not created yet - return null (will be created later)
-        // NO FALLBACK: strict layout enforcement
-        return { paneId: null, surface: null, wasm: null };
+        // Pane defined in layout but surface not created yet
+        // Return paneId so caller knows this series SHOULD be plotted, just not ready yet
+        // NO FALLBACK: strict layout enforcement - never route to a different pane
+        return { paneId, surface: null, wasm: null };
       }
     }
     
@@ -2920,7 +2921,13 @@ export function useMultiPaneChart({
 
       // Get series entry from store (direct O(1) lookup)
       const seriesEntry = refs.dataSeriesStore.get(series_id);
-      if (!seriesEntry) continue;
+      if (!seriesEntry) {
+        // DEBUG: Log missing series (throttled - only first sample per batch)
+        if (i === 0) {
+          console.warn(`[MultiPaneChart] Series not in store, skipping: ${series_id}. Available: ${Array.from(refs.dataSeriesStore.keys()).slice(0, 5).join(', ')}...`);
+        }
+        continue;
+      }
       
       // Track pane for overlay update
       if (seriesEntry.paneId) {
