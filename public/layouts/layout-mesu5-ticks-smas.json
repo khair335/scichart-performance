@@ -1,6 +1,6 @@
 {
   "layout_mode": "multi_surface",
-  "grid": [1, 1],
+  "grid": [3, 1],
   "xAxis": {
     "defaultRange": {
       "mode": "lastMinutes",
@@ -20,7 +20,23 @@
       "col": 0,
       "height": 1,
       "width": 1,
-      "title": "MESU5 Ticks + 9 SMAs (Test: N=1 to 1M)"
+      "title": "MESU5 Ticks + 9 SMAs"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Bars (10s & 30s)"
+    },
+    {
+      "id": "pnl-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy PnL"
     }
   ],
   "series": [
@@ -113,11 +129,39 @@
         "stroke": "#FFCA28",
         "strokeThickness": 1
       }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastOhlcRenderableSeries",
+      "style": {
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:30000",
+      "pane": "ohlc-pane",
+      "type": "FastOhlcRenderableSeries",
+      "style": {
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pnl-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#4CAF50",
+        "strokeThickness": 2
+      }
     }
   ],
+  "strategy_markers": {
+    "exclude_panes": ["ohlc-pane", "pnl-pane"]
+  },
   "meta": {
     "version": "1.0",
-    "name": "MESU5 Ticks + 9 SMAs Performance Test",
-    "description": "Single pane with ticks and 9 SMA indicators for testing N=1 to 1,000,000 data points"
+    "name": "MESU5 Full Test (Ticks + 9 SMAs + OHLC + PnL)",
+    "description": "Complete layout with ticks, 9 SMA indicators, OHLC bars (10s & 30s), and strategy PnL for 10M+ point testing"
   }
 }
