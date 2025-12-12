@@ -3192,15 +3192,11 @@ export function useMultiPaneChart({
                       // Use range from plot layout
                       liveRange = calculatedRange;
                     } else {
-                      // CRITICAL: In live mode, always show the latest data with a small, focused window
-                      // Use a fixed 2-minute window to ensure latest data is always visible
-                      // This ensures users can always see the live data, regardless of history size
-                      const windowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-                      
-                      // Show latest data: range ends at latest data point (or slightly ahead for padding)
-                      // This ensures the latest series line is always in the current view
+                      // Show all data initially, then auto-scroll will take over with 60s window
+                      // This ensures proper scaling on transition to live mode
+                      const windowMs = 60 * 1000; // 60 second window to match auto-scroll
                       const latestDataTime = dataMax;
-                      const padding = 10 * 1000; // 10 seconds padding after latest data
+                      const padding = 5 * 1000; // 5 seconds padding
                       liveRange = new NumberRange(latestDataTime - windowMs, latestDataTime + padding);
                     }
                     
@@ -3256,9 +3252,9 @@ export function useMultiPaneChart({
                         }
                         
                         if (retryHasData && retryDataMax > 0) {
-                          // Use same small window for retry - always show latest data
-                          const retryWindowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-                          const retryPadding = 10 * 1000; // 10 seconds padding after latest data
+                          // Use 60s window to match auto-scroll
+                          const retryWindowMs = 60 * 1000; // 60 seconds to match auto-scroll
+                          const retryPadding = 5 * 1000; // 5 seconds padding
                           const retryRange = new NumberRange(retryDataMax - retryWindowMs, retryDataMax + retryPadding);
                           if (tickXAxis && ohlcXAxis) {
                             tickXAxis.visibleRange = retryRange;
