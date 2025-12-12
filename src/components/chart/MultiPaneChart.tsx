@@ -2993,17 +2993,41 @@ export function useMultiPaneChart({
       }
     }
     
-    // Second pass: appendRange for each series (much fewer WASM calls)
-    for (const [, batch] of xyBatches) {
-      try {
-        (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
-      } catch (e) {}
+    // CRITICAL: Suspend all surfaces before batch append to prevent render-loop blocking
+    // Without this, each appendRange triggers a redraw causing UI freezes during heavy data ingestion
+    const suspendedSurfaces = new Set<SciChartSurface>();
+    
+    // Suspend legacy surfaces
+    if (refs.tickSurface) {
+      try { refs.tickSurface.suspendUpdates(); suspendedSurfaces.add(refs.tickSurface); } catch (e) {}
+    }
+    if (refs.ohlcSurface) {
+      try { refs.ohlcSurface.suspendUpdates(); suspendedSurfaces.add(refs.ohlcSurface); } catch (e) {}
     }
     
-    for (const [, batch] of ohlcBatches) {
-      try {
-        (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
-      } catch (e) {}
+    // Suspend dynamic pane surfaces
+    for (const [, paneSurface] of refs.paneSurfaces) {
+      try { paneSurface.surface.suspendUpdates(); suspendedSurfaces.add(paneSurface.surface); } catch (e) {}
+    }
+    
+    try {
+      // Second pass: appendRange for each series (much fewer WASM calls)
+      for (const [, batch] of xyBatches) {
+        try {
+          (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
+        } catch (e) {}
+      }
+      
+      for (const [, batch] of ohlcBatches) {
+        try {
+          (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
+        } catch (e) {}
+      }
+    } finally {
+      // Resume all surfaces - this triggers a single batched redraw instead of N redraws
+      for (const surface of suspendedSurfaces) {
+        try { surface.resumeUpdates(); } catch (e) {}
+      }
     }
     
     // Third pass: Create strategy marker annotations
