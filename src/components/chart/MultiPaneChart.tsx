@@ -3239,679 +3239,142 @@ export function useMultiPaneChart({
   }, [processChunk]);
   
   // Track feed stage changes and handle transitions
+  // OPTIMIZED: Non-blocking live transition to prevent UI freezes
   useEffect(() => {
     const prevStage = feedStageRef.current;
     feedStageRef.current = feedStage;
-    
-    // When transitioning to live, immediately set X-axis range to show latest data
-    // This ensures data is visible right away, not coming from left
-    // CRITICAL: Force update even if range exists - we need to jump to latest data, not show all history
-    if (feedStage === 'live' && prevStage !== 'live') {
-      historyLoadedRef.current = true;
-      
-          // Get actual data range from DataSeries to show real data, not empty range
-          // CRITICAL: Use actual data range, not just latest timestamp
-          // The latestTime might be March but data might be in February
-          const refs = chartRefs.current;
-          
-          if (refs.tickSurface && refs.ohlcSurface) {
-            try {
-              const tickXAxis = refs.tickSurface.xAxes.get(0);
-              const ohlcXAxis = refs.ohlcSurface.xAxes.get(0);
-              
-              // CRITICAL: Wait for all data processing to complete before setting X-axis range
-              // This ensures we get the actual latest data point, not stale data
-              // Use a recursive function that checks if data processing is complete
-              const setXAxisRangeWhenReady = (attempt = 0, maxAttempts = 30) => {
-                // Check if there's still data being processed
-                const hasPendingData = sampleBufferRef.current.length > 0;
-                const hasScheduledUpdate = pendingUpdateRef.current !== null;
-                
-                // If there's pending data or a scheduled update, and we haven't exceeded max attempts, wait a bit more
-                if ((hasPendingData || hasScheduledUpdate) && attempt < maxAttempts) {
-                  setTimeout(() => setXAxisRangeWhenReady(attempt + 1, maxAttempts), 50);
-                  return;
-                }
-                
-                // Log if we had to wait
-                if (attempt > 0) {
-                
-                }
-                
-                // Now get the actual data range from DataSeries
-                // Use requestAnimationFrame to ensure rendering is complete
-                requestAnimationFrame(() => {
-                  setTimeout(() => {
-                try {
-                  // Get actual data range from tick DataSeries
-                  let dataMin = 0;
-                  let dataMax = 0;
-                  let hasData = false;
-                  let totalDataPoints = 0;
-                  
-                  // Try to get actual data range from any series in the unified store
-                  // Find the earliest and latest data points across all series
-                  for (const [seriesId, entry] of refs.dataSeriesStore) {
-                    const count = entry.dataSeries.count();
-                    totalDataPoints += count;
-                    if (count > 0) {
-                      try {
-                        const xRange = entry.dataSeries.getXRange();
-                        if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                          if (!hasData) {
-                            dataMin = xRange.min;
-                            dataMax = xRange.max;
-                            hasData = true;
-                          } else {
-                            // Expand range to include all series
-                            if (xRange.min < dataMin) dataMin = xRange.min;
-                            if (xRange.max > dataMax) dataMax = xRange.max;
-                          }
-                        }
-                      } catch (e) {
-                        console.warn(`[MultiPaneChart] Error getting X range from ${seriesId}:`, e);
-                      }
-                    }
-                  }
-                  
-                  // Determine the range to show based on actual data
-                  // Check if plot layout specifies a default X-axis range
-                  let liveRange: NumberRange;
-                  
-                  if (hasData && dataMax > 0) {
-                    // Check for default range from plot layout
-                    const defaultRange = plotLayout?.xAxisDefaultRange;
-                    const calculatedRange = defaultRange 
-                      ? calculateDefaultXAxisRange(defaultRange, dataMax, dataMin, dataMax)
-                      : null;
-
-                    if (calculatedRange) {
-                      // Use range from plot layout
-                      liveRange = calculatedRange;
-                    } else {
-                      // CRITICAL: In live mode, always show the latest data with a small, focused window
-                      // Use a fixed 2-minute window to ensure latest data is always visible
-                      // This ensures users can always see the live data, regardless of history size
-                      const windowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-                      
-                      // Show latest data: range ends at latest data point (or slightly ahead for padding)
-                      // This ensures the latest series line is always in the current view
-                      const latestDataTime = dataMax;
-                      const padding = 10 * 1000; // 10 seconds padding after latest data
-                      liveRange = new NumberRange(latestDataTime - windowMs, latestDataTime + padding);
-                    }
-                    
-                
-                    
-                    // Verify: if dataMax is much older than lastDataTimeRef, there's a mismatch
-                    const timeDiff = lastDataTimeRef.current - dataMax;
-                    if (timeDiff > 60 * 60 * 1000) { // More than 1 hour difference
-                      console.warn(`[MultiPaneChart] WARNING: Data timestamp mismatch! DataSeries max (${new Date(dataMax).toISOString()}) is ${Math.round(timeDiff / 1000 / 60)} minutes behind lastDataTimeRef (${new Date(lastDataTimeRef.current).toISOString()})`);
-                    }
-                    
-                    // CRITICAL: Set X-axis range for dynamic panes if using layout
-                    if (plotLayout && refs.paneSurfaces.size > 0) {
-                      for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                        try {
-                          if (paneSurface.xAxis) {
-                            paneSurface.xAxis.visibleRange = liveRange;
-                            paneSurface.surface.invalidateElement();
-                         
-                          }
-                        } catch (e) {
-                          console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId}:`, e);
-                        }
-                      }
-                    }
-                  } else {
-                    // CRITICAL: If no data in DataSeries, wait for data to arrive
-                    // DO NOT use lastDataTimeRef as it might be a future timestamp that doesn't match actual data
-                    // Instead, wait a bit longer and retry, or skip setting range until data is available
-                    console.warn('[MultiPaneChart] No data in DataSeries yet - waiting for data before setting X-axis range. Will retry...', {
-                      totalDataPoints,
-                      lastDataTimeRef: new Date(lastDataTimeRef.current).toISOString(),
-                    });
-                    
-                    // Retry after a longer delay to allow data to be processed
-                    setTimeout(() => {
-                      try {
-                        let retryDataMax = 0;
-                        let retryHasData = false;
-                        
-                        for (const [seriesId, entry] of refs.dataSeriesStore) {
-                          if (entry.dataSeries.count() > 0) {
-                            try {
-                              const xRange = entry.dataSeries.getXRange();
-                              if (xRange && isFinite(xRange.max) && xRange.max > retryDataMax) {
-                                retryDataMax = xRange.max;
-                                retryHasData = true;
-                              }
-                            } catch (e) {
-                              // Ignore
-                            }
-                          }
-                        }
-                        
-                        if (retryHasData && retryDataMax > 0) {
-                          // Use same small window for retry - always show latest data
-                          const retryWindowMs = 2 * 60 * 1000; // 2 minutes - small window to focus on latest data
-                          const retryPadding = 10 * 1000; // 10 seconds padding after latest data
-                          const retryRange = new NumberRange(retryDataMax - retryWindowMs, retryDataMax + retryPadding);
-                          if (tickXAxis && ohlcXAxis) {
-                            tickXAxis.visibleRange = retryRange;
-                            ohlcXAxis.visibleRange = retryRange;
-                            refs.tickSurface.invalidateElement();
-                            refs.ohlcSurface.invalidateElement();
-                            
-                          }
-                          
-                          // CRITICAL: Also set X-axis range for dynamic panes on retry
-                          if (plotLayout && refs.paneSurfaces.size > 0) {
-                            for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                              try {
-                                if (paneSurface.xAxis) {
-                                  paneSurface.xAxis.visibleRange = retryRange;
-                                  paneSurface.surface.invalidateElement();
-                                }
-                              } catch (e) {
-                                console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId} on retry:`, e);
-                              }
-                            }
-                          }
-                          
-                          // Force Y-axis scaling after X-axis is set
-                          setTimeout(() => {
-                            // Scale Y-axis for legacy surfaces
-                            try {
-                              if (refs.tickSurface) refs.tickSurface.zoomExtentsY();
-                              if (refs.ohlcSurface) refs.ohlcSurface.zoomExtentsY();
-                            } catch (e) {
-                              // Ignore
-                            }
-                            
-                            // Scale Y-axis for dynamic panes
-                            if (plotLayout && refs.paneSurfaces.size > 0) {
-                              for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                                try {
-                                  const xAxis = paneSurface.xAxis;
-                                  const yAxis = paneSurface.yAxis;
-                                  
-                                  if (!xAxis || !yAxis || !xAxis.visibleRange) continue;
-                                  
-                                  // Find all series assigned to this pane and scale Y-axis
-                                  let yMin = Infinity;
-                                  let yMax = -Infinity;
-                                  let hasYData = false;
-                                  const visibleXMin = xAxis.visibleRange.min;
-                                  const visibleXMax = xAxis.visibleRange.max;
-                                  
-                                  for (const [seriesId, entry] of refs.dataSeriesStore) {
-                                    if (entry.paneId === paneId && entry.dataSeries.count() > 0) {
-                                      try {
-                                        // Calculate Y-range manually using helper function
-                                        const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
-                                        if (yRange) {
-                                          yMin = Math.min(yMin, yRange.min);
-                                          yMax = Math.max(yMax, yRange.max);
-                                          hasYData = true;
-                                        }
-                                      } catch (err) {
-                                        // Try full range as fallback
-                                        try {
-                                          const yRange = calculateYRange(entry.dataSeries);
-                                          if (yRange) {
-                                            yMin = Math.min(yMin, yRange.min);
-                                            yMax = Math.max(yMax, yRange.max);
-                                            hasYData = true;
-                                          }
-                                        } catch (err2) {
-                                          // Ignore
-                                        }
-                                      }
-                                    }
-                                  }
-                                  
-                                  if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
-                                    const padding = (yMax - yMin) * 0.1;
-                                    yAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
-                                    paneSurface.surface.invalidateElement();
-                                  }
-                                } catch (e) {
-                                  console.warn(`[MultiPaneChart] Error scaling Y-axis for pane ${paneId} on retry:`, e);
-                                }
-                              }
-                            }
-                          }, 100);
-                        } else {
-                          console.warn('[MultiPaneChart] Still no data after retry - X-axis range not set');
-                        }
-                      } catch (e) {
-                        console.warn('[MultiPaneChart] Error in retry X-axis range setting:', e);
-                      }
-                    }, 500); // Wait 500ms for data to be processed
-                    
-                    return; // Skip setting range for now
-                  }
-                  
-                  // FORCE set range to show actual data - always update when entering live mode
-                  if (tickXAxis && liveRange) {
-                    tickXAxis.visibleRange = liveRange;
-                    refs.tickSurface.invalidateElement();
-                  }
-                  if (ohlcXAxis && liveRange) {
-                    ohlcXAxis.visibleRange = liveRange;
-                    refs.ohlcSurface.invalidateElement();
-                  }
-                  
-                  // CRITICAL: Also set X-axis range for dynamic panes
-                  if (plotLayout && refs.paneSurfaces.size > 0 && liveRange) {
-                    for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                      try {
-                        if (paneSurface.xAxis) {
-                          paneSurface.xAxis.visibleRange = liveRange;
-                          paneSurface.surface.invalidateElement();
-                        }
-                      } catch (e) {
-                        console.warn(`[MultiPaneChart] Error setting X-axis range for pane ${paneId}:`, e);
-                      }
-                    }
-                  }
-                  
-                  // CRITICAL: Force Y-axis scaling for all panes after X-axis is set
-                  // This ensures series are visible immediately
-                  setTimeout(() => {
-                    // Scale Y-axis for legacy surfaces
-                    try {
-                      if (refs.tickSurface) refs.tickSurface.zoomExtentsY();
-                      if (refs.ohlcSurface) refs.ohlcSurface.zoomExtentsY();
-                    } catch (e) {
-                      // Ignore
-                    }
-                    
-                    // Scale Y-axis for dynamic panes
-                    if (plotLayout && refs.paneSurfaces.size > 0) {
-                      for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                        try {
-                          const xAxis = paneSurface.xAxis;
-                          const yAxis = paneSurface.yAxis;
-                          
-                          if (!xAxis || !yAxis || !xAxis.visibleRange) continue;
-                          
-                          // Find all series assigned to this pane and scale Y-axis
-                          let yMin = Infinity;
-                          let yMax = -Infinity;
-                          let hasYData = false;
-                          const visibleXMin = xAxis.visibleRange.min;
-                          const visibleXMax = xAxis.visibleRange.max;
-                          
-                          for (const [seriesId, entry] of refs.dataSeriesStore) {
-                            if (entry.paneId === paneId && entry.dataSeries.count() > 0) {
-                              try {
-                                // Calculate Y-range manually using helper function
-                                const yRange = calculateYRange(entry.dataSeries, visibleXMin, visibleXMax);
-                                if (yRange) {
-                                  yMin = Math.min(yMin, yRange.min);
-                                  yMax = Math.max(yMax, yRange.max);
-                                  hasYData = true;
-                                }
-                              } catch (err) {
-                                // Try full range as fallback
-                                try {
-                                  const yRange = calculateYRange(entry.dataSeries);
-                                  if (yRange) {
-                                    yMin = Math.min(yMin, yRange.min);
-                                    yMax = Math.max(yMax, yRange.max);
-                                    hasYData = true;
-                                  }
-                                } catch (err2) {
-                                  // Ignore
-                                }
-                              }
-                            }
-                          }
-                          
-                          if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
-                            const padding = (yMax - yMin) * 0.1;
-                            yAxis.visibleRange = new NumberRange(yMin - padding, yMax + padding);
-                            paneSurface.surface.invalidateElement();
-                       
-                          }
-                        } catch (e) {
-                          console.warn(`[MultiPaneChart] Error scaling Y-axis for pane ${paneId} on live transition:`, e);
-                        }
-                      }
-                    }
-                  }, 100); // Small delay to ensure data is processed
-                } catch (e) {
-                  console.warn('[MultiPaneChart] Error in delayed X-axis range setting:', e);
-                }
-                  }, 100); // Small delay after requestAnimationFrame to ensure rendering is complete
-                });
-              };
-              
-              // Start the recursive wait-and-set process
-              // This ensures we wait for all data processing to complete before setting X-axis range
-              setXAxisRangeWhenReady();
-          
-          // CRITICAL: Force Y-axis auto-scaling when transitioning to live
-          // This ensures the chart is properly scaled to show data, not zoomed in too much
-          // When there's a lot of history data, we need multiple attempts to ensure Y-axis scales properly
-          const forceYAxisScaling = (attempt = 1, maxAttempts = 5) => {
-            try {
-              // Force Y-axis zoom to extents for both charts to show all visible data
-              // This is essential because Y-axis uses EAutoRange.Once and won't auto-scale
-              let tickScaled = false;
-              let ohlcScaled = false;
-              
-              if (refs.tickSurface) {
-                const tickXAxis = refs.tickSurface.xAxes.get(0);
-                const tickYAxis = refs.tickSurface.yAxes.get(0);
-                if (tickXAxis && tickXAxis.visibleRange && tickYAxis) {
-                  const xRange = tickXAxis.visibleRange.max - tickXAxis.visibleRange.min;
-                  // Only zoom Y-axis if X-axis has reasonable range (at least 1 minute)
-                  // This prevents errors if X-axis is not set yet
-                  if (xRange >= 60 * 1000) {
-                    // Check if we have visible renderable series with data
-                    // For large history, data might exist but not be fully processed yet
-                    // So we check if data exists first, then verify it's in range (less strict)
-                    const visibleEntries = Array.from(refs.dataSeriesStore.values()).filter(entry => {
-                      if (entry.chartTarget !== 'tick') return false;
-                      if (!entry.renderableSeries) return false;
-                      // Check visibility - but if no series are visible, still try to scale (data might be there)
-                      // This handles the case where data exists but visibility hasn't been set yet
-                      if (entry.dataSeries.count() === 0) return false;
-                      
-                      // If series is explicitly hidden, skip it
-                      if (!entry.renderableSeries || entry.renderableSeries.isVisible === false) return false;
-                      
-                      // For large history, data might exist but range check might fail due to timing
-                      // So we're more lenient - if data exists and series is not explicitly hidden, include it
-                      try {
-                        const dataXRange = entry.dataSeries.getXRange();
-                        if (dataXRange && isFinite(dataXRange.min) && isFinite(dataXRange.max)) {
-                          // Check if data overlaps with visible X-axis range OR if data exists (less strict)
-                          // This handles cases where data is still being processed
-                          const overlaps = dataXRange.min <= tickXAxis.visibleRange.max && 
-                                          dataXRange.max >= tickXAxis.visibleRange.min;
-                          // If data exists and is close to the range, include it (within 1 hour)
-                          const isClose = Math.abs(dataXRange.max - tickXAxis.visibleRange.max) < 60 * 60 * 1000;
-                          return overlaps || isClose;
-                        }
-                      } catch (e) {
-                        // If getXRange fails, but data exists, still try to use it
-                        // This handles edge cases where data is being processed
-                        return true; // Data exists, try to use it
-                      }
-                      return false;
-                    });
-                    
-                    // If no visible entries found, try to find any entries with data (fallback)
-                    // This handles the case where data exists but visibility check is too strict
-                    const entriesWithData = visibleEntries.length === 0 
-                      ? Array.from(refs.dataSeriesStore.values()).filter(entry => {
-                          if (entry.chartTarget !== 'tick') return false;
-                          if (entry.dataSeries.count() === 0) return false;
-                          if (entry.renderableSeries?.isVisible === false) return false; // Still skip explicitly hidden
-                          return true; // Data exists, try to use it
-                        })
-                      : visibleEntries;
-                    
-                    if (entriesWithData.length > 0) {
-                      try {
-                        // First, try manual calculation to ensure we have valid Y-range
-                        // zoomExtentsY() might not work if data isn't fully rendered yet
-                        let yMin = Infinity;
-                        let yMax = -Infinity;
-                        let hasYData = false;
-                        
-                        for (const entry of entriesWithData) {
-                          try {
-                            // Calculate Y-range manually using helper function
-                            const yRange = calculateYRange(entry.dataSeries);
-                            if (yRange) {
-                              yMin = Math.min(yMin, yRange.min);
-                              yMax = Math.max(yMax, yRange.max);
-                              hasYData = true;
-                            }
-                          } catch (e) {
-                            // Ignore errors for individual series
-                          }
-                        }
-                        
-                        if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
-                          // Add 10% padding
-                          const padding = (yMax - yMin) * 0.1;
-                          const newYRange = new NumberRange(yMin - padding, yMax + padding);
-                          
-                          // Set Y-axis range manually (more reliable than zoomExtentsY for large history)
-                          tickYAxis.visibleRange = newYRange;
-                          refs.tickSurface.invalidateElement();
-                          tickScaled = true;
-                         
-                        } else {
-                          // Fallback: try zoomExtentsY if manual calculation didn't work
-                          try {
-                            refs.tickSurface.zoomExtentsY();
-                            refs.tickSurface.invalidateElement();
-                            tickScaled = true;
-                           
-                          } catch (zoomError) {
-                            console.warn('[MultiPaneChart] Both manual calculation and zoomExtentsY failed for tick chart:', zoomError);
-                          }
-                        }
-                      } catch (error) {
-                        console.warn('[MultiPaneChart] Error in Y-axis scaling for tick chart:', error);
-                      }
-                    } else {
-                      console.warn(`[MultiPaneChart] No tick data found (attempt ${attempt})`);
-                    }
-                  }
-                }
-              }
-              
-              if (refs.ohlcSurface) {
-                const ohlcXAxis = refs.ohlcSurface.xAxes.get(0);
-                const ohlcYAxis = refs.ohlcSurface.yAxes.get(0);
-                if (ohlcXAxis && ohlcXAxis.visibleRange && ohlcYAxis) {
-                  const xRange = ohlcXAxis.visibleRange.max - ohlcXAxis.visibleRange.min;
-                    if (xRange >= 60 * 1000) {
-                    // Check if we have visible renderable series with data
-                    // For large history, data might exist but not be fully processed yet
-                    // So we check if data exists first, then verify it's in range (less strict)
-                    const visibleEntries = Array.from(refs.dataSeriesStore.values()).filter(entry => {
-                      if (entry.chartTarget !== 'ohlc') return false;
-                      if (!entry.renderableSeries) return false;
-                      // Check visibility - but if no series are visible, still try to scale (data might be there)
-                      // This handles the case where data exists but visibility hasn't been set yet
-                      if (entry.dataSeries.count() === 0) return false;
-                      
-                      // If series is explicitly hidden, skip it
-                      if (!entry.renderableSeries || entry.renderableSeries.isVisible === false) return false;
-                      
-                      // For large history, data might exist but range check might fail due to timing
-                      // So we're more lenient - if data exists and series is not explicitly hidden, include it
-                      try {
-                        const dataXRange = entry.dataSeries.getXRange();
-                        if (dataXRange && isFinite(dataXRange.min) && isFinite(dataXRange.max)) {
-                          // Check if data overlaps with visible X-axis range OR if data exists (less strict)
-                          // This handles cases where data is still being processed
-                          const overlaps = dataXRange.min <= ohlcXAxis.visibleRange.max && 
-                                          dataXRange.max >= ohlcXAxis.visibleRange.min;
-                          // If data exists and is close to the range, include it (within 1 hour)
-                          const isClose = Math.abs(dataXRange.max - ohlcXAxis.visibleRange.max) < 60 * 60 * 1000;
-                          return overlaps || isClose;
-                        }
-                      } catch (e) {
-                        // If getXRange fails, but data exists, still try to use it
-                        // This handles edge cases where data is being processed
-                        return true; // Data exists, try to use it
-                      }
-                      return false;
-                    });
-                    
-                    // If no visible entries found, try to find any entries with data (fallback)
-                    // This handles the case where data exists but visibility check is too strict
-                    const entriesWithData = visibleEntries.length === 0 
-                      ? Array.from(refs.dataSeriesStore.values()).filter(entry => {
-                          if (entry.chartTarget !== 'ohlc') return false;
-                          if (entry.dataSeries.count() === 0) return false;
-                          if (entry.renderableSeries?.isVisible === false) return false; // Still skip explicitly hidden
-                          return true; // Data exists, try to use it
-                        })
-                      : visibleEntries;
-                    
-                    if (entriesWithData.length > 0) {
-                      try {
-                        // First, try manual calculation to ensure we have valid Y-range
-                        // zoomExtentsY() might not work if data isn't fully rendered yet
-                        let yMin = Infinity;
-                        let yMax = -Infinity;
-                        let hasYData = false;
-                        
-                        for (const entry of entriesWithData) {
-                          try {
-                            // Calculate Y-range manually using helper function
-                            const yRange = calculateYRange(entry.dataSeries);
-                            if (yRange) {
-                              yMin = Math.min(yMin, yRange.min);
-                              yMax = Math.max(yMax, yRange.max);
-                              hasYData = true;
-                            }
-                          } catch (e) {
-                            // Ignore errors for individual series
-                          }
-                        }
-                        
-                        if (hasYData && isFinite(yMin) && isFinite(yMax) && yMax > yMin) {
-                          // Add 10% padding
-                          const padding = (yMax - yMin) * 0.1;
-                          const newYRange = new NumberRange(yMin - padding, yMax + padding);
-                          
-                          // Set Y-axis range manually (more reliable than zoomExtentsY for large history)
-                          ohlcYAxis.visibleRange = newYRange;
-                          refs.ohlcSurface.invalidateElement();
-                          ohlcScaled = true;
-                         
-                        } else {
-                          // Fallback: try zoomExtentsY if manual calculation didn't work
-                          try {
-                            refs.ohlcSurface.zoomExtentsY();
-                            refs.ohlcSurface.invalidateElement();
-                            ohlcScaled = true;
-                         
-                          } catch (zoomError) {
-                            console.warn('[MultiPaneChart] Both manual calculation and zoomExtentsY failed for OHLC chart:', zoomError);
-                          }
-                        }
-                      } catch (error) {
-                        console.warn('[MultiPaneChart] Error in Y-axis scaling for OHLC chart:', error);
-                      }
-                    } else {
-                      console.warn(`[MultiPaneChart] No OHLC data found (attempt ${attempt})`);
-                    }
-                  }
-                }
-              }
-              
-              // If scaling didn't work and we haven't exceeded max attempts, try again
-              // This is especially important when there's a lot of history data that's still processing
-              if (attempt < maxAttempts && (!tickScaled || !ohlcScaled)) {
-                // Use increasing delays: 100ms, 200ms, 400ms, 800ms, 1600ms
-                const delay = 100 * Math.pow(2, attempt - 1);
-                setTimeout(() => forceYAxisScaling(attempt + 1, maxAttempts), delay);
-              } else {
-                // Reset Y-axis update timer to allow immediate updates after live transition
-                lastYAxisUpdateRef.current = 0;
-                if (tickScaled || ohlcScaled) {
-                  
-                } else {
-                  console.warn('[MultiPaneChart] Y-axis auto-scaling failed after all attempts - will retry on next data update');
-                }
-              }
-            } catch (e) {
-              console.warn('[MultiPaneChart] Error auto-scaling Y-axis on live transition:', e);
-              // Retry on error if we haven't exceeded max attempts
-              if (attempt < maxAttempts) {
-                const delay = 100 * Math.pow(2, attempt - 1);
-                setTimeout(() => forceYAxisScaling(attempt + 1, maxAttempts), delay);
-              }
-            }
-          };
-          
-          // CRITICAL: Force Y-axis scaling immediately when transitioning to live
-          // When there's history data, the data processing loop might not run again,
-          // so we need to scale immediately, not just set a flag
-          // Also set flag as backup in case new data arrives
-          triggerYAxisScalingOnNextBatchRef.current = true;
-          
-          // Force immediate Y-axis scaling (works even when history is already loaded)
-          // Use requestAnimationFrame to ensure the chart is ready
-          requestAnimationFrame(() => {;
-            // Immediate scaling attempt - don't wait for data processing loop
-            const scaleYAxisImmediately = () => {
-              try {
-                const refs = chartRefs.current;
-                
-                // Scale tick chart Y-axis immediately
-                if (refs.tickSurface) {
-                  const tickXAxis = refs.tickSurface.xAxes.get(0);
-                  const tickYAxis = refs.tickSurface.yAxes.get(0);
-                  if (tickXAxis && tickXAxis.visibleRange && tickYAxis) {
-                    const xRange = tickXAxis.visibleRange.max - tickXAxis.visibleRange.min;
-                    if (xRange >= 60 * 1000) {
-                      try {
-                        refs.tickSurface.zoomExtentsY();
-                        refs.tickSurface.invalidateElement();
-                        
-                      } catch (e) {
-                        console.warn('[MultiPaneChart] Immediate Y-axis scaling failed for tick chart:', e);
-                      }
-                    }
-                  }
-                }
-                
-                // Scale OHLC chart Y-axis immediately
-                if (refs.ohlcSurface) {
-                  const ohlcXAxis = refs.ohlcSurface.xAxes.get(0);
-                  const ohlcYAxis = refs.ohlcSurface.yAxes.get(0);
-                  if (ohlcXAxis && ohlcXAxis.visibleRange && ohlcYAxis) {
-                    const xRange = ohlcXAxis.visibleRange.max - ohlcXAxis.visibleRange.min;
-                    if (xRange >= 60 * 1000) {
-                      try {
-                        refs.ohlcSurface.zoomExtentsY();
-                        refs.ohlcSurface.invalidateElement();
-                      
-                      } catch (e) {
-                        console.warn('[MultiPaneChart] Immediate Y-axis scaling failed for OHLC chart:', e);
-                      }
-                    }
-                  }
-                }
-              } catch (error) {
-                console.warn('[MultiPaneChart] Error in immediate Y-axis scaling:', error);
-              }
-            };
-            
-            // Try immediately, then retry with delays if needed
-            scaleYAxisImmediately();
-            setTimeout(() => scaleYAxisImmediately(), 100);
-            setTimeout(() => scaleYAxisImmediately(), 300);
-            
-            // Also run the retry mechanism as backup
-            setTimeout(() => forceYAxisScaling(1, 5), 500);
-          });
-        } catch (e) {
-          console.warn('[MultiPaneChart] Error setting X-axis range on live transition:', e);
-        }
-      }
-    }
     
     // Reset history loaded flag when starting new connection
     if (feedStage === 'history' && prevStage === 'idle') {
       historyLoadedRef.current = false;
       initialDataTimeRef.current = null;
+      return;
     }
-  }, [feedStage]);
+    
+    // When transitioning to live, set X-axis range to show latest data
+    // CRITICAL: Use requestIdleCallback/setTimeout to avoid blocking UI
+    if (feedStage === 'live' && prevStage !== 'live') {
+      historyLoadedRef.current = true;
+      
+      // Use setTimeout(0) to defer heavy work and prevent UI freeze
+      setTimeout(() => {
+        const refs = chartRefs.current;
+        
+        // Collect all surfaces to update
+        const surfaces: SciChartSurface[] = [];
+        if (refs.tickSurface) surfaces.push(refs.tickSurface);
+        if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
+        for (const [, paneSurface] of refs.paneSurfaces) {
+          if (paneSurface.surface) surfaces.push(paneSurface.surface);
+        }
+        
+        if (surfaces.length === 0) return;
+        
+        // CRITICAL: Suspend ALL surfaces first to prevent multiple redraws
+        for (const surface of surfaces) {
+          try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
+        }
+        
+        try {
+          // Find data range across all series (quick scan - just get min/max)
+          let dataMin = 0;
+          let dataMax = 0;
+          let hasData = false;
+          
+          for (const [, entry] of refs.dataSeriesStore) {
+            const count = entry.dataSeries.count();
+            if (count > 0) {
+              try {
+                const xRange = entry.dataSeries.getXRange();
+                if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                  if (!hasData) {
+                    dataMin = xRange.min;
+                    dataMax = xRange.max;
+                    hasData = true;
+                  } else {
+                    if (xRange.min < dataMin) dataMin = xRange.min;
+                    if (xRange.max > dataMax) dataMax = xRange.max;
+                  }
+                }
+              } catch (e) { /* ignore */ }
+            }
+          }
+          
+          if (!hasData || dataMax <= 0) {
+            // No data yet - schedule retry
+            setTimeout(() => {
+              triggerYAxisScalingOnNextBatchRef.current = true;
+            }, 200);
+            return;
+          }
+          
+          // Calculate X-axis range
+          let liveRange: NumberRange;
+          const defaultRange = plotLayout?.xAxisDefaultRange;
+          const calculatedRange = defaultRange 
+            ? calculateDefaultXAxisRange(defaultRange, dataMax, dataMin, dataMax)
+            : null;
+          
+          if (calculatedRange) {
+            liveRange = calculatedRange;
+          } else {
+            // Default: 2 minute window focused on latest data
+            const windowMs = 2 * 60 * 1000;
+            const padding = 10 * 1000;
+            liveRange = new NumberRange(dataMax - windowMs, dataMax + padding);
+          }
+          
+          // Set X-axis range for all surfaces
+          for (const surface of surfaces) {
+            try {
+              const xAxis = surface.xAxes.get(0);
+              if (xAxis) {
+                xAxis.visibleRange = liveRange;
+              }
+            } catch (e) { /* ignore */ }
+          }
+          
+          // Schedule Y-axis scaling after X-axis is set (deferred to prevent blocking)
+          triggerYAxisScalingOnNextBatchRef.current = true;
+          lastYAxisUpdateRef.current = 0;
+          
+        } finally {
+          // Resume ALL surfaces - triggers single batched redraw
+          for (const surface of surfaces) {
+            try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
+          }
+        }
+        
+        // Schedule Y-axis zoom extents after a short delay (non-blocking)
+        setTimeout(() => {
+          const refs = chartRefs.current;
+          
+          // Suspend again for Y-axis updates
+          const surfacesToUpdate: SciChartSurface[] = [];
+          if (refs.tickSurface) surfacesToUpdate.push(refs.tickSurface);
+          if (refs.ohlcSurface) surfacesToUpdate.push(refs.ohlcSurface);
+          for (const [, paneSurface] of refs.paneSurfaces) {
+            if (paneSurface.surface) surfacesToUpdate.push(paneSurface.surface);
+          }
+          
+          for (const surface of surfacesToUpdate) {
+            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
+          }
+          
+          try {
+            for (const surface of surfacesToUpdate) {
+              try { surface.zoomExtentsY(); } catch (e) { /* ignore */ }
+            }
+          } finally {
+            for (const surface of surfacesToUpdate) {
+              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
+            }
+          }
+        }, 100);
+        
+      }, 0); // setTimeout(0) defers to next tick, preventing blocking
+    }
+  }, [feedStage, plotLayout]);
   
   // Handle tab visibility changes - keep data collection running, restore X-axis range appropriately
   useEffect(() => {
