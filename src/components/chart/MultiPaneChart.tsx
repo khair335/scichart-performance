@@ -1639,8 +1639,6 @@ export function useMultiPaneChart({
       
       // Only preallocate series that should be plotted on charts
       if (seriesInfo.chartTarget === 'none') return;
-      
-      try {
         // Get pane and surface using layout manager or fallback
         const { paneId, surface, wasm } = getPaneForSeries(seriesId);
         
@@ -2561,6 +2559,9 @@ export function useMultiPaneChart({
               }
               
               const seriesInfo = parseSeriesType(seriesId);
+              
+              // Strategy markers & signals are rendered as annotations, not chart series
+              if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') return;
               if (seriesInfo.chartTarget === 'none') return;
               
               try {
@@ -2634,8 +2635,6 @@ export function useMultiPaneChart({
                       stroke = '#F48420';
                     } else if (seriesInfo.type === 'strategy-pnl') {
                       stroke = '#4CAF50';
-                    } else if (seriesInfo.type === 'strategy-marker' || seriesInfo.type === 'strategy-signal') {
-                      stroke = '#FF9800';
                     }
                   }
                   
