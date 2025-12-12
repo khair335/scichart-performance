@@ -218,10 +218,17 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // Handle samples from any source - defined early so it can be used in useWebSocketFeed
   const handleSamplesRef = useRef<(samples: Sample[]) => void>(() => {});
   
+  // Session complete handler - auto-pause when server finishes
+  const handleSessionComplete = useCallback(() => {
+    console.log('[TradingChart] Session complete - auto-pausing for manual exploration');
+    setIsLive(false);
+  }, []);
+  
   // WebSocket feed - must be called before useMultiPaneChart to get feedState
   const { state: feedState, registry: wsRegistry } = useWebSocketFeed({
     url: wsUrl,
     onSamples: (samples) => handleSamplesRef.current(samples),
+    onSessionComplete: handleSessionComplete,
     autoConnect: !demoMode,
   });
 
