@@ -62,7 +62,7 @@
       { "label": "Last 4 hours", "minutes": 240 }
     ]
   },
-  "defaultLayoutPath": "/layouts/ahmad.json",
+  "defaultLayoutPath": "/layouts/layout-hlines-vlines-test.json",
   "defaultLayout": {
     "layout_mode": "multi_surface",
     "grid": [2, 1],
