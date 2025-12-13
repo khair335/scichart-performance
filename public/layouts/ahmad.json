@@ -1,7 +1,7 @@
 {
   "layout_mode": "multi_surface",
   "grid": [2, 1],
-  "min_height": 2000,
+  "min_height": 1000,
   "xAxis": {
     "defaultRange": {
       "mode": "session"
