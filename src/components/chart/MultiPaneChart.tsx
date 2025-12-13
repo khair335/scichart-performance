@@ -2140,6 +2140,18 @@ export function useMultiPaneChart({
         paneManagerRef.current = null;
         cleanupInProgressRef.current = true;
 
+        // CRITICAL: Detach dataSeries from all renderableSeries BEFORE cleanup
+        // This prevents "dataSeries has been deleted" errors during cleanup
+        for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+          if (entry.renderableSeries) {
+            try {
+              (entry.renderableSeries as any).dataSeries = null;
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
         oldManager.cleanup().then(() => {
@@ -2166,7 +2178,7 @@ export function useMultiPaneChart({
             setParentSurfaceReady(false); // Trigger effect re-run
           }, 600);
         }).catch((e) => {
-          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+          // Silently handle cleanup errors (expected during layout transitions)
 
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
@@ -2204,6 +2216,18 @@ export function useMultiPaneChart({
         paneManagerRef.current = null;
         cleanupInProgressRef.current = true;
 
+        // CRITICAL: Detach dataSeries from all renderableSeries BEFORE cleanup
+        // This prevents "dataSeries has been deleted" errors during cleanup
+        for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+          if (entry.renderableSeries) {
+            try {
+              (entry.renderableSeries as any).dataSeries = null;
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
         oldManager.cleanup().then(() => {
@@ -2234,7 +2258,7 @@ export function useMultiPaneChart({
             setParentSurfaceReady(false); // Trigger effect re-run
           }, 600);
         }).catch((e) => {
-          console.warn('[MultiPaneChart] Error cleaning up pane manager:', e);
+          // Silently handle cleanup errors (expected during layout transitions)
 
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
