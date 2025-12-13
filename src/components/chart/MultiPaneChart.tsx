@@ -2372,7 +2372,10 @@ export function useMultiPaneChart({
         }
 
         console.log('[MultiPaneChart] Creating panes for layout:', plotLayout.layout.panes.map(p => p.id));
-        const panePromises: Promise<void>[] = [];
+        
+        // CRITICAL: Create panes SEQUENTIALLY to prevent race conditions
+        // Creating multiple subsurfaces in parallel can cause "measureText" errors
+        // because the rendering context isn't fully initialized before SciChart starts drawing
         
         for (const paneConfig of plotLayout.layout.panes) {
           if (creatingPanesRef.current.has(paneConfig.id)) {
@@ -2387,155 +2390,139 @@ export function useMultiPaneChart({
 
           creatingPanesRef.current.add(paneConfig.id);
 
-          const createPane = async () => {
-            try {
-              const containerId = `pane-${paneConfig.id}-chart`;
-              // Note: With SubCharts API, individual containers are not needed
-              // The parent surface handles all rendering
-              // We still pass the containerId for reference but don't require the DOM element
+          // SEQUENTIAL: Create each pane one at a time to prevent race conditions
+          try {
+            const containerId = `pane-${paneConfig.id}-chart`;
+            // Note: With SubCharts API, individual containers are not needed
+            // The parent surface handles all rendering
+            // We still pass the containerId for reference but don't require the DOM element
 
-              // Check if pane already exists
-              const existingPane = refs.paneSurfaces.get(paneConfig.id);
-              if (existingPane) {
-                creatingPanesRef.current.delete(paneConfig.id);
-                return; // Already exists
-              }
-
-              console.log('[MultiPaneChart] Creating pane:', paneConfig.id);
-              const paneSurface = await paneManager.createPane(
-                paneConfig.id,
-                containerId,
-                paneConfig,
-                config.performance.maxAutoTicks,
-                config.chart.separateXAxes
-              );
-              console.log('[MultiPaneChart] Pane created successfully:', paneConfig.id);
-
-              if (!isMounted) {
-                paneManager.destroyPane(paneConfig.id);
-                return;
-              }
-
-              // Store in refs
-              refs.paneSurfaces.set(paneConfig.id, paneSurface);
-              
-              // FPS tracking is now handled by requestAnimationFrame at the top level
-              // No need to subscribe to surface rendered events
-              
-              // Add double-click handler for fit-all + pause
-              // Requirement 22.1: Double-click = fit-all + pause
-              const surfaceElement = paneSurface.surface.domCanvas2D;
-              if (surfaceElement) {
-                let doubleClickTimer: NodeJS.Timeout | null = null;
-                surfaceElement.addEventListener('dblclick', () => {
-                  // Zoom extents is already handled by ZoomExtentsModifier
-                  // Just pause auto-scroll
-                  isLiveRef.current = false;
-                  userInteractedRef.current = true;
-                  
-                  // Clear any existing timer
-                  if (doubleClickTimer) {
-                    clearTimeout(doubleClickTimer);
-                  }
-                  
-                  // Resume auto-scroll after 5 seconds (optional - can be removed if not desired)
-                  // doubleClickTimer = setTimeout(() => {
-                  //   isLiveRef.current = true;
-                  //   userInteractedRef.current = false;
-                  // }, 5000);
-                });
-              }
-              
-              // Store shared WASM from first pane and create vertical group
-              if (!refs.sharedWasm) {
-                refs.sharedWasm = paneSurface.wasm;
-                
-                
-                // Create vertical group if needed
-                if (!refs.verticalGroup && !config.chart.separateXAxes) {
-                  const vGroup = paneManager.createVerticalGroup(paneSurface.wasm);
-                  refs.verticalGroup = vGroup;
-                }
-              }
-              
-              // Add to vertical group to link X-axes across all panes
-              // Requirement 17: All panes must have their own X-axis, all linked and synchronized
-              // Note: separateXAxes config is kept for backward compatibility but all panes are linked
-              if (refs.verticalGroup) {
-                try {
-                  refs.verticalGroup.addSurfaceToGroup(paneSurface.surface);
-                } catch (e) {
-                  // Ignore if already in group
-                }
-              }
-              
-              // Requirement 0.3: PnL pane must have proper Y-axis scaling for negative/positive values
-              // Check if this is a PnL pane by checking if it contains PnL series
-              // STRICT: PnL pane is ONLY determined by series assignment, not pane ID/title patterns
-              // Check if this pane has a strategy-pnl series explicitly assigned in layout
-              const isPnLPane = plotLayout.layout.series.some(s => {
-                const seriesInfo = parseSeriesType(s.series_id);
-                return seriesInfo.type === 'strategy-pnl' && s.pane === paneConfig.id;
-              });
-              
-              if (isPnLPane) {
-                // Configure Y-axis for PnL: ensure it can handle both positive and negative values
-                // Use Once instead of Always to prevent constant re-scaling that causes zoom issues
-                // The manual Y-axis scaling in processBatchedSamples will handle updates
-                paneSurface.yAxis.autoRange = EAutoRange.Once;
-                // Set growBy to 10% (same as other panes) to show more area/view more data
-                paneSurface.yAxis.growBy = new NumberRange(0.1, 0.1);
-   
-              }
-              
-           
-              // Register with layout manager
-              layoutManager.registerPane(paneConfig.id, {
-                paneId: paneConfig.id,
-                surface: paneSurface.surface,
-                wasm: paneSurface.wasm,
-                xAxis: paneSurface.xAxis,
-                yAxis: paneSurface.yAxis,
-                containerId: containerId,
-                hasData: false,
-                waitingForData: true,
-              });
-              
-              // Initialize waiting overlay for this pane
-              // Check which assigned series have data and show pending count
-              updatePaneWaitingOverlay(refs, layoutManager, paneConfig.id, plotLayout);
-
-              // Requirement 0.4: Strategy markers must appear on all eligible panes (except PnL and bar plots)
-              // Create strategy marker copies for this pane if it's eligible
-              // We'll create these during preallocation to avoid DataSeries sharing issues
-              // This is just a placeholder - actual duplication happens in preallocation useEffect
-
-              // Add overlays (hlines/vlines) if specified
-              if (paneConfig.overlays) {
-                // Render horizontal lines
-                if (paneConfig.overlays.hline && paneConfig.overlays.hline.length > 0) {
-                  renderHorizontalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.hline, paneConfig.id);
-                }
-                
-                // Render vertical lines
-                if (paneConfig.overlays.vline && paneConfig.overlays.vline.length > 0) {
-                  renderVerticalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.vline, paneConfig.id);
-                }
-              }
-
-            
-              
-            } catch (error) {
-              // Silently handle pane creation error
-            } finally {
+            // Check if pane already exists
+            const existingPaneCheck = refs.paneSurfaces.get(paneConfig.id);
+            if (existingPaneCheck) {
               creatingPanesRef.current.delete(paneConfig.id);
+              continue; // Already exists
             }
-          };
 
-          panePromises.push(createPane());
+            console.log('[MultiPaneChart] Creating pane:', paneConfig.id);
+            const paneSurface = await paneManager.createPane(
+              paneConfig.id,
+              containerId,
+              paneConfig,
+              config.performance.maxAutoTicks,
+              config.chart.separateXAxes
+            );
+            console.log('[MultiPaneChart] Pane created successfully:', paneConfig.id);
+
+            if (!isMounted) {
+              paneManager.destroyPane(paneConfig.id);
+              continue;
+            }
+
+            // Store in refs
+            refs.paneSurfaces.set(paneConfig.id, paneSurface);
+            
+            // FPS tracking is now handled by requestAnimationFrame at the top level
+            // No need to subscribe to surface rendered events
+            
+            // Add double-click handler for fit-all + pause
+            // Requirement 22.1: Double-click = fit-all + pause
+            const surfaceElement = paneSurface.surface.domCanvas2D;
+            if (surfaceElement) {
+              surfaceElement.addEventListener('dblclick', () => {
+                // Zoom extents is already handled by ZoomExtentsModifier
+                // Just pause auto-scroll
+                isLiveRef.current = false;
+                userInteractedRef.current = true;
+              });
+            }
+            
+            // Store shared WASM from first pane and create vertical group
+            if (!refs.sharedWasm) {
+              refs.sharedWasm = paneSurface.wasm;
+              
+              // Create vertical group if needed
+              if (!refs.verticalGroup && !config.chart.separateXAxes) {
+                const vGroup = paneManager.createVerticalGroup(paneSurface.wasm);
+                refs.verticalGroup = vGroup;
+              }
+            }
+            
+            // Add to vertical group to link X-axes across all panes
+            // Requirement 17: All panes must have their own X-axis, all linked and synchronized
+            // Note: separateXAxes config is kept for backward compatibility but all panes are linked
+            if (refs.verticalGroup) {
+              try {
+                refs.verticalGroup.addSurfaceToGroup(paneSurface.surface);
+              } catch (e) {
+                // Ignore if already in group
+              }
+            }
+            
+            // Requirement 0.3: PnL pane must have proper Y-axis scaling for negative/positive values
+            // Check if this is a PnL pane by checking if it contains PnL series
+            // STRICT: PnL pane is ONLY determined by series assignment, not pane ID/title patterns
+            // Check if this pane has a strategy-pnl series explicitly assigned in layout
+            const isPnLPane = plotLayout.layout.series.some(s => {
+              const seriesInfo = parseSeriesType(s.series_id);
+              return seriesInfo.type === 'strategy-pnl' && s.pane === paneConfig.id;
+            });
+            
+            if (isPnLPane) {
+              // Configure Y-axis for PnL: ensure it can handle both positive and negative values
+              // Use Once instead of Always to prevent constant re-scaling that causes zoom issues
+              // The manual Y-axis scaling in processBatchedSamples will handle updates
+              paneSurface.yAxis.autoRange = EAutoRange.Once;
+              // Set growBy to 10% (same as other panes) to show more area/view more data
+              paneSurface.yAxis.growBy = new NumberRange(0.1, 0.1);
+            }
+            
+            // Register with layout manager
+            layoutManager.registerPane(paneConfig.id, {
+              paneId: paneConfig.id,
+              surface: paneSurface.surface,
+              wasm: paneSurface.wasm,
+              xAxis: paneSurface.xAxis,
+              yAxis: paneSurface.yAxis,
+              containerId: containerId,
+              hasData: false,
+              waitingForData: true,
+            });
+            
+            // Initialize waiting overlay for this pane
+            // Check which assigned series have data and show pending count
+            updatePaneWaitingOverlay(refs, layoutManager, paneConfig.id, plotLayout);
+
+            // Requirement 0.4: Strategy markers must appear on all eligible panes (except PnL and bar plots)
+            // Create strategy marker copies for this pane if it's eligible
+            // We'll create these during preallocation to avoid DataSeries sharing issues
+            // This is just a placeholder - actual duplication happens in preallocation useEffect
+
+            // Add overlays (hlines/vlines) if specified
+            if (paneConfig.overlays) {
+              // Render horizontal lines
+              if (paneConfig.overlays.hline && paneConfig.overlays.hline.length > 0) {
+                renderHorizontalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.hline, paneConfig.id);
+              }
+              
+              // Render vertical lines
+              if (paneConfig.overlays.vline && paneConfig.overlays.vline.length > 0) {
+                renderVerticalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.vline, paneConfig.id);
+              }
+            }
+
+            // Wait a small amount between pane creations to let the rendering context fully initialize
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            
+          } catch (error) {
+            // Silently handle pane creation error
+            console.warn('[MultiPaneChart] Error creating pane:', paneConfig.id, error);
+          } finally {
+            creatingPanesRef.current.delete(paneConfig.id);
+          }
         }
-
-        await Promise.all(panePromises);
+        
+        console.log('[MultiPaneChart] All panes created sequentially, paneSurfaces size:', refs.paneSurfaces.size);
         
         console.log('[MultiPaneChart] All pane promises resolved, paneSurfaces size:', refs.paneSurfaces.size);
 

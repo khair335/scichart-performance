@@ -352,94 +352,118 @@ export class DynamicPaneManager {
     const width = paneConfig.width * colWidth;
     const height = paneConfig.height * rowHeight;
 
-    // Create sub-chart using SciChartSubSurface API
-    const subSurface = SciChartSubSurface.createSubSurface(this.parentSurface, {
-      position: new Rect(x, y, width, height),
-      coordinateMode: ESubSurfacePositionCoordinateMode.Relative,
-      isTransparent: false,
-    });
+    // CRITICAL: Suspend parent surface updates during subsurface creation
+    // This prevents the render loop from accessing partially initialized subsurfaces
+    this.parentSurface.suspendUpdates();
 
-    const surface = subSurface as SciChartSurface;
+    let surface: SciChartSurface;
     const wasmContext = this.sharedWasm;
 
-    // Wait for the subsurface rendering context to be ready
-    // This is critical - the subsurface needs time to initialize its rendering context
-    // Poll for the renderSurface to be ready with text measurement capabilities
-    let attempts = 0;
-    const maxAttempts = 50; // 50 attempts * 20ms = 1 second max wait
-    while (attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      // Check if the rendering context is ready by checking for renderSurface
-      const renderSurface = (surface as any).renderSurface;
-      if (renderSurface && renderSurface.context2D) {
-        // Context is ready
-        break;
+    try {
+      // Create sub-chart using SciChartSubSurface API
+      const subSurface = SciChartSubSurface.createSubSurface(this.parentSurface, {
+        position: new Rect(x, y, width, height),
+        coordinateMode: ESubSurfacePositionCoordinateMode.Relative,
+        isTransparent: false,
+      });
+
+      surface = subSurface as SciChartSurface;
+
+      // Wait for the subsurface rendering context to be ready
+      // This is critical - the subsurface needs time to initialize its rendering context
+      // Poll for the renderSurface to be ready with text measurement capabilities
+      let attempts = 0;
+      const maxAttempts = 100; // 100 attempts * 20ms = 2 seconds max wait
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        // Check if the rendering context is ready by checking for renderSurface
+        const renderSurface = (surface as any).renderSurface;
+        if (renderSurface && renderSurface.context2D) {
+          // Context is ready
+          break;
+        }
+        attempts++;
       }
-      attempts++;
+
+      if (attempts >= maxAttempts) {
+        console.warn('[DynamicPaneManager] Subsurface rendering context did not initialize in time');
+      }
+
+      // Additional animation frames for safety - must be done BEFORE resumeUpdates
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
+    } finally {
+      // Resume updates after subsurface is fully initialized
+      this.parentSurface.resumeUpdates();
     }
 
-    if (attempts >= maxAttempts) {
-      console.warn('[DynamicPaneManager] Subsurface rendering context did not initialize in time');
+    // CRITICAL: Suspend updates while configuring axes and modifiers
+    // This prevents the render loop from accessing partially configured surfaces
+    surface.suspendUpdates();
+    
+    let xAxis: DateTimeNumericAxis;
+    let yAxis: NumericAxis;
+    
+    try {
+      // Create axes - let SciChart use its default intelligent datetime formatting
+      // SciChart automatically adapts the format based on zoom level (e.g., "08:25" when zoomed in, "12/08" when zoomed out)
+      xAxis = new DateTimeNumericAxis(wasmContext, {
+        autoRange: EAutoRange.Once,
+        drawMajorGridLines: true, // Enable grid lines
+        drawMinorGridLines: false, // Disable minor grid lines for better performance
+        drawMajorTickLines: true,
+        drawMinorTickLines: false, // Disable minor ticks for better performance
+        isVisible: true,
+        useNativeText: true,
+        useSharedCache: true,
+        maxAutoTicks: maxAutoTicks,
+        // Don't set axisTitle - causes text rendering issues with subsurfaces
+        // axisTitle: "Time",
+        // axisTitleStyle: { color: "#9fb2c9" },
+        labelStyle: { color: "#9fb2c9" },
+      });
+
+      yAxis = new NumericAxis(wasmContext, {
+        autoRange: EAutoRange.Once,
+        drawMajorGridLines: true, // Enable grid lines
+        drawMinorGridLines: false, // Disable minor grid lines for better performance
+        drawMajorTickLines: true,
+        drawMinorTickLines: false, // Disable minor ticks for better performance
+        axisAlignment: EAxisAlignment.Right,
+        useNativeText: true,
+        useSharedCache: true,
+        maxAutoTicks: 3,
+        growBy: new NumberRange(0.1, 0.1),
+        // Don't set axisTitle - causes text rendering issues with subsurfaces
+        // axisTitle: "Price",
+        // axisTitleStyle: { color: "#9fb2c9" },
+        labelStyle: { color: "#9fb2c9" },
+      });
+
+      surface.xAxes.add(xAxis);
+      surface.yAxes.add(yAxis);
+
+      // Add chart modifiers for zoom/pan interaction
+      // CRITICAL: Add axis drag modifiers FIRST for axis stretching/shrinking
+      // These allow users to drag on the axis to stretch/shrink the range
+      surface.chartModifiers.add(
+        new XAxisDragModifier(), // Drag on X-axis to stretch/shrink
+        new YAxisDragModifier(), // Drag on Y-axis to stretch/shrink
+      );
+      
+      // Add zoom modifiers based on current zoom mode
+      // This adds the appropriate modifiers for panning, box zoom, wheel zoom
+      this.updateZoomModifiers(surface);
+      
+      // Double-click = fit-all + pause
+      // ZoomExtentsModifier already handles double-click for fit-all
+      // We'll add pause callback via surface event (if available)
+      // Note: The pause logic will be handled in MultiPaneChart via setLiveMode callback
+    } finally {
+      surface.resumeUpdates();
     }
-
-    // Additional animation frames for safety
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-
-    // Create axes - let SciChart use its default intelligent datetime formatting
-    // SciChart automatically adapts the format based on zoom level (e.g., "08:25" when zoomed in, "12/08" when zoomed out)
-    const xAxis = new DateTimeNumericAxis(wasmContext, {
-      autoRange: EAutoRange.Once,
-      drawMajorGridLines: true, // Enable grid lines
-      drawMinorGridLines: false, // Disable minor grid lines for better performance
-      drawMajorTickLines: true,
-      drawMinorTickLines: false, // Disable minor ticks for better performance
-      isVisible: true,
-      useNativeText: true,
-      useSharedCache: true,
-      maxAutoTicks: maxAutoTicks,
-      // Don't set axisTitle - causes text rendering issues with subsurfaces
-      // axisTitle: "Time",
-      // axisTitleStyle: { color: "#9fb2c9" },
-      labelStyle: { color: "#9fb2c9" },
-    });
-
-    const yAxis = new NumericAxis(wasmContext, {
-      autoRange: EAutoRange.Once,
-      drawMajorGridLines: true, // Enable grid lines
-      drawMinorGridLines: false, // Disable minor grid lines for better performance
-      drawMajorTickLines: true,
-      drawMinorTickLines: false, // Disable minor ticks for better performance
-      axisAlignment: EAxisAlignment.Right,
-      useNativeText: true,
-      useSharedCache: true,
-      maxAutoTicks: 3,
-      growBy: new NumberRange(0.1, 0.1),
-      // Don't set axisTitle - causes text rendering issues with subsurfaces
-      // axisTitle: "Price",
-      // axisTitleStyle: { color: "#9fb2c9" },
-      labelStyle: { color: "#9fb2c9" },
-    });
-
-    surface.xAxes.add(xAxis);
-    surface.yAxes.add(yAxis);
-
-    // Add chart modifiers for zoom/pan interaction
-    // CRITICAL: Add axis drag modifiers FIRST for axis stretching/shrinking
-    // These allow users to drag on the axis to stretch/shrink the range
-    surface.chartModifiers.add(
-      new XAxisDragModifier(), // Drag on X-axis to stretch/shrink
-      new YAxisDragModifier(), // Drag on Y-axis to stretch/shrink
-    );
-    
-    // Add zoom modifiers based on current zoom mode
-    // This adds the appropriate modifiers for panning, box zoom, wheel zoom
-    this.updateZoomModifiers(surface);
-    
-    // Double-click = fit-all + pause
-    // ZoomExtentsModifier already handles double-click for fit-all
-    // We'll add pause callback via surface event (if available)
-    // Note: The pause logic will be handled in MultiPaneChart via setLiveMode callback
 
     // Add to vertical group to link X-axes across all panes
     // Requirement 17: All panes must have their own X-axis, all linked and synchronized
