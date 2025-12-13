@@ -505,17 +505,6 @@ export class DynamicPaneManager {
   destroyPane(paneId: string): void {
     const pane = this.paneSurfaces.get(paneId);
     if (pane) {
-      // Remove from vertical group if linked
-      // Note: SciChartVerticalGroup doesn't have removeSurfaceFromGroup method
-      // The group will automatically handle cleanup when surface is deleted
-      // if (this.verticalGroup) {
-      //   try {
-      //     this.verticalGroup.removeSurfaceFromGroup(pane.surface);
-      //   } catch (e) {
-      //     // Ignore errors if surface not in group
-      //   }
-      // }
-      
       // CRITICAL: Suspend updates first to prevent render attempts during cleanup
       try {
         pane.surface.suspendUpdates();
@@ -527,33 +516,42 @@ export class DynamicPaneManager {
       try {
         pane.surface.chartModifiers.clear();
       } catch (e) {
-        console.warn(`[DynamicPaneManager] Error clearing modifiers from pane ${paneId}:`, e);
+        // Ignore errors silently
       }
 
-      // CRITICAL: Remove all RenderableSeries before deleting surface
-      // This prevents "DataSeries has been deleted" errors
+      // CRITICAL: First, detach ALL dataSeries references from renderableSeries
+      // This prevents "dataSeries has been deleted" errors
       try {
-        const renderableSeriesToRemove: any[] = [];
-        pane.surface.renderableSeries.asArray().forEach((rs: any) => {
-          renderableSeriesToRemove.push(rs);
-        });
-
-        for (const rs of renderableSeriesToRemove) {
+        const seriesArray = pane.surface.renderableSeries.asArray();
+        for (const rs of seriesArray) {
           try {
-            pane.surface.renderableSeries.remove(rs);
+            if ((rs as any).dataSeries) {
+              (rs as any).dataSeries = null;
+            }
           } catch (e) {
-            // Ignore if already removed
+            // Ignore
           }
         }
       } catch (e) {
-        console.warn(`[DynamicPaneManager] Error removing RenderableSeries from pane ${paneId}:`, e);
+        // Ignore
+      }
+
+      // CRITICAL: Remove all RenderableSeries before deleting surface
+      try {
+        pane.surface.renderableSeries.clear();
+      } catch (e) {
+        // Ignore errors silently
       }
 
       // Delete surface (DataSeries are NOT deleted - they're managed separately)
       try {
         pane.surface.delete();
-      } catch (e) {
-        console.warn(`[DynamicPaneManager] Error deleting pane ${paneId}:`, e);
+      } catch (e: any) {
+        // Silently ignore common cleanup errors
+        const msg = e?.message || '';
+        if (!msg.includes('already been deleted') && !msg.includes('dataSeries has been deleted')) {
+          console.warn(`[DynamicPaneManager] Error deleting pane ${paneId}:`, e);
+        }
       }
       
       this.paneSurfaces.delete(paneId);
@@ -633,7 +631,31 @@ export class DynamicPaneManager {
     // Additional timeout for WASM to fully process pending events
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // NOW clear all series AND axes after render loop has stopped
+    // CRITICAL: First, detach ALL dataSeries references from renderableSeries
+    // This prevents "dataSeries has been deleted" errors when the render loop
+    // tries to access the dataSeries during cleanup
+    for (const pane of this.paneSurfaces.values()) {
+      try {
+        const seriesArray = pane.surface.renderableSeries.asArray();
+        for (const rs of seriesArray) {
+          try {
+            // Detach dataSeries reference BEFORE removing
+            if ((rs as any).dataSeries) {
+              (rs as any).dataSeries = null;
+            }
+          } catch (e) {
+            // Ignore - dataSeries may already be null
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Wait a frame after detaching dataSeries references
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
+    // NOW clear all series AND axes after dataSeries detached
     for (const pane of this.paneSurfaces.values()) {
       // First remove all series
       try {
@@ -663,22 +685,14 @@ export class DynamicPaneManager {
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    await new Promise(resolve => requestAnimationFrame(resolve));
     // CRITICAL: Additional delay for WASM to fully process pending events
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     // Clear vertical group reference - surfaces will be cleaned up by delete()
     // SciChartVerticalGroup doesn't have a remove method, so just nullify the reference
     if (this.verticalGroup) {
       this.verticalGroup = null;
     }
-
-    // Modifiers and series already cleared above - no need to repeat
 
     // Clear the panes map WITHOUT calling delete on subsurfaces
     // The parent.delete() will cascade delete all subsurfaces automatically
@@ -689,8 +703,9 @@ export class DynamicPaneManager {
     try {
       parentToDelete.delete();
     } catch (e: any) {
-      // Silently ignore "already deleted" errors, warn on others
-      if (!e?.message?.includes('already been deleted')) {
+      // Silently ignore "already deleted" and "dataSeries has been deleted" errors
+      const msg = e?.message || '';
+      if (!msg.includes('already been deleted') && !msg.includes('dataSeries has been deleted')) {
         console.warn('[DynamicPaneManager] Error deleting parent surface:', e);
       }
     }
