@@ -537,7 +537,14 @@ export class DynamicPaneManager {
       }
 
       // CRITICAL: Clear modifiers first to prevent DOM access after surface removal
+      // Detach modifiers from their parentSurface to prevent 'isOver' errors
       try {
+        const modifiers = pane.surface.chartModifiers.asArray();
+        for (const mod of modifiers) {
+          try {
+            (mod as any).parentSurface = null;
+          } catch (e) { /* ignore */ }
+        }
         pane.surface.chartModifiers.clear();
       } catch (e) {
         // Ignore errors silently
@@ -696,8 +703,14 @@ export class DynamicPaneManager {
         // Ignore
       }
       
-      // Clear modifiers
+      // Clear modifiers - detach parentSurface first to prevent 'isOver' errors
       try {
+        const modifiers = pane.surface.chartModifiers.asArray();
+        for (const mod of modifiers) {
+          try {
+            (mod as any).parentSurface = null;
+          } catch (e) { /* ignore */ }
+        }
         pane.surface.chartModifiers.clear();
       } catch (e) {
         // Ignore
