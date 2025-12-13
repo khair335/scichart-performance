@@ -18,7 +18,7 @@ export interface PlotLayout {
   strategy_markers?: StrategyMarkersConfig;
   xAxis?: {
     defaultRange?: {
-      mode: 'lastMinutes' | 'lastHours' | 'entireSession' | 'custom';
+      mode: 'lastMinutes' | 'lastHours' | 'entireSession' | 'session' | 'custom';
       value?: number; // Minutes or hours depending on mode, or custom range [min, max] in ms
       customRange?: [number, number]; // [min, max] in milliseconds (Unix timestamp)
     };

@@ -4,8 +4,7 @@
   "min_height": 2000,
   "xAxis": {
     "defaultRange": {
-      "mode": "lastMinutes",
-      "value": 2
+      "mode": "session"
     }
   },
   "minimap": {
