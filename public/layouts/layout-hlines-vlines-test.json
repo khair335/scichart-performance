@@ -1,0 +1,140 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "min_height": 800,
+  "xAxis": {
+    "defaultRange": {
+      "mode": "session"
+    }
+  },
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "pane": "price"
+    }
+  },
+  "panes": [
+    {
+      "id": "price",
+      "row": 0,
+      "col": 0,
+      "width": 1,
+      "height": 1,
+      "title": "Price with HLines",
+      "overlays": {
+        "hlines": [
+          {
+            "id": "support_1",
+            "y": 4990,
+            "label": "Support Level 1",
+            "style": {
+              "stroke": "#00FF00",
+              "strokeThickness": 2,
+              "strokeDashArray": [5, 5]
+            }
+          },
+          {
+            "id": "resistance_1",
+            "y": 5010,
+            "label": "Resistance Level 1",
+            "style": {
+              "stroke": "#FF0000",
+              "strokeThickness": 2,
+              "strokeDashArray": [5, 5]
+            }
+          },
+          {
+            "id": "pivot",
+            "y": 5000,
+            "label": "Pivot Point",
+            "style": {
+              "stroke": "#FFFF00",
+              "strokeThickness": 1,
+              "strokeDashArray": [2, 2]
+            }
+          }
+        ],
+        "vlines": [
+          {
+            "id": "session_start",
+            "x": 1734048000000,
+            "label": "Session Start",
+            "style": {
+              "stroke": "#00BFFF",
+              "strokeThickness": 2,
+              "strokeDashArray": [10, 5]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ohlc",
+      "row": 1,
+      "col": 0,
+      "width": 1,
+      "height": 1,
+      "title": "OHLC with HLines",
+      "overlays": {
+        "hlines": [
+          {
+            "id": "daily_high",
+            "y": 5015,
+            "label": "Daily High",
+            "style": {
+              "stroke": "#FF6600",
+              "strokeThickness": 2
+            }
+          },
+          {
+            "id": "daily_low",
+            "y": 4985,
+            "label": "Daily Low",
+            "style": {
+              "stroke": "#6600FF",
+              "strokeThickness": 2
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "price",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C878",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "price",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FFD700",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc",
+      "type": "FastCandlestickRenderableSeries",
+      "style": {
+        "upFillColor": "#089981",
+        "downFillColor": "#F23645",
+        "upStrokeColor": "#089981",
+        "downStrokeColor": "#F23645"
+      }
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": []
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Test layout for hlines and vlines overlays"
+  }
+}
