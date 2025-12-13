@@ -342,7 +342,7 @@ export function useMultiPaneChart({
         break;
 
       case 'entireSession':
-        // Show all data in the buffer
+        // Show all data in the buffer (one-time calculation)
         if (dataMin !== undefined && dataMax !== undefined && dataMin < dataMax) {
           const padding = (dataMax - dataMin) * 0.05; // 5% padding
           rangeMin = dataMin - padding;
@@ -351,6 +351,20 @@ export function useMultiPaneChart({
           // Fallback: use a large window if data range not available
           const sessionWindow = 8 * 60 * 60 * 1000; // 8 hours
           rangeMin = now - sessionWindow;
+          rangeMax = now + (10 * 1000);
+        }
+        break;
+
+      case 'session':
+        // ALWAYS show all data from N=1 to latest point in buffer (dynamic in live mode)
+        // This mode continuously expands to show entire data range as new data arrives
+        if (dataMin !== undefined && dataMax !== undefined && dataMin < dataMax) {
+          const padding = (dataMax - dataMin) * 0.02; // 2% padding for tighter fit
+          rangeMin = dataMin - padding;
+          rangeMax = dataMax + padding;
+        } else {
+          // No data yet, use reasonable defaults
+          rangeMin = now - (60 * 1000); // 1 minute back
           rangeMax = now + (10 * 1000);
         }
         break;
@@ -3144,25 +3158,42 @@ export function useMultiPaneChart({
       const X_SCROLL_THRESHOLD = 5000; // 5 seconds threshold
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
       
-      // Find actual data max from DataSeries
+      // Find actual data min and max from DataSeries
+      let actualDataMin = Infinity;
       let actualDataMax = 0;
       let hasData = false;
       for (const [, entry] of refs.dataSeriesStore) {
         try {
           if (entry.dataSeries.count() > 0) {
             const xRange = entry.dataSeries.getXRange();
-            if (xRange && isFinite(xRange.max) && xRange.max > actualDataMax) {
-              actualDataMax = xRange.max;
+            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+              if (xRange.min < actualDataMin) actualDataMin = xRange.min;
+              if (xRange.max > actualDataMax) actualDataMax = xRange.max;
               hasData = true;
             }
           }
         } catch (e) {}
       }
       
-      if (!hasData) actualDataMax = latestTime;
+      if (!hasData) {
+        actualDataMax = latestTime;
+        actualDataMin = latestTime - windowMs;
+      }
       
-      const padding = 10 * 1000;
-      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
+      // Check if layout specifies "session" mode - show all data from start to end
+      const defaultRangeMode = plotLayout?.xAxisDefaultRange?.mode;
+      const isSessionMode = defaultRangeMode === 'session';
+      
+      let newRange: NumberRange;
+      if (isSessionMode && hasData) {
+        // Session mode: always show entire data range from first to last point
+        const padding = (actualDataMax - actualDataMin) * 0.02; // 2% padding
+        newRange = new NumberRange(actualDataMin - padding, actualDataMax + padding);
+      } else {
+        // Default: fixed time window scrolling with latest data
+        const padding = 10 * 1000;
+        newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
+      }
       
       // Update all X-axes
       const axesToUpdate: Array<{ axis: any; surface: any }> = [];
