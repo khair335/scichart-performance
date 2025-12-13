@@ -1187,6 +1187,17 @@ export function useMultiPaneChart({
   // IMPORTANT: We use a separate useEffect for hide/show that doesn't trigger cleanup
   useEffect(() => {
     const refs = chartRefs.current;
+
+    // TEMPORARY SAFETY: Disable SciChartOverview for dynamic multi_surface layouts
+    // SciChartOverview shares DataSeries between chart surfaces. During dynamic
+    // layout transitions this can trigger "dataSeries has been deleted" errors
+    // from SciChart if any surface is cleaned up while the overview is still
+    // referencing shared DataSeries. For now, when a JSON multi_surface layout
+    // is active, we skip creating the overview and rely on the main panes only.
+    if (plotLayout?.layout?.layout_mode === 'multi_surface') {
+      return;
+    }
+
     // For dynamic layouts, we don't need tickSurface - we'll find the correct surface from the layout
     // For legacy layouts, we need tickSurface
     const hasLegacySurface = !!refs.tickSurface;
