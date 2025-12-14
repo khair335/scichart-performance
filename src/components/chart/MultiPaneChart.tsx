@@ -32,6 +32,8 @@ import {
   EHorizontalAnchorPoint,
   EVerticalAnchorPoint,
   ECoordinateMode,
+  // For standalone minimap with range selection
+  OverviewRangeSelectionModifier,
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
@@ -1348,21 +1350,68 @@ export function useMultiPaneChart({
           });
           minimapSurface.renderableSeries.add(lineSeries);
           
-          // Add overview range selector modifier
-          minimapSurface.chartModifiers.add(new ZoomPanModifier({ enableZoom: false }));
-          minimapSurface.chartModifiers.add(new MouseWheelZoomModifier());
+          // Get the main chart's current visible X range to initialize the selection
+          let initialSelectedArea: NumberRange | undefined;
+          const firstPaneSurface = Array.from(refs.paneSurfaces.values())[0];
+          if (firstPaneSurface?.xAxis?.visibleRange) {
+            initialSelectedArea = new NumberRange(
+              firstPaneSurface.xAxis.visibleRange.min,
+              firstPaneSurface.xAxis.visibleRange.max
+            );
+          }
+          
+          // Add OverviewRangeSelectionModifier for proper minimap behavior with range selection box
+          const rangeSelectionModifier = new OverviewRangeSelectionModifier({
+            onSelectedAreaChanged: (area?: NumberRange) => {
+              if (!area) return;
+              
+              // Skip if this update came from syncing TO minimap (prevent infinite loop)
+              if ((refs as any).minimapSyncInProgress) return;
+              
+              // Sync minimap selection to all main chart X-axes
+              (refs as any).mainChartSyncInProgress = true;
+              try {
+                // Update all dynamic pane surfaces
+                for (const [, paneSurface] of refs.paneSurfaces) {
+                  if (paneSurface.xAxis) {
+                    paneSurface.xAxis.visibleRange = new NumberRange(area.min, area.max);
+                  }
+                }
+                
+                // Update legacy surfaces if they exist
+                const tickXAxis = refs.tickSurface?.xAxes.get(0);
+                const ohlcXAxis = refs.ohlcSurface?.xAxes.get(0);
+                if (tickXAxis) tickXAxis.visibleRange = new NumberRange(area.min, area.max);
+                if (ohlcXAxis) ohlcXAxis.visibleRange = new NumberRange(area.min, area.max);
+                
+                // When user drags minimap selection, pause live mode
+                isLiveRef.current = false;
+                userInteractedRef.current = true;
+              } finally {
+                (refs as any).mainChartSyncInProgress = false;
+              }
+            },
+          });
+          
+          // Set initial selected area if available
+          if (initialSelectedArea) {
+            rangeSelectionModifier.selectedArea = initialSelectedArea;
+          }
+          
+          minimapSurface.chartModifiers.add(rangeSelectionModifier);
           
           // Store reference for updates and cleanup
           (refs as any).minimapSurface = minimapSurface;
           (refs as any).minimapDataSeries = clonedDataSeries;
           (refs as any).minimapSourceSeriesId = minimapSourceSeriesId;
+          (refs as any).minimapRangeSelectionModifier = rangeSelectionModifier;
           
           lastOverviewSourceRef.current = {
             surfaceId: minimapSurface.id,
             minimapSourceSeries: minimapSourceSeriesId
           };
           
-          console.log('[MultiPaneChart] Standalone minimap created with', copiedCount, 'points');
+          console.log('[MultiPaneChart] Standalone minimap created with', copiedCount, 'points and range selection');
           
           // Hide waiting overlay if we have data
           const waitingOverlay = document.getElementById('overview-chart-waiting');
@@ -1503,6 +1552,7 @@ export function useMultiPaneChart({
         (refs as any).minimapSurface = null;
         (refs as any).minimapDataSeries = null;
         (refs as any).minimapSourceSeriesId = null;
+        (refs as any).minimapRangeSelectionModifier = null;
       }
       
       // Only delete overview on component unmount (not when toggling)
@@ -2461,6 +2511,36 @@ export function useMultiPaneChart({
                 isLiveRef.current = false;
                 userInteractedRef.current = true;
               });
+              
+              // Add user interaction detection for pan/zoom to sync minimap
+              // Use mouseup/touchend to capture final range after drag completes
+              const syncMinimapSelection = () => {
+                // Use setTimeout to ensure the axis range has been updated
+                setTimeout(() => {
+                  const refs = chartRefs.current;
+                  if ((refs as any).mainChartSyncInProgress) return;
+                  
+                  const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+                  if (rangeModifier && paneSurface.xAxis?.visibleRange) {
+                    try {
+                      (refs as any).minimapSyncInProgress = true;
+                      rangeModifier.selectedArea = new NumberRange(
+                        paneSurface.xAxis.visibleRange.min,
+                        paneSurface.xAxis.visibleRange.max
+                      );
+                    } catch (e) {
+                      // Ignore sync errors
+                    } finally {
+                      (refs as any).minimapSyncInProgress = false;
+                    }
+                  }
+                }, 50);
+              };
+              
+              // Sync on mouseup (after drag completes) and on wheel (immediate)
+              surfaceElement.addEventListener('mouseup', syncMinimapSelection, { passive: true });
+              surfaceElement.addEventListener('touchend', syncMinimapSelection, { passive: true });
+              surfaceElement.addEventListener('wheel', syncMinimapSelection, { passive: true });
             }
             
             // Store shared WASM from first pane and create vertical group
@@ -3253,6 +3333,21 @@ export function useMultiPaneChart({
             surface?.invalidateElement();
           }
         } catch (e) {}
+      }
+      
+      // Sync minimap selection to follow main chart X-axis (when in live mode auto-scrolling)
+      // Only if not already syncing from minimap to prevent infinite loop
+      if (!(refs as any).mainChartSyncInProgress) {
+        const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+        if (rangeModifier) {
+          try {
+            (refs as any).minimapSyncInProgress = true;
+            rangeModifier.selectedArea = newRange;
+            (refs as any).minimapSyncInProgress = false;
+          } catch (e) {
+            (refs as any).minimapSyncInProgress = false;
+          }
+        }
       }
       
       // Update Y-axes periodically
