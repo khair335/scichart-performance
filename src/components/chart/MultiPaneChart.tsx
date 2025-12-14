@@ -1202,8 +1202,15 @@ export function useMultiPaneChart({
   useEffect(() => {
     const refs = chartRefs.current;
 
-    // NOTE: SciChartOverview shares DataSeries with source surface
-    // For multi_surface layouts, we carefully manage creation timing to avoid conflicts
+    // SAFETY: Disable SciChartOverview for dynamic multi_surface layouts
+    // SciChartOverview shares DataSeries between chart surfaces. With SubSurfaces,
+    // this triggers "dataSeries has been deleted" errors from SciChart because 
+    // the overview's internal surface conflicts with the SubSurface DataSeries lifecycle.
+    // TODO: Implement cloned DataSeries approach for minimap in multi_surface mode
+    if (plotLayout?.layout?.layout_mode === 'multi_surface') {
+      console.log('[MultiPaneChart] Minimap disabled for multi_surface layout (DataSeries sharing conflict)');
+      return;
+    }
 
     // For dynamic layouts, we don't need tickSurface - we'll find the correct surface from the layout
     // For legacy layouts, we need tickSurface
