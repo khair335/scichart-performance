@@ -3073,9 +3073,8 @@ export function useMultiPaneChart({
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
         
-        // Get the pane(s) where this marker should appear
-        const seriesEntry = refs.dataSeriesStore.get(series_id);
-        if (!seriesEntry || !seriesEntry.paneId) continue;
+        // Strategy marker series don't have dataSeriesStore entries (chartTarget: 'none')
+        // They are rendered as annotations directly using strategyMarkerPanes from layout
         
         // Get all eligible panes for strategy markers
         const eligiblePanes = plotLayout.strategyMarkerPanes;
