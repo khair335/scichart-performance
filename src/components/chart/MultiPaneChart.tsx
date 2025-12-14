@@ -1202,16 +1202,10 @@ export function useMultiPaneChart({
   useEffect(() => {
     const refs = chartRefs.current;
 
-    // SAFETY: Disable SciChartOverview for dynamic multi_surface layouts
-    // SciChartOverview shares DataSeries between chart surfaces. With SubSurfaces,
-    // this triggers "dataSeries has been deleted" errors from SciChart because 
-    // the overview's internal surface conflicts with the SubSurface DataSeries lifecycle.
-    // TODO: Implement cloned DataSeries approach for minimap in multi_surface mode
-    if (plotLayout?.layout?.layout_mode === 'multi_surface') {
-      console.log('[MultiPaneChart] Minimap disabled for multi_surface layout (DataSeries sharing conflict)');
-      return;
-    }
-
+    // For multi_surface layouts, we create a standalone minimap surface with CLONED DataSeries
+    // This avoids the "dataSeries has been deleted" error caused by SciChartOverview sharing DataSeries
+    const isMultiSurface = plotLayout?.layout?.layout_mode === 'multi_surface';
+    
     // For dynamic layouts, we don't need tickSurface - we'll find the correct surface from the layout
     // For legacy layouts, we need tickSurface
     const hasLegacySurface = !!refs.tickSurface;
@@ -1227,8 +1221,6 @@ export function useMultiPaneChart({
     let isCancelled = false;
 
     const handleOverview = async () => {
-      // Always create/keep overview alive - use CSS to control visibility
-      // SciChartOverview shares DataSeries with the main chart, so we never delete it
       if (!overviewContainerId) {
         return;
       }
@@ -1240,232 +1232,244 @@ export function useMultiPaneChart({
         if (isCancelled) return;
         
         const overviewContainer = document.getElementById(overviewContainerId);
-        
-        // Determine which surface to use for overview
-        // For dynamic layouts, use the surface that contains the minimap source series
-        // For legacy layouts, use tickSurface
-        let sourceSurface: SciChartSurface | null = null;
-        let minimapSourceSeriesId: string | undefined = undefined;
-        
-        if (plotLayout?.minimapSourceSeries) {
-          // Dynamic layout with minimap - find the surface that contains the source series
-          minimapSourceSeriesId = plotLayout.minimapSourceSeries;
-          
-          // Method 1: Find pane from layout (more reliable - doesn't depend on dataSeriesStore)
-          const sourceSeriesAssignment = plotLayout.layout.series.find(
-            s => s.series_id === minimapSourceSeriesId
-          );
-          if (sourceSeriesAssignment?.pane) {
-            const paneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane);
-            if (paneSurface) {
-              sourceSurface = paneSurface.surface;
-              console.log('[MultiPaneChart] Found source surface from layout:', {
-                seriesId: minimapSourceSeriesId,
-                paneId: sourceSeriesAssignment.pane,
-                surfaceId: sourceSurface?.id,
-                seriesCount: sourceSurface.renderableSeries.size()
-              });
-            }
-          }
-          
-          // Method 2: Fallback - try dataSeriesStore (in case paneId is set)
-          if (!sourceSurface) {
-            const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-            if (sourceSeriesEntry?.paneId) {
-              const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
-              if (paneSurface) {
-                sourceSurface = paneSurface.surface;
-                console.log('[MultiPaneChart] Found source surface from dataSeriesStore:', {
-                  seriesId: minimapSourceSeriesId,
-                  paneId: sourceSeriesEntry.paneId,
-                  surfaceId: sourceSurface?.id,
-                  seriesCount: sourceSurface.renderableSeries.size()
-                });
-              }
-            }
-          }
-        }
-        
-        // Fallback to legacy tickSurface if no dynamic pane found
-        if (!sourceSurface && refs.tickSurface) {
-          sourceSurface = refs.tickSurface;
-          console.log('[MultiPaneChart] Using legacy tickSurface for overview');
-        }
-        
-        if (!sourceSurface) {
-          console.warn('[MultiPaneChart] Cannot create overview: no source surface available', {
-            hasTickSurface: !!refs.tickSurface,
-            hasDynamicPanes: refs.paneSurfaces.size > 0,
-            minimapSourceSeries: minimapSourceSeriesId,
-            plotLayout: !!plotLayout
-          });
+        if (!overviewContainer) {
+          console.warn(`[MultiPaneChart] Overview container not found: ${overviewContainerId}`);
           return;
         }
+
+        // Get minimap source series ID from layout
+        const minimapSourceSeriesId = plotLayout?.minimapSourceSeries;
         
-        if (overviewContainer) {
-          // Check if overview needs to be recreated (e.g., when layout changes and source surface changes)
-          let needsRecreate = false;
-          const currentSourceInfo = {
-            surfaceId: sourceSurface?.id || (sourceSurface as any)?._id || undefined,
+        if (isMultiSurface) {
+          // === MULTI-SURFACE MODE: Create standalone surface with cloned DataSeries ===
+          console.log('[MultiPaneChart] Creating standalone minimap for multi_surface layout');
+          
+          // Delete existing overview/minimap if any
+          if (refs.overview) {
+            try {
+              refs.overview.delete();
+            } catch (e) {
+              console.warn('[MultiPaneChart] Error deleting old overview:', e);
+            }
+            refs.overview = null;
+          }
+          if ((refs as any).minimapSurface) {
+            try {
+              ((refs as any).minimapSurface as SciChartSurface).delete();
+            } catch (e) {
+              console.warn('[MultiPaneChart] Error deleting old minimap surface:', e);
+            }
+            (refs as any).minimapSurface = null;
+          }
+          
+          // Get data from dataSeriesStore for the minimap source series
+          if (!minimapSourceSeriesId) {
+            console.warn('[MultiPaneChart] No minimap source series specified in layout');
+            return;
+          }
+          
+          const seriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+          if (!seriesEntry || !seriesEntry.dataSeries) {
+            console.log('[MultiPaneChart] Minimap source series not found in dataSeriesStore, will retry on refresh');
+            return;
+          }
+          
+          // Check if source series has data
+          const sourceDataSeries = seriesEntry.dataSeries as XyDataSeries;
+          const pointCount = sourceDataSeries.count();
+          if (pointCount === 0) {
+            console.log('[MultiPaneChart] Minimap source series has no data yet, will retry on refresh');
+            return;
+          }
+          
+          // Create standalone minimap surface
+          const { sciChartSurface: minimapSurface, wasmContext: minimapWasm } = await SciChartSurface.create(overviewContainerId, {
+            theme: chartTheme,
+          });
+          
+          if (isCancelled) {
+            minimapSurface.delete();
+            return;
+          }
+          
+          // Configure axes for minimap
+          const xAxis = new DateTimeNumericAxis(minimapWasm, {
+            axisTitle: '',
+            drawLabels: false,
+            drawMinorTickLines: false,
+            drawMajorTickLines: false,
+            drawMajorGridLines: false,
+            drawMinorGridLines: false,
+            autoRange: EAutoRange.Always,
+          });
+          
+          const yAxis = new NumericAxis(minimapWasm, {
+            axisTitle: '',
+            drawLabels: false,
+            drawMinorTickLines: false,
+            drawMajorTickLines: false,
+            drawMajorGridLines: false,
+            drawMinorGridLines: false,
+            autoRange: EAutoRange.Always,
+          });
+          
+          minimapSurface.xAxes.add(xAxis);
+          minimapSurface.yAxes.add(yAxis);
+          
+          // Create cloned DataSeries by copying from source
+          const clonedDataSeries = new XyDataSeries(minimapWasm, {
+            fifoCapacity: pointCount + 100000,
+            isSorted: true,
+            containsNaN: false,
+          });
+          
+          // Copy data from source DataSeries to cloned series
+          const nativeX = sourceDataSeries.getNativeXValues();
+          const nativeY = sourceDataSeries.getNativeYValues();
+          
+          let copiedCount = 0;
+          if (nativeX.size() > 0) {
+            // Convert to arrays and append
+            const xArr: number[] = [];
+            const yArr: number[] = [];
+            for (let i = 0; i < nativeX.size(); i++) {
+              xArr.push(nativeX.get(i));
+              yArr.push(nativeY.get(i));
+            }
+            clonedDataSeries.appendRange(xArr, yArr);
+            copiedCount = xArr.length;
+          }
+          
+          // Add line series for minimap
+          const lineSeries = new FastLineRenderableSeries(minimapWasm, {
+            dataSeries: clonedDataSeries,
+            stroke: '#4CAF50',
+            strokeThickness: 1,
+          });
+          minimapSurface.renderableSeries.add(lineSeries);
+          
+          // Add overview range selector modifier
+          minimapSurface.chartModifiers.add(new ZoomPanModifier({ enableZoom: false }));
+          minimapSurface.chartModifiers.add(new MouseWheelZoomModifier());
+          
+          // Store reference for updates and cleanup
+          (refs as any).minimapSurface = minimapSurface;
+          (refs as any).minimapDataSeries = clonedDataSeries;
+          (refs as any).minimapSourceSeriesId = minimapSourceSeriesId;
+          
+          lastOverviewSourceRef.current = {
+            surfaceId: minimapSurface.id,
             minimapSourceSeries: minimapSourceSeriesId
           };
           
-          if (refs.overview) {
-            const lastSource = lastOverviewSourceRef.current;
-            // Recreate if minimap source series changed or if we can't determine the surface
-            if (lastSource?.minimapSourceSeries !== currentSourceInfo.minimapSourceSeries ||
-                (lastSource?.minimapSourceSeries && !currentSourceInfo.minimapSourceSeries) ||
-                (!lastSource?.minimapSourceSeries && currentSourceInfo.minimapSourceSeries)) {
-              needsRecreate = true;
-              console.log('[MultiPaneChart] Minimap source series changed, recreating overview', {
-                old: lastSource?.minimapSourceSeries,
-                new: currentSourceInfo.minimapSourceSeries
-              });
-            } else if (lastSource?.surfaceId && currentSourceInfo.surfaceId && 
-                       lastSource.surfaceId !== currentSourceInfo.surfaceId) {
-              needsRecreate = true;
-              console.log('[MultiPaneChart] Source surface changed, recreating overview', {
-                old: lastSource.surfaceId,
-                new: currentSourceInfo.surfaceId
-              });
+          console.log('[MultiPaneChart] Standalone minimap created with', copiedCount, 'points');
+          
+          // Hide waiting overlay if we have data
+          const waitingOverlay = document.getElementById('overview-chart-waiting');
+          if (waitingOverlay) {
+            waitingOverlay.style.display = copiedCount > 0 ? 'none' : 'flex';
+          }
+          
+        } else {
+          // === LEGACY/SINGLE-SURFACE MODE: Use SciChartOverview with shared DataSeries ===
+          
+          // Determine which surface to use for overview
+          let sourceSurface: SciChartSurface | null = null;
+          
+          if (plotLayout?.minimapSourceSeries) {
+            // Dynamic layout with minimap - find the surface that contains the source series
+            const sourceSeriesAssignment = plotLayout.layout.series.find(
+              s => s.series_id === minimapSourceSeriesId
+            );
+            if (sourceSeriesAssignment?.pane) {
+              const paneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane);
+              if (paneSurface) {
+                sourceSurface = paneSurface.surface;
+              }
+            }
+            
+            // Fallback to dataSeriesStore
+            if (!sourceSurface && minimapSourceSeriesId) {
+              const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+              if (sourceSeriesEntry?.paneId) {
+                const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
+                if (paneSurface) {
+                  sourceSurface = paneSurface.surface;
+                }
+              }
             }
           }
           
-          // If overview exists but source changed, delete and recreate
+          // Fallback to legacy tickSurface
+          if (!sourceSurface && refs.tickSurface) {
+            sourceSurface = refs.tickSurface;
+          }
+          
+          if (!sourceSurface) {
+            console.warn('[MultiPaneChart] Cannot create overview: no source surface available');
+            return;
+          }
+          
+          // Wait for series to be on surface
+          let retries = 0;
+          const maxRetries = 10;
+          while (retries < maxRetries && sourceSurface.renderableSeries.size() === 0 && !isCancelled) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            retries++;
+          }
+          
+          if (isCancelled) return;
+          
+          if (sourceSurface.renderableSeries.size() === 0) {
+            console.log('[MultiPaneChart] Skipping overview creation: source surface has no series');
+            return;
+          }
+          
+          // Create/recreate overview if needed
+          const currentSourceInfo = {
+            surfaceId: sourceSurface?.id,
+            minimapSourceSeries: minimapSourceSeriesId
+          };
+          
+          let needsRecreate = false;
+          if (refs.overview) {
+            const lastSource = lastOverviewSourceRef.current;
+            if (lastSource?.minimapSourceSeries !== currentSourceInfo.minimapSourceSeries ||
+                lastSource?.surfaceId !== currentSourceInfo.surfaceId) {
+              needsRecreate = true;
+            }
+          }
+          
           if (refs.overview && needsRecreate) {
             try {
-              // CRITICAL: Suspend updates on source surfaces before deleting overview
-              // This prevents "dataSeries has been deleted" errors from render loop
-              for (const pane of refs.paneSurfaces.values()) {
-                try {
-                  pane.surface.suspendUpdates();
-                } catch (e) {
-                  // Ignore if surface is already suspended or deleted
-                }
-              }
-              
-              // Wait for render loop to fully stop
-              await new Promise(resolve => requestAnimationFrame(resolve));
-              await new Promise(resolve => requestAnimationFrame(resolve));
-              
               refs.overview.delete();
               refs.overview = null;
               lastOverviewSourceRef.current = null;
-              
-              // Resume updates after overview is deleted
-              for (const pane of refs.paneSurfaces.values()) {
-                try {
-                  pane.surface.resumeUpdates();
-                } catch (e) {
-                  // Ignore if surface is already resumed or deleted
-                }
-              }
             } catch (e) {
               console.warn('[MultiPaneChart] Error deleting old overview:', e);
-              // Try to resume updates even on error
-              for (const pane of refs.paneSurfaces.values()) {
-                try {
-                  pane.surface.resumeUpdates();
-                } catch (resumeError) {
-                  // Ignore
-                }
-              }
             }
           }
           
-          // Create new overview if it doesn't exist or was recreated
           if (!refs.overview) {
-            // CRITICAL: Wait for series to be added to the surface before creating overview
-            // When layout changes, series might not be on the surface yet
-            let retries = 0;
-            const maxRetries = 10; // 10 retries * 200ms = 2 seconds max wait
-            let surfaceHasSeries = false;
-            
-            while (retries < maxRetries && !surfaceHasSeries && !isCancelled) {
-              // Check if source surface has any renderable series
-              const seriesCount = sourceSurface.renderableSeries.size();
-              surfaceHasSeries = seriesCount > 0;
-              
-              if (!surfaceHasSeries) {
-                // Wait a bit for series to be added
-                await new Promise(resolve => setTimeout(resolve, 200));
-                retries++;
-                
-                // Re-check source surface in case it changed during wait
-                if (plotLayout?.minimapSourceSeries) {
-                  minimapSourceSeriesId = plotLayout.minimapSourceSeries;
-                  
-                  // Try layout first
-                  const sourceSeriesAssignment = plotLayout.layout.series.find(
-                    s => s.series_id === minimapSourceSeriesId
-                  );
-                  if (sourceSeriesAssignment?.pane) {
-                    const paneSurface = refs.paneSurfaces.get(sourceSeriesAssignment.pane);
-                    if (paneSurface && paneSurface.surface !== sourceSurface) {
-                      sourceSurface = paneSurface.surface;
-                    }
-                  } else {
-                    // Fallback to dataSeriesStore
-                    const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-                    if (sourceSeriesEntry?.paneId) {
-                      const paneSurface = refs.paneSurfaces.get(sourceSeriesEntry.paneId);
-                      if (paneSurface && paneSurface.surface !== sourceSurface) {
-                        sourceSurface = paneSurface.surface;
-                      }
-                    }
-                  }
-                } else if (!sourceSurface && refs.tickSurface) {
-                  sourceSurface = refs.tickSurface;
-                }
-              }
-            }
-            
-            if (isCancelled) return;
-            
-            // Only create overview if source surface has series
-            // If no series after retries, skip and let the refresh mechanism handle it later
-            if (!surfaceHasSeries) {
-              console.log('[MultiPaneChart] Skipping overview creation: source surface has no series after waiting');
-              return;
-            }
-            
-            if (retries > 0) {
-              console.log(`[MultiPaneChart] Waited ${retries * 200}ms for series to be added to source surface before creating overview`);
-            }
-            
             const overview = await SciChartOverview.create(sourceSurface, overviewContainerId, {
               theme: chartTheme,
             });
             
             if (!isCancelled) {
               refs.overview = overview;
-              overviewContainerIdRef.current = overviewContainerId; // Store the ID used
+              overviewContainerIdRef.current = overviewContainerId;
+              lastOverviewSourceRef.current = currentSourceInfo;
               
-              // Track the source info for future comparisons
-              lastOverviewSourceRef.current = {
-                surfaceId: sourceSurface?.id || (sourceSurface as any)?._id || undefined,
-                minimapSourceSeries: minimapSourceSeriesId
-              };
-              
-              // Check if minimap source series has data and show/hide "Waiting for Data" overlay
+              // Update waiting overlay
               if (minimapSourceSeriesId) {
                 const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-                const hasData = sourceSeriesEntry?.dataSeries && 
-                  (sourceSeriesEntry.dataSeries.count() > 0 || 
-                   (sourceSeriesEntry.dataSeries as any).xValues?.length > 0);
-                
+                const hasData = sourceSeriesEntry?.dataSeries && sourceSeriesEntry.dataSeries.count() > 0;
                 const waitingOverlay = document.getElementById('overview-chart-waiting');
                 if (waitingOverlay) {
                   waitingOverlay.style.display = hasData ? 'none' : 'flex';
                 }
               }
-              
-              // Note: SciChartOverview automatically shows all series on the source surface
-              // If minimapSourceSeries is specified, we've already selected the correct surface
-              // that contains that series, so it will be shown automatically
-             
             } else {
-              // Cleanup if cancelled during creation
               try {
                 overview.delete();
               } catch (e) {
@@ -1473,8 +1477,6 @@ export function useMultiPaneChart({
               }
             }
           }
-        } else {
-          console.warn(`[MultiPaneChart] Overview container not found: ${overviewContainerId}`);
         }
       } catch (e) {
         console.warn('[MultiPaneChart] Failed to create/show overview:', e);
@@ -1484,15 +1486,25 @@ export function useMultiPaneChart({
     handleOverview();
 
     // NO CLEANUP HERE - we only delete on component unmount (see main useEffect cleanup)
-    // This prevents the overview from being deleted when overviewContainerId changes
-    // Note: plotLayout is included so overview recreates when layout changes
-    // Note: overviewNeedsRefresh triggers recreation when series are added
   }, [overviewContainerId, isReady, plotLayout, overviewNeedsRefresh]);
 
   // Separate cleanup effect that only runs on component unmount
   useEffect(() => {
     return () => {
       const refs = chartRefs.current;
+      
+      // Cleanup standalone minimap surface (for multi_surface layouts)
+      if ((refs as any).minimapSurface) {
+        try {
+          ((refs as any).minimapSurface as SciChartSurface).delete();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        (refs as any).minimapSurface = null;
+        (refs as any).minimapDataSeries = null;
+        (refs as any).minimapSourceSeriesId = null;
+      }
+      
       // Only delete overview on component unmount (not when toggling)
       // This ensures DataSeries are not deleted while main chart is still using them
       if (refs.overview && refs.tickSurface) {
@@ -3059,6 +3071,29 @@ export function useMultiPaneChart({
       // Resume all surfaces - this triggers a single batched redraw instead of N redraws
       for (const surface of suspendedSurfaces) {
         try { surface.resumeUpdates(); } catch (e) {}
+      }
+    }
+    
+    // Update standalone minimap if it exists (for multi_surface layouts)
+    const minimapDataSeries = (refs as any).minimapDataSeries as XyDataSeries | null;
+    const minimapSourceSeriesId = (refs as any).minimapSourceSeriesId as string | null;
+    if (minimapDataSeries && minimapSourceSeriesId) {
+      // Get the batch for the minimap source series
+      const minimapBatch = xyBatches.get(minimapSourceSeriesId);
+      if (minimapBatch && minimapBatch.x.length > 0) {
+        try {
+          const minimapSurface = (refs as any).minimapSurface as SciChartSurface | null;
+          if (minimapSurface) {
+            minimapSurface.suspendUpdates();
+            try {
+              minimapDataSeries.appendRange(minimapBatch.x, minimapBatch.y);
+            } finally {
+              minimapSurface.resumeUpdates();
+            }
+          }
+        } catch (e) {
+          // Ignore minimap update errors
+        }
       }
     }
     
