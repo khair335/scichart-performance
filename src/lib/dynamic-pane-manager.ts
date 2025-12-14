@@ -120,6 +120,25 @@ export class DynamicPaneManager {
 
     this.verticalGroup = new SciChartVerticalGroup();
 
+    // CRITICAL: Patch MouseManager to filter out undefined/null subCharts
+    // This prevents "Cannot read properties of undefined (reading 'isOver')" errors
+    try {
+      const mouseManager = (this.parentSurface as any).mouseManager;
+      if (mouseManager && mouseManager.updateSubCharts) {
+        const originalUpdateSubCharts = mouseManager.updateSubCharts.bind(mouseManager);
+        mouseManager.updateSubCharts = function(...args: any[]) {
+          // Filter out undefined/null subCharts before processing
+          if (this.subCharts && Array.isArray(this.subCharts)) {
+            this.subCharts = this.subCharts.filter((chart: any) => chart != null);
+          }
+          return originalUpdateSubCharts(...args);
+        };
+      }
+    } catch (e) {
+      // Ignore if patching fails - not critical
+      console.warn('[DynamicPaneManager] Could not patch MouseManager:', e);
+    }
+
     // Wait for the rendering context to be fully ready
     // The parent surface needs time to initialize its WebGL context and render surface
     // Force an initial render to ensure all contexts are initialized
@@ -369,28 +388,9 @@ export class DynamicPaneManager {
 
       surface = subSurface as SciChartSurface;
 
-      // Wait for the subsurface rendering context to be ready
-      // This is critical - the subsurface needs time to initialize its rendering context
-      // Poll for the renderSurface to be ready with text measurement capabilities
-      let attempts = 0;
-      const maxAttempts = 100; // 100 attempts * 20ms = 2 seconds max wait
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 20));
-        // Check if the rendering context is ready by checking for renderSurface
-        const renderSurface = (surface as any).renderSurface;
-        if (renderSurface && renderSurface.context2D) {
-          // Context is ready
-          break;
-        }
-        attempts++;
-      }
-
-      if (attempts >= maxAttempts) {
-        console.warn('[DynamicPaneManager] Subsurface rendering context did not initialize in time');
-      }
-
-      // Additional animation frames for safety - must be done BEFORE resumeUpdates
-      await new Promise(resolve => requestAnimationFrame(resolve));
+      // Wait briefly for the subsurface to initialize
+      // Don't wait too long - SciChart will handle context initialization asynchronously
+      // The surface exists, which is enough to proceed with configuration
       await new Promise(resolve => requestAnimationFrame(resolve));
       await new Promise(resolve => requestAnimationFrame(resolve));
 
@@ -401,6 +401,7 @@ export class DynamicPaneManager {
 
     // CRITICAL: Suspend updates while configuring axes and modifiers
     // This prevents the render loop from accessing partially configured surfaces
+    // Keep suspended until axes are fully configured and context is verified
     surface.suspendUpdates();
     
     let xAxis: DateTimeNumericAxis;
@@ -444,6 +445,9 @@ export class DynamicPaneManager {
 
       surface.xAxes.add(xAxis);
       surface.yAxes.add(yAxis);
+      
+      // Give one more frame for axes to be fully configured
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       // Add chart modifiers for zoom/pan interaction
       // CRITICAL: Add axis drag modifiers FIRST for axis stretching/shrinking
@@ -572,6 +576,40 @@ export class DynamicPaneManager {
         pane.surface.renderableSeries.clear();
       } catch (e) {
         // Ignore errors silently
+      }
+
+      // CRITICAL: Remove subsurface from parent's subCharts array before deleting
+      // This prevents MouseManager from accessing undefined subCharts
+      if (this.parentSurface) {
+        try {
+          // Access the parent surface's subCharts array and remove this subsurface
+          const parentSubCharts = (this.parentSurface as any).subCharts;
+          if (parentSubCharts && Array.isArray(parentSubCharts)) {
+            const index = parentSubCharts.indexOf(pane.surface);
+            if (index !== -1) {
+              parentSubCharts.splice(index, 1);
+            }
+          }
+          
+          // Also try to access via mouseManager if available
+          const mouseManager = (this.parentSurface as any).mouseManager;
+          if (mouseManager) {
+            // Clear any hover state for this subsurface
+            if (mouseManager.subCharts && Array.isArray(mouseManager.subCharts)) {
+              const index = mouseManager.subCharts.indexOf(pane.surface);
+              if (index !== -1) {
+                mouseManager.subCharts.splice(index, 1);
+              }
+            }
+            
+            // Clear hover state to prevent isOver errors
+            if (mouseManager.hoveredSubChart === pane.surface) {
+              mouseManager.hoveredSubChart = null;
+            }
+          }
+        } catch (e) {
+          // Ignore - subCharts might not be accessible or already cleaned up
+        }
       }
 
       // Delete surface (DataSeries are NOT deleted - they're managed separately)
@@ -724,6 +762,31 @@ export class DynamicPaneManager {
     await new Promise(resolve => requestAnimationFrame(resolve));
     // CRITICAL: Additional delay for WASM to fully process pending events
     await new Promise(resolve => setTimeout(resolve, 200));
+
+    // CRITICAL: Clean up parent surface's subCharts array and MouseManager references
+    // This prevents MouseManager from accessing deleted subCharts
+    if (parentToDelete) {
+      try {
+        // Clear subCharts array
+        const parentSubCharts = (parentToDelete as any).subCharts;
+        if (parentSubCharts && Array.isArray(parentSubCharts)) {
+          parentSubCharts.length = 0; // Clear the array
+        }
+        
+        // Clear MouseManager references
+        const mouseManager = (parentToDelete as any).mouseManager;
+        if (mouseManager) {
+          if (mouseManager.subCharts && Array.isArray(mouseManager.subCharts)) {
+            mouseManager.subCharts.length = 0; // Clear the array
+          }
+          if (mouseManager.hoveredSubChart) {
+            mouseManager.hoveredSubChart = null;
+          }
+        }
+      } catch (e) {
+        // Ignore - might not be accessible
+      }
+    }
 
     // Clear vertical group reference - surfaces will be cleaned up by delete()
     // SciChartVerticalGroup doesn't have a remove method, so just nullify the reference

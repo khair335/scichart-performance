@@ -60,6 +60,7 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
   }, []);
 
   const handleRegistry = useCallback((rows: RegistryRow[]) => {
+    console.log(`[useWebSocketFeed] 📋 Registry updated: ${rows.length} series`, rows.map(r => r.id).slice(0, 5));
     setRegistry(rows);
   }, []);
 
@@ -70,9 +71,15 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     
     // Handle session completion (test_done event from server)
     if (evt.type === 'test_done') {
-      console.log('[WebSocket] Session complete - server finished sending data');
-      setState(prev => ({ ...prev, sessionComplete: true, stage: 'complete' }));
+      console.log('[WebSocket] ✅ Session complete - server finished sending data, pausing feed');
+      setState(prev => ({ ...prev, sessionComplete: true, stage: 'complete', connected: false }));
       onSessionCompleteRef.current?.();
+      
+      // CRITICAL: Disable auto-reconnect to prevent reloading history
+      // The client should have already done this, but ensure it here too
+      if (clientRef.current) {
+        clientRef.current.setAutoReconnect(false);
+      }
     }
   }, []);
 
@@ -92,12 +99,41 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     const client = new WsFeedClient({
       url,
       storage: storage,
+      autoReconnect: true, // Enable auto-reconnect for better reliability
+      autoReconnectInitialDelayMs: 500, // Faster initial retry (500ms instead of 1000ms)
+      autoReconnectMaxDelayMs: 5000, // Cap at 5 seconds instead of 30 seconds for faster reconnection
       onSamples: (samples) => {
         onSamplesRef.current(samples);
       },
       onStatus: handleStatus,
       onRegistry: handleRegistry,
-      onEvent: handleEvent,
+      onEvent: (evt) => {
+        handleEvent(evt);
+        
+        // Handle server restart detection - reset cursor if server sequence numbers are lower
+        if (evt.type === 'init_begin') {
+          const minSeq = evt.min_seq as number;
+          const wmSeq = evt.wm_seq as number;
+          const lastSeq = client.getLastSeq();
+          
+          // If server's minSeq or wmSeq is lower than our stored lastSeq,
+          // it means the server has restarted and sequence numbers have reset
+          if (lastSeq > 0 && (minSeq < lastSeq || wmSeq < lastSeq)) {
+            console.log(`[WebSocket] Server restart detected: minSeq=${minSeq}, wmSeq=${wmSeq}, lastSeq=${lastSeq}, resetting cursor`);
+            client.resetCursor();
+          }
+        }
+        
+        // Log reconnect attempts for debugging
+        if (evt.type === 'reconnect_scheduled') {
+          console.log('[WebSocket] Reconnect scheduled:', evt);
+        }
+        
+        // Log decode errors for debugging
+        if (evt.type === 'decode_error') {
+          console.warn('[WebSocket] Decode error:', evt);
+        }
+      },
     });
 
     client.connect();

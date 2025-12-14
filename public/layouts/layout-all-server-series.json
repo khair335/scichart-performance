@@ -1,0 +1,255 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [4, 3],
+  "min_height": 1200,
+  "xAxis": {
+    "defaultRange": {
+      "mode": "session"
+    }
+  },
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "pane": "tick-pane"
+    }
+  },
+  "panes": [
+    {
+      "id": "tick-pane",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 3,
+      "title": "Price & Moving Averages",
+      "overlays": {
+        "hlines": [
+          {
+            "id": "support",
+            "y": 4500,
+            "label": "Support",
+            "style": {
+              "stroke": "#2ECC71",
+              "strokeThickness": 2,
+              "strokeDashArray": [5, 5]
+            }
+          },
+          {
+            "id": "resistance",
+            "y": 4600,
+            "label": "Resistance",
+            "style": {
+              "stroke": "#E74C3C",
+              "strokeThickness": 2,
+              "strokeDashArray": [5, 5]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "ohlc-1s-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 1s"
+    },
+    {
+      "id": "ohlc-5s-pane",
+      "row": 1,
+      "col": 1,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 5s"
+    },
+    {
+      "id": "ohlc-15s-pane",
+      "row": 1,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC 15s"
+    },
+    {
+      "id": "bar-indicators-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 2,
+      "title": "Bar Indicators (1s bars)"
+    },
+    {
+      "id": "pnl-pane",
+      "row": 2,
+      "col": 2,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy PnL",
+      "overlays": {
+        "hlines": [
+          {
+            "id": "zero",
+            "y": 0,
+            "label": "0",
+            "style": {
+              "stroke": "#95A5A6",
+              "strokeThickness": 1,
+              "strokeDashArray": [3, 3]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:sma_5",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FF6B6B",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_10",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#F48420",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_20",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FF9800",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_40",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#FFC107",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_80",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#9B59B6",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_160",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#3498DB",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_320",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#1ABC9C",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:sma_640",
+      "pane": "tick-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#34495E",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:1000",
+      "pane": "ohlc-1s-pane",
+      "type": "FastCandlestickRenderableSeries",
+      "style": {
+        "upFillColor": "#089981",
+        "downFillColor": "#F23645",
+        "upStrokeColor": "#089981",
+        "downStrokeColor": "#F23645"
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:5000",
+      "pane": "ohlc-5s-pane",
+      "type": "FastCandlestickRenderableSeries",
+      "style": {
+        "upFillColor": "#089981",
+        "downFillColor": "#F23645",
+        "upStrokeColor": "#089981",
+        "downStrokeColor": "#F23645"
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:15000",
+      "pane": "ohlc-15s-pane",
+      "type": "FastCandlestickRenderableSeries",
+      "style": {
+        "upFillColor": "#089981",
+        "downFillColor": "#F23645",
+        "upStrokeColor": "#089981",
+        "downStrokeColor": "#F23645"
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:1000:sma_5",
+      "pane": "bar-indicators-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#E91E63",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:1000:sma_10",
+      "pane": "bar-indicators-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#9C27B0",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:alpha:pnl",
+      "pane": "pnl-pane",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#4CAF50",
+        "strokeThickness": 2
+      }
+    }
+  ],
+  "strategy_markers": {
+    "exclude_panes": ["ohlc-1s-pane", "ohlc-5s-pane", "ohlc-15s-pane", "pnl-pane"]
+  },
+  "meta": {
+    "version": "1.0",
+    "description": "Comprehensive layout including all series sent by the server: ticks, all SMAs (5, 10, 20, 40, 80, 160, 320, 640), OHLC bars (1s, 5s, 15s), bar indicators, and strategy PnL"
+  }
+}
+

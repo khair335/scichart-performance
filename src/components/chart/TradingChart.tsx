@@ -938,7 +938,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   }, [handleLoadLayout]);
 
   // Treat sessionComplete as a "connected" final state to avoid auto-reload overlays
-  const isConnected = demoMode || feedState.sessionComplete || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta' || feedState.stage === 'complete';
+  // Also include 'connecting' as a valid state to avoid showing overlay during connection attempts
+  const isConnected = demoMode || feedState.sessionComplete || feedState.stage === 'live' || feedState.stage === 'history' || feedState.stage === 'delta' || feedState.stage === 'complete' || feedState.stage === 'connecting';
   const currentStage = demoMode ? 'demo' : feedState.stage;
   
   // Check if min_height is set in layout (if > 0, remove overflow-hidden to allow scrolling)
@@ -1058,8 +1059,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
           className="w-full h-full"
         />
 
-        {/* Connection Status Overlay */}
-        {!isConnected && feedState.stage !== 'connecting' && (
+        {/* Connection Status Overlay - Only show when truly disconnected (not connecting) */}
+        {!isConnected && feedState.stage !== 'connecting' && feedState.stage !== 'idle' && (
           <NoConnectionOverlay
             wsUrl={wsUrl}
             onStartDemo={handleStartDemo}
