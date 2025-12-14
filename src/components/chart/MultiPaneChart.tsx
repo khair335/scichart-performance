@@ -1350,13 +1350,19 @@ export function useMultiPaneChart({
           });
           minimapSurface.renderableSeries.add(lineSeries);
           
-          // Get the main chart's current visible X range to initialize the selection
+          // Find the pane that contains the minimap source series (only this pane syncs with minimap)
+          const sourceSeriesAssignment = plotLayout?.layout.series.find(
+            s => s.series_id === minimapSourceSeriesId
+          );
+          const targetPaneId = sourceSeriesAssignment?.pane || seriesEntry.paneId;
+          
+          // Get the target pane's current visible X range to initialize the selection
           let initialSelectedArea: NumberRange | undefined;
-          const firstPaneSurface = Array.from(refs.paneSurfaces.values())[0];
-          if (firstPaneSurface?.xAxis?.visibleRange) {
+          const targetPaneSurface = targetPaneId ? refs.paneSurfaces.get(targetPaneId) : null;
+          if (targetPaneSurface?.xAxis?.visibleRange) {
             initialSelectedArea = new NumberRange(
-              firstPaneSurface.xAxis.visibleRange.min,
-              firstPaneSurface.xAxis.visibleRange.max
+              targetPaneSurface.xAxis.visibleRange.min,
+              targetPaneSurface.xAxis.visibleRange.max
             );
           }
           
@@ -1368,21 +1374,16 @@ export function useMultiPaneChart({
               // Skip if this update came from syncing TO minimap (prevent infinite loop)
               if ((refs as any).minimapSyncInProgress) return;
               
-              // Sync minimap selection to all main chart X-axes
+              // Sync minimap selection to ONLY the target pane (the one containing minimap source series)
               (refs as any).mainChartSyncInProgress = true;
               try {
-                // Update all dynamic pane surfaces
-                for (const [, paneSurface] of refs.paneSurfaces) {
-                  if (paneSurface.xAxis) {
+                const storedTargetPaneId = (refs as any).minimapTargetPaneId;
+                if (storedTargetPaneId) {
+                  const paneSurface = refs.paneSurfaces.get(storedTargetPaneId);
+                  if (paneSurface?.xAxis) {
                     paneSurface.xAxis.visibleRange = new NumberRange(area.min, area.max);
                   }
                 }
-                
-                // Update legacy surfaces if they exist
-                const tickXAxis = refs.tickSurface?.xAxes.get(0);
-                const ohlcXAxis = refs.ohlcSurface?.xAxes.get(0);
-                if (tickXAxis) tickXAxis.visibleRange = new NumberRange(area.min, area.max);
-                if (ohlcXAxis) ohlcXAxis.visibleRange = new NumberRange(area.min, area.max);
                 
                 // When user drags minimap selection, pause live mode
                 isLiveRef.current = false;
@@ -1404,6 +1405,7 @@ export function useMultiPaneChart({
           (refs as any).minimapSurface = minimapSurface;
           (refs as any).minimapDataSeries = clonedDataSeries;
           (refs as any).minimapSourceSeriesId = minimapSourceSeriesId;
+          (refs as any).minimapTargetPaneId = targetPaneId; // Store target pane ID for syncing
           (refs as any).minimapRangeSelectionModifier = rangeSelectionModifier;
           
           lastOverviewSourceRef.current = {
@@ -1552,6 +1554,7 @@ export function useMultiPaneChart({
         (refs as any).minimapSurface = null;
         (refs as any).minimapDataSeries = null;
         (refs as any).minimapSourceSeriesId = null;
+        (refs as any).minimapTargetPaneId = null;
         (refs as any).minimapRangeSelectionModifier = null;
       }
       
@@ -2514,11 +2517,16 @@ export function useMultiPaneChart({
               
               // Add user interaction detection for pan/zoom to sync minimap
               // Use mouseup/touchend to capture final range after drag completes
+              // Only sync if this pane is the minimap's target pane
               const syncMinimapSelection = () => {
                 // Use setTimeout to ensure the axis range has been updated
                 setTimeout(() => {
                   const refs = chartRefs.current;
                   if ((refs as any).mainChartSyncInProgress) return;
+                  
+                  // Only sync from the target pane (the one linked to minimap)
+                  const minimapTargetPaneId = (refs as any).minimapTargetPaneId;
+                  if (minimapTargetPaneId && minimapTargetPaneId !== paneConfig.id) return;
                   
                   const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
                   if (rangeModifier && paneSurface.xAxis?.visibleRange) {
