@@ -1215,7 +1215,7 @@ export function useMultiPaneChart({
         lastOverviewSourceRef.current = null;
       }
     };
-  }, [tickContainerId, ohlcContainerId, plotLayout]);
+  }, [tickContainerId, ohlcContainerId, plotLayout, overviewContainerId, isReady, registry]);
 
   // Handle overview/minimap creation/destruction when toggled
   // IMPORTANT: We use a separate useEffect for hide/show that doesn't trigger cleanup
@@ -3257,37 +3257,21 @@ export function useMultiPaneChart({
                 userInteractedRef.current = true;
               });
               
-              // Add user interaction detection for pan/zoom to sync minimap
-              // Use mouseup/touchend to capture final range after drag completes
-              // Only sync if this pane is the minimap's target pane
+              // Add user interaction detection for pan/zoom; we no longer sync main chart
+              // back into minimap selection to keep minimap window edges fixed where
+              // the user placed them. Minimap is controlled only by its own drag and
+              // Last X Time Window presets.
               const syncMinimapSelection = () => {
-                // Use setTimeout to ensure the axis range has been updated
                 setTimeout(() => {
-                  const refs = chartRefs.current;
-                  if ((refs as any).mainChartSyncInProgress) return;
-                  
-                  // Only sync from the target pane (the one linked to minimap)
-                  const minimapTargetPaneId = (refs as any).minimapTargetPaneId;
-                  if (minimapTargetPaneId && minimapTargetPaneId !== paneConfig.id) return;
-                  
-                  const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
-                  if (rangeModifier && paneSurface.xAxis?.visibleRange) {
-                    try {
-                      (refs as any).minimapSyncInProgress = true;
-                      rangeModifier.selectedArea = new NumberRange(
-                        paneSurface.xAxis.visibleRange.min,
-                        paneSurface.xAxis.visibleRange.max
-                      );
-                    } catch (e) {
-                      // Ignore sync errors
-                    } finally {
-                      (refs as any).minimapSyncInProgress = false;
-                    }
-                  }
+                  // Mark that the user interacted so auto-scroll does not override
+                  minimapStickyRef.current = false;
+                  isLiveRef.current = false;
+                  userInteractedRef.current = true;
                 }, 50);
               };
               
-              // Sync on mouseup (after drag completes) and on wheel (immediate)
+              // Still listen to interactions so we can pause auto-scroll, but do NOT
+              // alter the minimap selection box from main chart interactions.
               surfaceElement.addEventListener('mouseup', syncMinimapSelection, { passive: true });
               surfaceElement.addEventListener('touchend', syncMinimapSelection, { passive: true });
               surfaceElement.addEventListener('wheel', syncMinimapSelection, { passive: true });
@@ -4101,7 +4085,7 @@ export function useMultiPaneChart({
     
     if (isLive && autoScrollEnabled && latestTime > 0) {
       const now = performance.now();
-      // Use the stored minimap window width (from time window presets)
+      // Use the stored minimap window width (from time window presets or manual drag)
       const windowMs = minimapTimeWindowRef.current / 1000; // Convert to seconds for SciChart
       const X_SCROLL_THRESHOLD = 5000; // 5 seconds threshold
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
@@ -4128,22 +4112,10 @@ export function useMultiPaneChart({
         actualDataMin = latestTime - windowMs;
       }
       
-      // Check if layout specifies "session" mode - show all data from start to end
-      const defaultRangeMode = plotLayout?.xAxisDefaultRange?.mode;
-      const isSessionMode = defaultRangeMode === 'session';
-      
       // Calculate new range with right edge at latest data (sticky behavior)
       const padding = windowMs * 0.02; // 2% padding on right edge
-      let newRange: NumberRange;
-      if (isSessionMode && hasData) {
-        // Session mode: always show entire data range from first to last point
-        const sessionPadding = (actualDataMax - actualDataMin) * 0.02;
-        newRange = new NumberRange(actualDataMin - sessionPadding, actualDataMax + sessionPadding);
-      } else {
-        // Sticky mode: right edge at latest data, left edge = latest - windowMs
-        newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
-      }
-      
+      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
+
       // Update minimap selection first (this is the master in sticky mode)
       // The minimap's onSelectedAreaChanged will sync to the target pane
       const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
@@ -4906,10 +4878,12 @@ export function useMultiPaneChart({
     // Store the window size for sticky mode auto-scroll
     minimapTimeWindowRef.current = windowMs;
     
-    // Enable sticky mode - minimap right edge will follow live data
-    minimapStickyRef.current = true;
-    isLiveRef.current = true;
-    userInteractedRef.current = false;
+    // User has explicitly chosen a window; keep charts paused until they
+    // drag the minimap right edge to the far right (which will enable
+    // sticky/live mode). Do NOT force live mode here.
+    minimapStickyRef.current = false;
+    // Do not change isLiveRef here; respect current live/paused state
+    userInteractedRef.current = true;
 
     // Update minimap selection (this will sync to main chart via onSelectedAreaChanged)
     const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
