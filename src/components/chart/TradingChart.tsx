@@ -901,11 +901,12 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       zoomExtents();
       setIsLive(false); // Pause auto-scroll when viewing entire session
     } else {
-      // Set minimap to show last N minutes and enable sticky mode
-      // This will sync to the linked main chart pane
+      // Set minimap to show last N minutes; charts remain paused until
+      // user explicitly drags minimap to the right edge to enable
+      // sticky live-follow behaviour.
       const clockMs = dataClockMs || Date.now();
       setTimeWindow(minutes, clockMs);
-      setIsLive(true); // Enable live mode - minimap will auto-scroll with data
+      setIsLive(false);
     }
   }, [zoomExtents, dataClockMs, setTimeWindow]);
 
