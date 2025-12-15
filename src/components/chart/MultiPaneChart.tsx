@@ -3958,9 +3958,6 @@ export function useMultiPaneChart({
             } finally {
               minimapSurface.resumeUpdates();
             }
-            // CRITICAL: Force minimap to always show entire session (all data)
-            // Call zoomExtents to ensure X-axis covers the full data range
-            minimapSurface.zoomExtents();
           }
         } catch (e) {
           // Ignore minimap update errors
