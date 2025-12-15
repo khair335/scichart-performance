@@ -893,17 +893,19 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     setDemoRegistry([]);
   }, []);
 
-  // Handle time window selection
+  // Handle time window selection - controls minimap selection width
+  // When a preset is selected, minimap enters "sticky" mode (right edge follows live data)
   const handleTimeWindowSelect = useCallback((minutes: number) => {
     if (minutes === 0) {
       // Entire session - zoom to fit all data
       zoomExtents();
       setIsLive(false); // Pause auto-scroll when viewing entire session
     } else {
-      // Set visible range to last N minutes using the actual data clock
+      // Set minimap to show last N minutes and enable sticky mode
+      // This will sync to the linked main chart pane
       const clockMs = dataClockMs || Date.now();
       setTimeWindow(minutes, clockMs);
-      setIsLive(false); // Pause auto-scroll when user selects a time window
+      setIsLive(true); // Enable live mode - minimap will auto-scroll with data
     }
   }, [zoomExtents, dataClockMs, setTimeWindow]);
 
