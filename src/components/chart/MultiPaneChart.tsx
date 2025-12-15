@@ -1392,15 +1392,22 @@ export function useMultiPaneChart({
               // Skip if this update came from syncing TO minimap (prevent infinite loop)
               if ((refs as any).minimapSyncInProgress) return;
               
-              // Sync minimap selection to ONLY the target pane (the one containing minimap source series)
+              // Sync minimap selection to ALL panes (linked X-axes)
               (refs as any).mainChartSyncInProgress = true;
               try {
-                const storedTargetPaneId = (refs as any).minimapTargetPaneId;
-                if (storedTargetPaneId) {
-                  const paneSurface = refs.paneSurfaces.get(storedTargetPaneId);
+                // Update ALL dynamic pane X-axes (linked X-axis behavior)
+                for (const [paneId, paneSurface] of refs.paneSurfaces) {
                   if (paneSurface?.xAxis) {
                     paneSurface.xAxis.visibleRange = new NumberRange(area.min, area.max);
                   }
+                }
+                
+                // Also update legacy surfaces if they exist
+                if (refs.tickSurface?.xAxes.get(0)) {
+                  refs.tickSurface.xAxes.get(0).visibleRange = new NumberRange(area.min, area.max);
+                }
+                if (refs.ohlcSurface?.xAxes.get(0)) {
+                  refs.ohlcSurface.xAxes.get(0).visibleRange = new NumberRange(area.min, area.max);
                 }
                 
                 // Update minimap window width for sticky mode tracking
@@ -4145,10 +4152,8 @@ export function useMultiPaneChart({
           (refs as any).minimapSyncInProgress = true;
           rangeModifier.selectedArea = newRange;
           
-          // Manually sync to target pane since we're in sync mode
-          const storedTargetPaneId = (refs as any).minimapTargetPaneId;
-          if (storedTargetPaneId) {
-            const paneSurface = refs.paneSurfaces.get(storedTargetPaneId);
+          // Manually sync to ALL panes since we're in sync mode (linked X-axes)
+          for (const [paneId, paneSurface] of refs.paneSurfaces) {
             if (paneSurface?.xAxis) {
               const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
               const diff = Math.abs(currentMax - newRange.max);
@@ -4159,35 +4164,39 @@ export function useMultiPaneChart({
             }
           }
           
+          // Also sync legacy surfaces
+          if (refs.tickSurface?.xAxes.get(0)) {
+            refs.tickSurface.xAxes.get(0).visibleRange = newRange;
+          }
+          if (refs.ohlcSurface?.xAxes.get(0)) {
+            refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
+          }
+          
           (refs as any).minimapSyncInProgress = false;
         } catch (e) {
           (refs as any).minimapSyncInProgress = false;
         }
       } else {
         // Fallback: Update all X-axes directly if no minimap
-        const axesToUpdate: Array<{ axis: any; surface: any }> = [];
-        
-        if (refs.tickSurface?.xAxes.get(0)) {
-          axesToUpdate.push({ axis: refs.tickSurface.xAxes.get(0), surface: refs.tickSurface });
-        }
-        if (refs.ohlcSurface?.xAxes.get(0)) {
-          axesToUpdate.push({ axis: refs.ohlcSurface.xAxes.get(0), surface: refs.ohlcSurface });
-        }
         for (const [, paneSurface] of refs.paneSurfaces) {
           if (paneSurface.xAxis) {
-            axesToUpdate.push({ axis: paneSurface.xAxis, surface: paneSurface.surface });
+            try {
+              const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
+              const diff = Math.abs(currentMax - newRange.max);
+              if (!paneSurface.xAxis.visibleRange || diff > X_SCROLL_THRESHOLD) {
+                paneSurface.xAxis.visibleRange = newRange;
+                paneSurface.surface.invalidateElement();
+              }
+            } catch (e) {}
           }
         }
         
-        for (const { axis, surface } of axesToUpdate) {
-          try {
-            const currentMax = axis.visibleRange?.max || 0;
-            const diff = Math.abs(currentMax - newRange.max);
-            if (!axis.visibleRange || diff > X_SCROLL_THRESHOLD) {
-              axis.visibleRange = newRange;
-              surface?.invalidateElement();
-            }
-          } catch (e) {}
+        // Also sync legacy surfaces
+        if (refs.tickSurface?.xAxes.get(0)) {
+          refs.tickSurface.xAxes.get(0).visibleRange = newRange;
+        }
+        if (refs.ohlcSurface?.xAxes.get(0)) {
+          refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
         }
       }
       
