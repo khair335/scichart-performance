@@ -1565,8 +1565,8 @@ export function useMultiPaneChart({
           
           // When the range selection is moved/resized, update the linked main charts
           rangeSelectionModifier.onSelectedAreaChanged = (selectedRange: NumberRange) => {
-            if ((refs as any).minimapSyncInProgress || settingTimeWindowRef.current) {
-              return; // Prevent feedback loop
+            if (settingTimeWindowRef.current) {
+              return; // Prevent feedback loop during time window presets
             }
             applyLinkedXRange(selectedRange);
           };
@@ -1577,47 +1577,10 @@ export function useMultiPaneChart({
           // Store reference for external updates (setTimeWindow, auto-scroll, etc.)
           (refs as any).minimapRangeSelectionModifier = rangeSelectionModifier;
           
-          // Subscribe to main chart X-axis changes to update the range selection
-          // This keeps the minimap range indicator in sync when main charts are panned/zoomed directly
-          const subscribeToMainAxisChanges = (mainAxis: DateTimeNumericAxis) => {
-            return mainAxis.visibleRangeChanged.subscribe((args: any) => {
-              if ((refs as any).minimapSyncInProgress || settingTimeWindowRef.current) {
-                return; // Prevent feedback loop
-              }
-              
-              try {
-                const currentRange = mainAxis.visibleRange;
-                if (currentRange) {
-                  // Clip the range to minimap's visible range
-                  const minimapXRange = xAxis.visibleRange;
-                  if (minimapXRange) {
-                    const clippedRange = currentRange.clip(minimapXRange);
-                    const currentSelected = rangeSelectionModifier.selectedArea;
-                    
-                    // Only update if significantly different to avoid jitter
-                    if (!currentSelected || 
-                        Math.abs(currentSelected.min - clippedRange.min) > 100 ||
-                        Math.abs(currentSelected.max - clippedRange.max) > 100) {
-                      (refs as any).minimapSyncInProgress = true;
-                      rangeSelectionModifier.selectedArea = clippedRange;
-                      setTimeout(() => {
-                        (refs as any).minimapSyncInProgress = false;
-                      }, 50);
-                    }
-                  }
-                }
-              } catch (e) {
-                // Silently ignore sync errors
-              }
-            });
-          };
-          
-          // Subscribe to the target pane's X-axis (the pane containing the minimap source series)
-          let axisSubscription: any = null;
-          if (targetPaneSurface?.xAxis) {
-            axisSubscription = subscribeToMainAxisChanges(targetPaneSurface.xAxis);
-          }
-          (refs as any).minimapAxisSubscription = axisSubscription;
+          // NOTE: We do NOT subscribe to main chart X-axis changes
+          // The minimap indicator stays where user positioned it (sticky behavior)
+          // Only user dragging the indicator or time window presets should move it
+          (refs as any).minimapAxisSubscription = null;
           
           // Initialize minimap X-axis to show FULL data range
           let fullDataRange: NumberRange | undefined;
@@ -1628,14 +1591,17 @@ export function useMultiPaneChart({
             }
           }
           
-          // Set minimap to show full range
+          // Set minimap to show full range - CRITICAL: use wide range if no data yet
           if (fullDataRange) {
             xAxis.visibleRange = fullDataRange;
             console.log(`[Minimap] Initialized to show full data range: ${new Date(fullDataRange.min).toISOString()} to ${new Date(fullDataRange.max).toISOString()}`);
-          } else if (initialSelectedArea) {
-            xAxis.visibleRange = initialSelectedArea;
-          } else if (targetPaneSurface?.xAxis?.visibleRange) {
-            xAxis.visibleRange = targetPaneSurface.xAxis.visibleRange;
+          } else {
+            // No data yet - use a wide initial range that will be updated as data arrives
+            // Use the initial selected area or a sensible default
+            const now = Date.now();
+            const wideRange = new NumberRange(now - 60 * 60 * 1000, now + 5 * 60 * 1000); // Last hour + 5min buffer
+            xAxis.visibleRange = wideRange;
+            console.log(`[Minimap] No data yet, using wide initial range`);
           }
           
           // Store references for updates and cleanup
@@ -4226,22 +4192,21 @@ export function useMultiPaneChart({
                   
                   // CRITICAL: Update minimap X-axis to show full data range after new data arrives
                   // The minimap should always show all data, not just the current selection
+                  // The range indicator (OverviewRangeSelectionModifier) will stay where user put it
                   const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
                   if (minimapXAxis && minimapDataSeries.count() > 0) {
                     try {
                       const fullDataRange = minimapDataSeries.getXRange();
                       if (fullDataRange) {
-                        // Only update if the range has changed significantly (more than 1 second)
+                        // ALWAYS update minimap X-axis to show full data range (no blocking)
+                        // This ensures minimap always displays all available data
                         const currentRange = minimapXAxis.visibleRange;
-                        if (!currentRange || 
-                            Math.abs(currentRange.min - fullDataRange.min) > 1000 ||
-                            Math.abs(currentRange.max - fullDataRange.max) > 1000) {
-                          (refs as any).minimapSyncInProgress = true;
+                        const needsUpdate = !currentRange || 
+                            fullDataRange.min < currentRange.min ||
+                            fullDataRange.max > currentRange.max;
+                        
+                        if (needsUpdate) {
                           minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
-                          console.log(`[Minimap] Updated to show full data range after new data: ${new Date(fullDataRange.min).toISOString()} to ${new Date(fullDataRange.max).toISOString()}`);
-                          setTimeout(() => {
-                            (refs as any).minimapSyncInProgress = false;
-                          }, 50);
                         }
                       }
                     } catch (e) {
@@ -5525,19 +5490,14 @@ export function useMultiPaneChart({
           console.warn(`[setTimeWindow] Error forcing X-axis update on pane ${paneId}:`, e);
         }
         
-        // CRITICAL: Verify the range was actually set after minimap sync completes
-        // Wait longer to ensure minimap callback doesn't override it
+        // CRITICAL: Verify the range was actually set after a short delay
         setTimeout(() => {
-          // Skip verification if minimap is still syncing
-          if ((refs as any).minimapSyncInProgress) {
-            return;
-          }
           const actualRange = paneSurface.xAxis.visibleRange;
           if (actualRange) {
             const diff = Math.abs(actualRange.min - newRange.min) + Math.abs(actualRange.max - newRange.max);
             if (diff > 1000) { // More than 1 second difference
               console.warn(`[setTimeWindow] ⚠️ X-axis range was changed after setting! Expected: ${newRange.min}-${newRange.max}, Actual: ${actualRange.min}-${actualRange.max}`);
-              // Force it again, and also update minimap to match
+              // Force it again
               (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
               try {
                 paneSurface.xAxis.growBy = new NumberRange(0, 0);
@@ -5546,19 +5506,11 @@ export function useMultiPaneChart({
               }
               paneSurface.xAxis.visibleRange = newRange;
               paneSurface.surface.invalidateElement();
-              
-              // Also update minimap X-axis to match (official SubCharts pattern)
-              const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
-              if (minimapXAxis) {
-                (refs as any).minimapSyncInProgress = true;
-                minimapXAxis.visibleRange = newRange;
-                setTimeout(() => {
-                  (refs as any).minimapSyncInProgress = false;
-                }, 100);
-              }
+              // NOTE: Do NOT update minimap X-axis here - it should always show full data range
+              // The minimap indicator (selectedArea) is already updated separately
             }
           }
-        }, 150); // Wait for minimap sync to complete, but not too long to avoid blocking auto-scroll
+        }, 150);
         
         // CRITICAL: Invalidate surface to force re-render with new X-axis range
         // This is especially important when minimap is active, as it ensures series are visible
