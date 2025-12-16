@@ -1566,7 +1566,7 @@ export function useMultiPaneChart({
           };
 
           // When the range selection is moved/resized, update the linked main charts.
-          // If the user positions the right edge at the far-right of the data, we treat this as
+          // If the user positions the right edge at/near the far-right of the data, we treat this as
           // "follow latest" and keep live+sticky enabled.
           rangeSelectionModifier.onSelectedAreaChanged = (selectedRange: NumberRange) => {
             if (settingTimeWindowRef.current) return;
@@ -1575,7 +1575,7 @@ export function useMultiPaneChart({
             const widthMs = Math.max(1, selectedRange.max - selectedRange.min);
             minimapTimeWindowRef.current = widthMs;
 
-            // Decide whether to enable sticky mode
+            // Get current data max from minimap data series
             let dataMax = 0;
             try {
               const mmDs = (refs as any).minimapDataSeries as XyDataSeries | null;
@@ -1583,13 +1583,30 @@ export function useMultiPaneChart({
               if (xRange && isFinite(xRange.max)) dataMax = xRange.max;
             } catch {}
 
-            const stickyThresholdMs = Math.max(widthMs * 0.02, 1000); // 2% of window or 1s
-            const shouldStickRight = dataMax > 0 && Math.abs(selectedRange.max - dataMax) <= stickyThresholdMs;
+            // SMOOTHER STICKY DETECTION:
+            // Use a generous threshold - 5% of window width or minimum 2 seconds
+            // This makes it easier to "catch" the right edge from any drag position
+            const stickyThresholdMs = Math.max(widthMs * 0.05, 2000);
+            const distanceFromRight = dataMax - selectedRange.max;
+            
+            // Sticky if right edge is within threshold of data max (allows slightly past too)
+            const shouldStickRight = dataMax > 0 && distanceFromRight >= -stickyThresholdMs && distanceFromRight <= stickyThresholdMs;
 
             if (shouldStickRight) {
               minimapStickyRef.current = true;
               isLiveRef.current = true;
               userInteractedRef.current = false;
+              
+              // LIVE MODE: Immediately snap indicator's right edge to dataMax
+              // This ensures indicator is always pinned to latest when in sticky/live mode
+              const snappedRange = new NumberRange(dataMax - widthMs, dataMax);
+              applyLinkedXRange(snappedRange);
+              
+              // Update the selectedArea to reflect the snapped position
+              try {
+                rangeSelectionModifier.selectedArea = snappedRange;
+              } catch {}
+              return; // Already applied the snapped range
             } else {
               // User explicitly moved away from the right edge → pause / manual explore
               minimapStickyRef.current = false;
@@ -4582,11 +4599,13 @@ export function useMultiPaneChart({
           refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
         }
 
-        // IMPORTANT: If we're in minimap sticky mode, keep the indicator pinned to the right edge.
-        // If sticky is false, do NOT move the indicator (it should stay where the user left it).
+        // LIVE MODE: Always pin the minimap indicator's right edge to the latest timestamp
+        // This ensures the indicator follows new data as it arrives when sticky/live mode is active
         const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
         if (rangeSelectionModifier && minimapStickyRef.current && !settingTimeWindowRef.current) {
           try {
+            // Use the same range that we're applying to main charts
+            // This ensures the indicator right edge = latest data timestamp
             rangeSelectionModifier.selectedArea = newRange;
           } catch {}
         }
