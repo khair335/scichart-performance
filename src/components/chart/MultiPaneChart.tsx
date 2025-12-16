@@ -1569,7 +1569,13 @@ export function useMultiPaneChart({
           // If the user positions the right edge at/near the far-right of the data, we treat this as
           // "follow latest" and keep live+sticky enabled.
           rangeSelectionModifier.onSelectedAreaChanged = (selectedRange: NumberRange) => {
-            if (settingTimeWindowRef.current) return;
+            // CRITICAL: Do NOT block minimap changes when toolbar time window is selected
+            // Allow minimap to override toolbar selection - user interaction should always win
+            // Just reset the settingTimeWindowRef flag since user is now using minimap
+            if (settingTimeWindowRef.current) {
+              settingTimeWindowRef.current = false;
+              selectedWindowMinutesRef.current = null; // Clear toolbar selection
+            }
 
             // Remember user-chosen window width for live sticky tracking
             const widthMs = Math.max(1, selectedRange.max - selectedRange.min);
@@ -1584,9 +1590,9 @@ export function useMultiPaneChart({
             } catch {}
 
             // SMOOTHER STICKY DETECTION:
-            // Use a generous threshold - 5% of window width or minimum 2 seconds
-            // This makes it easier to "catch" the right edge from any drag position
-            const stickyThresholdMs = Math.max(widthMs * 0.05, 2000);
+            // Use a VERY generous threshold - 10% of window width or minimum 5 seconds
+            // This makes it much easier to "catch" the right edge from any drag position
+            const stickyThresholdMs = Math.max(widthMs * 0.10, 5000);
             const distanceFromRight = dataMax - selectedRange.max;
             
             // Sticky if right edge is within threshold of data max (allows slightly past too)
@@ -4601,8 +4607,10 @@ export function useMultiPaneChart({
 
         // LIVE MODE: Always pin the minimap indicator's right edge to the latest timestamp
         // This ensures the indicator follows new data as it arrives when sticky/live mode is active
+        // CRITICAL: Always update if minimapStickyRef is true - don't block based on settingTimeWindowRef
+        // because toolbar selection should also follow live data in sticky mode
         const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
-        if (rangeSelectionModifier && minimapStickyRef.current && !settingTimeWindowRef.current) {
+        if (rangeSelectionModifier && minimapStickyRef.current) {
           try {
             // Use the same range that we're applying to main charts
             // This ensures the indicator right edge = latest data timestamp
@@ -5427,6 +5435,12 @@ export function useMultiPaneChart({
     // Store the selected window size so we can continuously update it in live mode
     // This ensures the window always shows the last X minutes from the latest data
     selectedWindowMinutesRef.current = minutes;
+    
+    // CRITICAL: Enable sticky mode and live mode when time window is selected from toolbar
+    // This ensures the window follows the latest data automatically
+    minimapStickyRef.current = true;
+    isLiveRef.current = true;
+    userInteractedRef.current = false;
     
     // CRITICAL: Set flag to prevent auto-scroll from overriding during setTimeWindow
     settingTimeWindowRef.current = true;
