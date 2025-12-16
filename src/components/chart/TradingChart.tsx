@@ -375,6 +375,10 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         setCurrentTimeWindow(null);
       }
     },
+    onAutoScrollChange: (enabled) => {
+      // Sync HUD auto-scroll status with actual auto-scroll state
+      setIsLive(enabled);
+    },
     plotLayout: plotLayout, // Pass parsed layout
     zoomMode: zoomMode, // Pass zoom mode
     theme: theme, // Pass theme for chart surfaces

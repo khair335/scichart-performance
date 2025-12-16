@@ -180,6 +180,7 @@ interface MultiPaneChartProps {
   zoomMode?: 'box' | 'x-only' | 'y-only'; // Zoom mode for chart interactions
   theme?: 'dark' | 'light'; // Theme for chart surfaces
   onTimeWindowChanged?: (window: { minutes: number; startTime: number; endTime: number } | null) => void; // Callback when time window changes (from minimap or setTimeWindow)
+  onAutoScrollChange?: (enabled: boolean) => void; // Callback when auto-scroll state changes (for HUD sync)
 }
 
 // Unified DataSeries Store Entry
@@ -239,6 +240,7 @@ export function useMultiPaneChart({
   zoomMode = 'box',
   theme = 'dark',
   onTimeWindowChanged,
+  onAutoScrollChange,
 }: MultiPaneChartProps) {
   // Default UI config if not provided
   const defaultUIConfig: UIConfig = {
@@ -843,6 +845,7 @@ export function useMultiPaneChart({
   const lastOverviewSourceRef = useRef<{ surfaceId?: string; minimapSourceSeries?: string } | null>(null); // Track last overview source
   const triggerYAxisScalingOnNextBatchRef = useRef(false); // Flag to trigger Y-axis scaling after data is processed
   const yAxisManuallyStretchedRef = useRef(false); // When true, skip auto Y-axis scaling to preserve user's manual stretch
+  const prevAutoScrollStateRef = useRef<boolean | null>(null); // Track previous auto-scroll state to detect changes
   
   // Track X-axis range state before tab is hidden to restore it when visible again
   const savedXAxisRangeRef = useRef<{
@@ -4561,6 +4564,12 @@ export function useMultiPaneChart({
     // CRITICAL: Allow auto-scroll if either feedStage is 'live' OR user explicitly enabled live mode
     // This ensures auto-scroll works immediately when live mode is toggled, even if feedStage hasn't reached 'live' yet
     const shouldRunAutoScroll = (isLive || isLiveRef.current) && autoScrollEnabled && latestTime > 0;
+    
+    // Notify parent when auto-scroll state changes (for HUD sync)
+    if (onAutoScrollChange && prevAutoScrollStateRef.current !== shouldRunAutoScroll) {
+      prevAutoScrollStateRef.current = shouldRunAutoScroll;
+      onAutoScrollChange(shouldRunAutoScroll);
+    }
     
     if (shouldLog && !shouldRunAutoScroll && (hasSelectedWindow || minimapStickyRef.current)) {
       console.log(`[Auto-scroll] ⏸️ NOT RUNNING - Conditions:`, {
