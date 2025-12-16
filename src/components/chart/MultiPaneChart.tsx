@@ -4547,39 +4547,11 @@ export function useMultiPaneChart({
       const X_SCROLL_THRESHOLD = 0.1; // Small threshold (0.1 seconds) for minimap mode
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
       
-      let actualDataMax: number; // In seconds
-      let actualDataMin: number; // In seconds
-      
-      if (hasSelectedWindow) {
-        // For time windows, use latestTime directly - this is much faster
-        actualDataMax = latestTimeSec;
-        actualDataMin = latestTimeSec - windowSec;
-      } else {
-        // For minimap sticky mode, find actual data range from DataSeries (already in seconds)
-        let min = Infinity;
-        let max = 0;
-        let hasData = false;
-        for (const [, entry] of refs.dataSeriesStore) {
-          try {
-            if (entry.dataSeries.count() > 0) {
-              const xRange = entry.dataSeries.getXRange();
-              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                if (xRange.min < min) min = xRange.min;
-                if (xRange.max > max) max = xRange.max;
-                hasData = true;
-              }
-            }
-          } catch (e) {}
-        }
-        
-        if (!hasData) {
-          actualDataMax = latestTimeSec;
-          actualDataMin = latestTimeSec - windowSec;
-        } else {
-          actualDataMax = max; // Already in seconds from DataSeries
-          actualDataMin = min; // Already in seconds from DataSeries
-        }
-      }
+      // CRITICAL: Always use latestTimeSec directly for smooth scrolling
+      // Previously, minimap mode iterated through ALL series which caused choppy scrolling
+      // latestTimeSec is already available and much faster
+      const actualDataMax = latestTimeSec; // In seconds
+      const actualDataMin = latestTimeSec - windowSec; // In seconds
       
       // CRITICAL: Calculate new range with right edge at latest data (sticky behavior)
       // This ensures the window always shows the last X minutes from the latest data
