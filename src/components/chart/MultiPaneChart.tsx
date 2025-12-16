@@ -3590,17 +3590,18 @@ export function useMultiPaneChart({
               // the user placed them. Minimap is controlled only by its own drag and
               // Last X Time Window presets.
               const syncMinimapSelection = () => {
-                // CRITICAL: Only pause auto-scroll if user is actually interacting
-                // Don't block if live mode is explicitly enabled via toggle
+                // CRITICAL: In live mode, axis drag/stretch should NOT disable auto-scroll
+                // Only disable sticky mode if user is NOT in live mode
+                // This allows axis stretching while maintaining auto-scroll in live mode
                 setTimeout(() => {
-                  // Only mark as interacted if we're not in explicit live mode
-                  // This allows the live toggle to work even after user interactions
-                  minimapStickyRef.current = false;
-                  // Don't automatically set isLiveRef = false here - let the toggle control it
-                  // Only set userInteractedRef if we're not in live mode
+                  // Don't disable sticky mode or set interacted if we're in live mode
+                  // This allows axis stretching to work without breaking auto-scroll
                   if (!isLiveRef.current) {
+                    minimapStickyRef.current = false;
                     userInteractedRef.current = true;
                   }
+                  // When in live mode, keep minimapStickyRef.current unchanged
+                  // so auto-scroll continues working after axis stretch
                 }, 50);
               };
               
