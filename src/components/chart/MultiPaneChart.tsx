@@ -1565,17 +1565,23 @@ export function useMultiPaneChart({
             });
           };
 
+          // Flag to prevent re-entry when programmatically setting selectedArea
+          let updatingMinimapProgrammatically = false;
+          
           // When the range selection is moved/resized, update the linked main charts.
           // If the user positions the right edge at/near the far-right of the data, we treat this as
           // "follow latest" and keep live+sticky enabled.
           rangeSelectionModifier.onSelectedAreaChanged = (selectedRange: NumberRange) => {
+            // CRITICAL: Skip if we're programmatically updating selectedArea to prevent re-entry loop
+            if (updatingMinimapProgrammatically) {
+              return;
+            }
+            
             // CRITICAL: Do NOT block minimap changes when toolbar time window is selected
             // Allow minimap to override toolbar selection - user interaction should always win
-            // Just reset the settingTimeWindowRef flag since user is now using minimap
-            if (settingTimeWindowRef.current) {
-              settingTimeWindowRef.current = false;
-              selectedWindowMinutesRef.current = null; // Clear toolbar selection
-            }
+            // Clear toolbar selection immediately so auto-scroll uses minimap window
+            settingTimeWindowRef.current = false;
+            selectedWindowMinutesRef.current = null; // Clear toolbar selection
 
             // Remember user-chosen window width for live sticky tracking
             const widthMs = Math.max(1, selectedRange.max - selectedRange.min);
@@ -1608,10 +1614,20 @@ export function useMultiPaneChart({
               const snappedRange = new NumberRange(dataMax - widthMs, dataMax);
               applyLinkedXRange(snappedRange);
               
-              // Update the selectedArea to reflect the snapped position
+              // Update the selectedArea to reflect the snapped position (with re-entry guard)
+              updatingMinimapProgrammatically = true;
               try {
                 rangeSelectionModifier.selectedArea = snappedRange;
               } catch {}
+              updatingMinimapProgrammatically = false;
+              
+              // Notify toolbar with custom window (convert ms to minutes for display)
+              const windowMinutes = widthMs / 60000;
+              onTimeWindowChanged?.({
+                minutes: windowMinutes,
+                startTime: snappedRange.min,
+                endTime: snappedRange.max,
+              });
               return; // Already applied the snapped range
             } else {
               // User explicitly moved away from the right edge → pause / manual explore
@@ -1621,7 +1637,19 @@ export function useMultiPaneChart({
             }
 
             applyLinkedXRange(selectedRange);
+            
+            // Notify toolbar with the current range from minimap
+            const windowMinutes = widthMs / 60000;
+            onTimeWindowChanged?.({
+              minutes: windowMinutes,
+              startTime: selectedRange.min,
+              endTime: selectedRange.max,
+            });
           };
+          
+          // Store reference for re-entry guard access from auto-scroll
+          (refs as any).updatingMinimapProgrammatically = () => updatingMinimapProgrammatically;
+          (refs as any).setUpdatingMinimapProgrammatically = (val: boolean) => { updatingMinimapProgrammatically = val; };
           
           // Add the modifier to the minimap surface
           minimapSurface.chartModifiers.add(rangeSelectionModifier);
@@ -4607,15 +4635,20 @@ export function useMultiPaneChart({
 
         // LIVE MODE: Always pin the minimap indicator's right edge to the latest timestamp
         // This ensures the indicator follows new data as it arrives when sticky/live mode is active
-        // CRITICAL: Always update if minimapStickyRef is true - don't block based on settingTimeWindowRef
-        // because toolbar selection should also follow live data in sticky mode
+        // CRITICAL: Use re-entry guard to prevent triggering onSelectedAreaChanged
         const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+        const setUpdatingFlag = (refs as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
         if (rangeSelectionModifier && minimapStickyRef.current) {
           try {
+            // Set re-entry guard before updating
+            if (setUpdatingFlag) setUpdatingFlag(true);
             // Use the same range that we're applying to main charts
             // This ensures the indicator right edge = latest data timestamp
             rangeSelectionModifier.selectedArea = newRange;
-          } catch {}
+            if (setUpdatingFlag) setUpdatingFlag(false);
+          } catch {
+            if (setUpdatingFlag) setUpdatingFlag(false);
+          }
         }
       } finally {
         setTimeout(() => {

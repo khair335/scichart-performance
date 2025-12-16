@@ -205,9 +205,24 @@ export function Toolbar({
                 {currentTimeWindow && (
                   <span className="hidden md:inline text-xs font-semibold text-primary/80 ml-1">
                     {(() => {
-                      // Find the matching preset label
+                      // Find the matching preset label first
                       const preset = timeWindowPresets.find(p => p.minutes === currentTimeWindow.minutes);
-                      return preset ? preset.label : `Last ${currentTimeWindow.minutes} min`;
+                      if (preset) return preset.label;
+                      
+                      // Format custom window from minimap - show duration nicely
+                      const mins = currentTimeWindow.minutes;
+                      if (mins >= 60) {
+                        const hours = Math.floor(mins / 60);
+                        const remainingMins = Math.round(mins % 60);
+                        return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+                      } else if (mins >= 1) {
+                        const wholeMins = Math.floor(mins);
+                        const secs = Math.round((mins - wholeMins) * 60);
+                        return secs > 0 ? `${wholeMins}m ${secs}s` : `${wholeMins}m`;
+                      } else {
+                        // Less than 1 minute - show seconds
+                        return `${Math.round(mins * 60)}s`;
+                      }
                     })()}
                   </span>
                 )}
