@@ -4564,22 +4564,17 @@ export function useMultiPaneChart({
       try {
         for (const [paneId, paneSurface] of refs.paneSurfaces) {
           if (paneSurface?.xAxis) {
-            const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
-            const diff = Math.abs(currentMax - newRange.max);
-            const X_SCROLL_THRESHOLD = 100; // Small threshold (100ms) for minimap mode
-            const shouldUpdate = hasSelectedWindow || !paneSurface.xAxis.visibleRange || diff > X_SCROLL_THRESHOLD;
-
-            if (shouldUpdate) {
-              if ((paneSurface.xAxis as any).autoRange !== undefined) {
-                (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
-              }
-              try {
-                paneSurface.xAxis.growBy = new NumberRange(0, 0);
-              } catch (e) {
-                (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
-              }
-              paneSurface.xAxis.visibleRange = newRange;
+            // Always update in live/sticky mode for smooth scrolling
+            // Removed threshold check that was causing choppy scrolling when minimap was used
+            if ((paneSurface.xAxis as any).autoRange !== undefined) {
+              (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
             }
+            try {
+              paneSurface.xAxis.growBy = new NumberRange(0, 0);
+            } catch (e) {
+              (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+            }
+            paneSurface.xAxis.visibleRange = newRange;
           }
         }
 
