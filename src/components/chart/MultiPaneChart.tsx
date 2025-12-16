@@ -3467,21 +3467,10 @@ export function useMultiPaneChart({
     // Update theme when it changes
     paneManager.setTheme(chartTheme);
     
-    // Set up callback for manual X-axis changes (pan, zoom, wheel, axis drag)
-    // This disables auto-scroll/sticky mode when user manually changes the range
-    paneManager.onXAxisManualChange = (range: NumberRange) => {
-      // Disable session mode and sticky mode when user manually changes range
-      if (sessionModeRef.current || minimapStickyRef.current || isLiveRef.current) {
-        console.log('[MultiPaneChart] User manually changed X-axis, disabling auto-scroll modes');
-        sessionModeRef.current = false;
-        minimapStickyRef.current = false;
-        isLiveRef.current = false;
-        // Update minimap indicator if available
-        if (minimapTimeWindowRef.current && range) {
-          minimapTimeWindowRef.current = range.max - range.min;
-        }
-      }
-    };
+    // NOTE: X-axis range sync is handled inside DynamicPaneManager.
+    // We intentionally do NOT change live/session/sticky modes on manual pan/zoom here;
+    // the toolbar (Pause/Live) and minimap interactions control those modes.
+    paneManager.onXAxisManualChange = undefined;
 
     // For dynamic layouts, we don't need to wait for legacy isReady
     // We'll set isReady after creating the first pane
