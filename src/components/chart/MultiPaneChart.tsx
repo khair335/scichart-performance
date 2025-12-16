@@ -36,6 +36,7 @@ import {
   EExecuteOn,
   // Annotations for strategy markers
   CustomAnnotation,
+  BoxAnnotation,
   EHorizontalAnchorPoint,
   EVerticalAnchorPoint,
   ECoordinateMode,
@@ -1464,7 +1465,93 @@ export function useMultiPaneChart({
               targetPaneSurface.xAxis.visibleRange.max
             );
           }
-          
+
+          // === RANGE INDICATOR (draggable) ===
+          // Minimap shows FULL session; this box is the only thing that controls the main chart visibleRange.
+          // Store it on refs so setTimeWindow/jumpToLive can update it without touching minimap zoom.
+          const rangeIndicator = new BoxAnnotation({
+            xCoordinateMode: ECoordinateMode.DataValue,
+            yCoordinateMode: ECoordinateMode.Relative,
+            x1: initialSelectedArea?.min ?? 0,
+            x2: initialSelectedArea?.max ?? 1,
+            y1: 0,
+            y2: 1,
+            isEditable: true,
+            resizeDirections: EXyDirection.XDirection,
+            fill: 'rgba(255, 102, 0, 0.12)',
+            stroke: 'rgba(255, 102, 0, 0.9)',
+            strokeThickness: 2,
+            selectionBoxDelta: 0,
+            selectionBoxThickness: 0,
+            annotationsGripsFill: 'rgba(255, 102, 0, 0.9)',
+            annotationsGripsStroke: 'rgba(0, 0, 0, 0)',
+            annotationsGripsRadius: 3,
+          });
+
+          const applyLinkedXRange = (range: NumberRange) => {
+            // Any minimap interaction is a "paused window" selection.
+            isLiveRef.current = false;
+            minimapStickyRef.current = false;
+            userInteractedRef.current = true;
+
+            // Dynamic panes
+            for (const [, paneSurface] of refs.paneSurfaces) {
+              try {
+                (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+                paneSurface.xAxis.growBy = new NumberRange(0, 0);
+                paneSurface.xAxis.visibleRange = range;
+              } catch {}
+            }
+
+            // Legacy surfaces
+            try {
+              const tickXAxis = refs.tickSurface?.xAxes.get(0);
+              if (tickXAxis) {
+                (tickXAxis as any).autoRange = EAutoRange.Never;
+                tickXAxis.growBy = new NumberRange(0, 0);
+                tickXAxis.visibleRange = range;
+              }
+            } catch {}
+            try {
+              const ohlcXAxis = refs.ohlcSurface?.xAxes.get(0);
+              if (ohlcXAxis) {
+                (ohlcXAxis as any).autoRange = EAutoRange.Never;
+                ohlcXAxis.growBy = new NumberRange(0, 0);
+                ohlcXAxis.visibleRange = range;
+              }
+            } catch {}
+
+            // Invalidate
+            try { refs.tickSurface?.invalidateElement(); } catch {}
+            try { refs.ohlcSurface?.invalidateElement(); } catch {}
+            for (const [, paneSurface] of refs.paneSurfaces) {
+              try { paneSurface.surface.invalidateElement(); } catch {}
+            }
+
+            // Notify toolbar
+            onTimeWindowChanged?.({
+              minutes: selectedWindowMinutesRef.current ?? 0,
+              startTime: range.min,
+              endTime: range.max,
+            });
+          };
+
+          (rangeIndicator as any).onDrag = () => {
+            const x1 = Number((rangeIndicator as any).x1);
+            const x2 = Number((rangeIndicator as any).x2);
+            if (!isFinite(x1) || !isFinite(x2)) return;
+
+            const min = Math.min(x1, x2);
+            const max = Math.max(x1, x2);
+            if (max <= min) return;
+
+            applyLinkedXRange(new NumberRange(min, max));
+          };
+
+          // Add (once)
+          minimapSurface.annotations.add(rangeIndicator);
+          (refs as any).minimapRangeIndicator = rangeIndicator;
+
           // OFFICIAL PATTERN: Use bidirectional visibleRangeChanged subscriptions instead of OverviewRangeSelectionModifier
           // This follows the official SciChart SubCharts API pattern for minimap syncing
           // Helper function to sync two axes bidirectionally (from official example)
@@ -5286,15 +5373,12 @@ export function useMultiPaneChart({
         } catch (e) {}
       }
       
-      // Update minimap X-axis if it exists (official SubCharts pattern)
-      const minimapXAxis = (chartRefs.current as any).minimapXAxis as DateTimeNumericAxis | null;
-      if (minimapXAxis) {
+      // Update minimap RANGE INDICATOR (not minimap X-axis) if it exists
+      const rangeIndicator = (chartRefs.current as any).minimapRangeIndicator as BoxAnnotation | null;
+      if (rangeIndicator) {
         try {
-          (chartRefs.current as any).minimapSyncInProgress = true;
-          minimapXAxis.visibleRange = newRange;
-          setTimeout(() => {
-            (chartRefs.current as any).minimapSyncInProgress = false;
-          }, 100);
+          rangeIndicator.x1 = newRange.min;
+          rangeIndicator.x2 = newRange.max;
         } catch (e) {}
       }
       
@@ -5547,19 +5631,14 @@ export function useMultiPaneChart({
       }
     }, 0); // Use setTimeout to ensure all range changes are applied before resuming
     
-    // THEN update minimap X-axis to match (official SubCharts pattern)
-    // The bidirectional subscription will handle syncing
-    const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
-    if (minimapXAxis) {
+    // Update minimap RANGE INDICATOR (not minimap X-axis)
+    const rangeIndicator = (refs as any).minimapRangeIndicator as BoxAnnotation | null;
+    if (rangeIndicator) {
       try {
-        (refs as any).minimapSyncInProgress = true;
-        minimapXAxis.visibleRange = newRange;
-        // CRITICAL: Don't clear minimapSyncInProgress immediately - wait a bit to ensure our range sticks
-        setTimeout(() => {
-          (refs as any).minimapSyncInProgress = false;
-        }, 200);
+        rangeIndicator.x1 = newRange.min;
+        rangeIndicator.x2 = newRange.max;
       } catch (e) {
-        console.warn(`[setTimeWindow] Error updating minimap X-axis:`, e);
+        console.warn('[setTimeWindow] Error updating minimap range indicator:', e);
       }
     }
     
