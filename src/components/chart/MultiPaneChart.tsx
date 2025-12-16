@@ -1291,6 +1291,23 @@ export function useMultiPaneChart({
           }
           if ((refs as any).minimapSurface) {
             try {
+              // CRITICAL: Clean up OverviewRangeSelectionModifier BEFORE deleting surface
+              const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+              if (rangeModifier) {
+                try {
+                  // Detach the callback to prevent memory access
+                  rangeModifier.onSelectedAreaChanged = undefined as any;
+                  // Remove from chart modifiers
+                  const minimapSurf = (refs as any).minimapSurface as SciChartSurface;
+                  if (minimapSurf?.chartModifiers) {
+                    minimapSurf.chartModifiers.remove(rangeModifier);
+                  }
+                } catch (e) {
+                  console.warn('[MultiPaneChart] Error cleaning up range modifier:', e);
+                }
+                (refs as any).minimapRangeSelectionModifier = null;
+              }
+              
               // Clean up axis subscription before deleting surface
               const axisSubscription = (refs as any).minimapAxisSubscription;
               if (axisSubscription) {
@@ -1301,8 +1318,24 @@ export function useMultiPaneChart({
                 }
                 (refs as any).minimapAxisSubscription = null;
               }
-              // Delete the surface (this will also clean up the data series)
-              ((refs as any).minimapSurface as SciChartSurface).delete();
+              
+              // Suspend updates before delete to prevent render during cleanup
+              const minimapSurf = (refs as any).minimapSurface as SciChartSurface;
+              try {
+                minimapSurf.suspendUpdates();
+              } catch (e) {}
+              
+              // Clear renderableSeries and detach dataSeries references
+              try {
+                for (let i = minimapSurf.renderableSeries.size() - 1; i >= 0; i--) {
+                  const rs = minimapSurf.renderableSeries.get(i);
+                  (rs as any).dataSeries = null;
+                }
+                minimapSurf.renderableSeries.clear();
+              } catch (e) {}
+              
+              // Delete the surface
+              minimapSurf.delete();
             } catch (e) {
               console.warn('[MultiPaneChart] Error deleting old minimap surface:', e);
             }
@@ -1311,8 +1344,10 @@ export function useMultiPaneChart({
             (refs as any).minimapXAxis = null;
             (refs as any).minimapSourceSeriesId = null;
             (refs as any).minimapTargetPaneId = null;
-            (refs as any).minimapRangeSelectionModifier = null;
           }
+          
+          // CRITICAL: Wait for cleanup to complete before creating new minimap
+          await new Promise(resolve => setTimeout(resolve, 100));
           
           // Get data from dataSeriesStore for the minimap source series
           if (!minimapSourceSeriesId) {
@@ -1321,25 +1356,22 @@ export function useMultiPaneChart({
           }
           
           const seriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-          if (!seriesEntry || !seriesEntry.dataSeries) {
-            console.log('[MultiPaneChart] Minimap source series not found in dataSeriesStore, will retry when data arrives');
-            // Schedule a retry when data arrives - trigger by checking dataSeriesStore size changes
-            return;
-          }
+          const sourceDataSeries = seriesEntry?.dataSeries as XyDataSeries | undefined;
           
-          // Check if source series has data
-          const sourceDataSeries = seriesEntry.dataSeries as XyDataSeries;
+          // CRITICAL: Create minimap even if source series doesn't exist yet
+          // The minimap will be populated as data arrives via processBatchedSamples
           let pointCount = 0;
-          try {
-            pointCount = sourceDataSeries.count();
-          } catch (e) {
-            console.warn('[MultiPaneChart] Error getting source series count:', e);
-            // Continue anyway - minimap will be populated as data arrives
+          if (sourceDataSeries) {
+            try {
+              pointCount = sourceDataSeries.count();
+            } catch (e) {
+              console.warn('[MultiPaneChart] Error getting source series count:', e);
+            }
           }
           
-          // CRITICAL: Create minimap even if no data yet - it will be populated as data arrives
-          // This fixes the issue where minimap is blank initially
-          if (pointCount === 0) {
+          if (!seriesEntry) {
+            console.log('[MultiPaneChart] Minimap source series not in dataSeriesStore yet, creating empty minimap (will populate as data arrives)');
+          } else if (pointCount === 0) {
             console.log('[MultiPaneChart] Minimap source series has no data yet, creating empty minimap (will populate as data arrives)');
           } else {
             console.log(`[MultiPaneChart] Creating minimap with ${pointCount} data points from source series ${minimapSourceSeriesId}`);
@@ -1394,53 +1426,55 @@ export function useMultiPaneChart({
             containsNaN: false,
           });
           
-          // Copy data from source DataSeries to cloned series
+          // Copy data from source DataSeries to cloned series (only if source exists)
           // CRITICAL: Use safe method to avoid memory access errors
           let copiedCount = 0;
-          try {
-            const count = sourceDataSeries.count();
-            if (count > 0) {
-              // Use getNativeXValues/getNativeYValues safely with bounds checking
-              const nativeX = sourceDataSeries.getNativeXValues();
-              const nativeY = sourceDataSeries.getNativeYValues();
-              
-              // CRITICAL: Check bounds before accessing native arrays
-              if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
-                // Convert to arrays and append
-                const xArr: number[] = [];
-                const yArr: number[] = [];
-                const size = Math.min(nativeX.size(), count); // Use minimum to avoid out of bounds
-                for (let i = 0; i < size; i++) {
-                  try {
-                    const x = nativeX.get(i);
-                    const y = nativeY.get(i);
-                    if (isFinite(x) && isFinite(y)) {
-                      xArr.push(x);
-                      yArr.push(y);
+          if (sourceDataSeries) {
+            try {
+              const count = sourceDataSeries.count();
+              if (count > 0) {
+                // Use getNativeXValues/getNativeYValues safely with bounds checking
+                const nativeX = sourceDataSeries.getNativeXValues();
+                const nativeY = sourceDataSeries.getNativeYValues();
+                
+                // CRITICAL: Check bounds before accessing native arrays
+                if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
+                  // Convert to arrays and append
+                  const xArr: number[] = [];
+                  const yArr: number[] = [];
+                  const size = Math.min(nativeX.size(), count); // Use minimum to avoid out of bounds
+                  for (let i = 0; i < size; i++) {
+                    try {
+                      const x = nativeX.get(i);
+                      const y = nativeY.get(i);
+                      if (isFinite(x) && isFinite(y)) {
+                        xArr.push(x);
+                        yArr.push(y);
+                      }
+                    } catch (e) {
+                      // Skip invalid values to avoid memory errors
+                      console.warn(`[Minimap] Skipping invalid data point at index ${i}:`, e);
+                      break; // Stop if we hit an error
                     }
-                  } catch (e) {
-                    // Skip invalid values to avoid memory errors
-                    console.warn(`[Minimap] Skipping invalid data point at index ${i}:`, e);
-                    break; // Stop if we hit an error
+                  }
+                  if (xArr.length > 0) {
+                    clonedDataSeries.appendRange(xArr, yArr);
+                    copiedCount = xArr.length;
+                  }
+                } else {
+                  // Fallback: Use getXRange and iterate if native access fails
+                  console.warn('[Minimap] Native array access failed, using fallback method');
+                  const xRange = sourceDataSeries.getXRange();
+                  if (xRange) {
+                    // For large datasets, we might need to sample, but for now just log
+                    console.warn('[Minimap] Source series has data but native access failed');
                   }
                 }
-                if (xArr.length > 0) {
-                  clonedDataSeries.appendRange(xArr, yArr);
-                  copiedCount = xArr.length;
-                }
-              } else {
-                // Fallback: Use getXRange and iterate if native access fails
-                console.warn('[Minimap] Native array access failed, using fallback method');
-                const xRange = sourceDataSeries.getXRange();
-                if (xRange) {
-                  // For large datasets, we might need to sample, but for now just log
-                  console.warn('[Minimap] Source series has data but native access failed');
-                }
               }
+            } catch (e) {
+              console.error('[Minimap] Error copying data from source series:', e);
+              // Continue with empty minimap - it will be populated as new data arrives
             }
-          } catch (e) {
-            console.error('[Minimap] Error copying data from source series:', e);
-            // Continue with empty minimap - it will be populated as new data arrives
           }
           
           // Add line series for minimap
@@ -1611,52 +1645,59 @@ export function useMultiPaneChart({
           (refs as any).minimapTargetPaneId = targetPaneId;
           (refs as any).minimapXAxis = xAxis;
           
-          // CRITICAL: If minimap was created with no data, trigger a re-sync
-          if (copiedCount === 0 && sourceDataSeries.count() > 0) {
-            console.log('[MultiPaneChart] Minimap created with no data, but source has data - triggering re-sync');
-            setTimeout(() => {
-              try {
-                const currentCount = sourceDataSeries.count();
-                if (currentCount > 0 && clonedDataSeries.count() === 0) {
-                  const nativeX = sourceDataSeries.getNativeXValues();
-                  const nativeY = sourceDataSeries.getNativeYValues();
-                  if (nativeX && nativeY && nativeX.size() > 0) {
-                    const xArr: number[] = [];
-                    const yArr: number[] = [];
-                    const size = Math.min(nativeX.size(), currentCount);
-                    for (let i = 0; i < size; i++) {
-                      try {
-                        const x = nativeX.get(i);
-                        const y = nativeY.get(i);
-                        if (isFinite(x) && isFinite(y)) {
-                          xArr.push(x);
-                          yArr.push(y);
+          // CRITICAL: If minimap was created with no data but source exists, trigger a re-sync
+          if (sourceDataSeries && copiedCount === 0) {
+            try {
+              const srcCount = sourceDataSeries.count();
+              if (srcCount > 0) {
+                console.log('[MultiPaneChart] Minimap created with no data, but source has data - triggering re-sync');
+                setTimeout(() => {
+                  try {
+                    const currentCount = sourceDataSeries.count();
+                    if (currentCount > 0 && clonedDataSeries.count() === 0) {
+                      const nativeX = sourceDataSeries.getNativeXValues();
+                      const nativeY = sourceDataSeries.getNativeYValues();
+                      if (nativeX && nativeY && nativeX.size() > 0) {
+                        const xArr: number[] = [];
+                        const yArr: number[] = [];
+                        const size = Math.min(nativeX.size(), currentCount);
+                        for (let i = 0; i < size; i++) {
+                          try {
+                            const x = nativeX.get(i);
+                            const y = nativeY.get(i);
+                            if (isFinite(x) && isFinite(y)) {
+                              xArr.push(x);
+                              yArr.push(y);
+                            }
+                          } catch (e) {
+                            break;
+                          }
                         }
-                      } catch (e) {
-                        break;
+                        if (xArr.length > 0) {
+                          minimapSurface.suspendUpdates();
+                          try {
+                            clonedDataSeries.appendRange(xArr, yArr);
+                          } finally {
+                            minimapSurface.resumeUpdates();
+                          }
+                          console.log(`[MultiPaneChart] Re-synced ${xArr.length} data points to minimap`);
+                          
+                          // Update minimap X-axis to show full range after data sync
+                          const newDataRange = clonedDataSeries.getXRange();
+                          if (newDataRange) {
+                            xAxis.visibleRange = new NumberRange(newDataRange.min, newDataRange.max);
+                          }
+                        }
                       }
                     }
-                    if (xArr.length > 0) {
-                      minimapSurface.suspendUpdates();
-                      try {
-                        clonedDataSeries.appendRange(xArr, yArr);
-                      } finally {
-                        minimapSurface.resumeUpdates();
-                      }
-                      console.log(`[MultiPaneChart] Re-synced ${xArr.length} data points to minimap`);
-                      
-                      // Update minimap X-axis to show full range after data sync
-                      const newDataRange = clonedDataSeries.getXRange();
-                      if (newDataRange) {
-                        xAxis.visibleRange = new NumberRange(newDataRange.min, newDataRange.max);
-                      }
-                    }
+                  } catch (e) {
+                    console.warn('[MultiPaneChart] Error re-syncing minimap data:', e);
                   }
-                }
-              } catch (e) {
-                console.warn('[MultiPaneChart] Error re-syncing minimap data:', e);
+                }, 100);
               }
-            }, 100);
+            } catch (e) {
+              // Source may not be ready yet - that's fine, data will arrive later
+            }
           }
           
           lastOverviewSourceRef.current = {
@@ -1798,6 +1839,29 @@ export function useMultiPaneChart({
       // Cleanup standalone minimap surface (for multi_surface layouts)
       if ((refs as any).minimapSurface) {
         try {
+          // CRITICAL: Clean up OverviewRangeSelectionModifier FIRST
+          const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+          if (rangeModifier) {
+            try {
+              rangeModifier.onSelectedAreaChanged = undefined as any;
+              const minimapSurf = (refs as any).minimapSurface as SciChartSurface;
+              if (minimapSurf?.chartModifiers) {
+                minimapSurf.chartModifiers.remove(rangeModifier);
+              }
+            } catch (e) {}
+            (refs as any).minimapRangeSelectionModifier = null;
+          }
+          
+          // Clean up axis subscription
+          const axisSubscription = (refs as any).minimapAxisSubscription;
+          if (axisSubscription) {
+            try {
+              axisSubscription.unsubscribe();
+            } catch (e) {}
+            (refs as any).minimapAxisSubscription = null;
+          }
+          
+          // Now delete the surface
           ((refs as any).minimapSurface as SciChartSurface).delete();
         } catch (e) {
           // Ignore cleanup errors
@@ -1807,17 +1871,6 @@ export function useMultiPaneChart({
         (refs as any).minimapSourceSeriesId = null;
         (refs as any).minimapTargetPaneId = null;
         (refs as any).minimapXAxis = null;
-        (refs as any).minimapRangeSelectionModifier = null;
-        // Clean up axis subscription
-        const axisSubscription = (refs as any).minimapAxisSubscription;
-        if (axisSubscription) {
-          try {
-            axisSubscription.unsubscribe();
-          } catch (e) {
-            console.warn('[MultiPaneChart] Error cleaning up minimap axis subscription:', e);
-          }
-          (refs as any).minimapAxisSubscription = null;
-        }
       }
       
       // Only delete overview on component unmount (not when toggling)
