@@ -1516,9 +1516,9 @@ export function useMultiPaneChart({
           if (initialSelectedArea) {
             rangeSelectionModifier.selectedArea = initialSelectedArea;
           } else {
-            // Default to showing last 2 minutes if no initial range
-            const now = Date.now();
-            rangeSelectionModifier.selectedArea = new NumberRange(now - 2 * 60 * 1000, now);
+            // Default to showing last 2 minutes if no initial range (in SECONDS for SciChart)
+            const nowSec = Date.now() / 1000;
+            rangeSelectionModifier.selectedArea = new NumberRange(nowSec - 2 * 60, nowSec);
           }
           
           // Helper function to apply X range to all linked charts
@@ -1583,11 +1583,11 @@ export function useMultiPaneChart({
             settingTimeWindowRef.current = false;
             selectedWindowMinutesRef.current = null; // Clear toolbar selection
 
-            // Remember user-chosen window width for live sticky tracking
-            const widthMs = Math.max(1, selectedRange.max - selectedRange.min);
-            minimapTimeWindowRef.current = widthMs;
+            // Remember user-chosen window width for live sticky tracking (in SECONDS since data is in seconds)
+            const widthSec = Math.max(0.001, selectedRange.max - selectedRange.min);
+            minimapTimeWindowRef.current = widthSec * 1000; // Store as ms for ref compatibility
 
-            // Get current data max from minimap data series
+            // Get current data max from minimap data series (already in seconds)
             let dataMax = 0;
             try {
               const mmDs = (refs as any).minimapDataSeries as XyDataSeries | null;
@@ -1597,12 +1597,11 @@ export function useMultiPaneChart({
 
             // SMOOTHER STICKY DETECTION:
             // Use a VERY generous threshold - 10% of window width or minimum 5 seconds
-            // This makes it much easier to "catch" the right edge from any drag position
-            const stickyThresholdMs = Math.max(widthMs * 0.10, 5000);
+            const stickyThresholdSec = Math.max(widthSec * 0.10, 5);
             const distanceFromRight = dataMax - selectedRange.max;
             
-            // Sticky if right edge is within threshold of data max (allows slightly past too)
-            const shouldStickRight = dataMax > 0 && distanceFromRight >= -stickyThresholdMs && distanceFromRight <= stickyThresholdMs;
+            // Sticky if right edge is within threshold of data max
+            const shouldStickRight = dataMax > 0 && distanceFromRight >= -stickyThresholdSec && distanceFromRight <= stickyThresholdSec;
 
             if (shouldStickRight) {
               minimapStickyRef.current = true;
@@ -1610,8 +1609,7 @@ export function useMultiPaneChart({
               userInteractedRef.current = false;
               
               // LIVE MODE: Immediately snap indicator's right edge to dataMax
-              // This ensures indicator is always pinned to latest when in sticky/live mode
-              const snappedRange = new NumberRange(dataMax - widthMs, dataMax);
+              const snappedRange = new NumberRange(dataMax - widthSec, dataMax);
               applyLinkedXRange(snappedRange);
               
               // Update the selectedArea to reflect the snapped position (with re-entry guard)
@@ -1621,16 +1619,15 @@ export function useMultiPaneChart({
               } catch {}
               updatingMinimapProgrammatically = false;
               
-              // Notify toolbar with custom window (convert ms to minutes for display)
-              const windowMinutes = widthMs / 60000;
+              // Notify toolbar (convert seconds to ms for display)
+              const windowMinutes = widthSec / 60;
               onTimeWindowChanged?.({
                 minutes: windowMinutes,
-                startTime: snappedRange.min,
-                endTime: snappedRange.max,
+                startTime: snappedRange.min * 1000,
+                endTime: snappedRange.max * 1000,
               });
-              return; // Already applied the snapped range
+              return;
             } else {
-              // User explicitly moved away from the right edge → pause / manual explore
               minimapStickyRef.current = false;
               isLiveRef.current = false;
               userInteractedRef.current = true;
@@ -1638,12 +1635,12 @@ export function useMultiPaneChart({
 
             applyLinkedXRange(selectedRange);
             
-            // Notify toolbar with the current range from minimap
-            const windowMinutes = widthMs / 60000;
+            // Notify toolbar (convert seconds to ms for display)
+            const windowMinutes = widthSec / 60;
             onTimeWindowChanged?.({
               minutes: windowMinutes,
-              startTime: selectedRange.min,
-              endTime: selectedRange.max,
+              startTime: selectedRange.min * 1000,
+              endTime: selectedRange.max * 1000,
             });
           };
           
@@ -4103,8 +4100,12 @@ export function useMultiPaneChart({
       const sample = samples[i];
       const { series_id, t_ms, payload } = sample;
       
+      // CRITICAL: Convert milliseconds to seconds for SciChart DateTimeNumericAxis
+      // SciChart expects Unix timestamps in SECONDS, not milliseconds
+      const t_sec = t_ms / 1000;
+      
       if (t_ms > latestTime) {
-        latestTime = t_ms;
+        latestTime = t_ms; // Keep latestTime in ms for internal tracking
       }
 
       // Get series entry from store (direct O(1) lookup)
@@ -4173,7 +4174,7 @@ export function useMultiPaneChart({
             batch = { x: [], o: [], h: [], l: [], c: [], entry: seriesEntry };
             ohlcBatches.set(series_id, batch);
           }
-          batch.x.push(t_ms);
+          batch.x.push(t_sec); // Use seconds for SciChart
           batch.o.push(o);
           batch.h.push(h);
           batch.l.push(l);
@@ -4199,7 +4200,7 @@ export function useMultiPaneChart({
             batch = { x: [], y: [], entry: seriesEntry };
             xyBatches.set(series_id, batch);
           }
-          batch.x.push(t_ms);
+          batch.x.push(t_sec); // Use seconds for SciChart
           batch.y.push(value);
         }
       }
@@ -4529,29 +4530,32 @@ export function useMultiPaneChart({
       
       // CRITICAL: If a time window preset is selected, use that window size
       // Otherwise, use the stored minimap window width (from manual drag)
-      let windowMs: number;
+      // NOTE: All range calculations are in SECONDS for SciChart DateTimeNumericAxis
+      let windowSec: number;
       if (hasSelectedWindow && selectedWindowMinutesRef.current !== null) {
-        // Use the selected window size (convert minutes to milliseconds)
-        windowMs = selectedWindowMinutesRef.current * 60 * 1000;
+        // Use the selected window size (convert minutes to seconds)
+        windowSec = selectedWindowMinutesRef.current * 60;
       } else {
-        // Use the stored minimap window width (already in milliseconds)
-        windowMs = minimapTimeWindowRef.current;
+        // Use the stored minimap window width (convert from ms to seconds)
+        windowSec = minimapTimeWindowRef.current / 1000;
       }
       
       // CRITICAL: For time windows, use latestTime directly (much faster than iterating all series)
       // Only iterate through series if we don't have a time window selected
-      const X_SCROLL_THRESHOLD = 100; // Small threshold (100ms) for minimap mode, no threshold for time windows
+      // latestTime comes in as milliseconds, convert to seconds for range calculations
+      const latestTimeSec = latestTime / 1000;
+      const X_SCROLL_THRESHOLD = 0.1; // Small threshold (0.1 seconds) for minimap mode
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
       
-      let actualDataMax: number;
-      let actualDataMin: number;
+      let actualDataMax: number; // In seconds
+      let actualDataMin: number; // In seconds
       
       if (hasSelectedWindow) {
         // For time windows, use latestTime directly - this is much faster
-        actualDataMax = latestTime;
-        actualDataMin = latestTime - windowMs;
+        actualDataMax = latestTimeSec;
+        actualDataMin = latestTimeSec - windowSec;
       } else {
-        // For minimap sticky mode, find actual data range (slower but more accurate)
+        // For minimap sticky mode, find actual data range from DataSeries (already in seconds)
         let min = Infinity;
         let max = 0;
         let hasData = false;
@@ -4569,19 +4573,19 @@ export function useMultiPaneChart({
         }
         
         if (!hasData) {
-          actualDataMax = latestTime;
-          actualDataMin = latestTime - windowMs;
+          actualDataMax = latestTimeSec;
+          actualDataMin = latestTimeSec - windowSec;
         } else {
-          actualDataMax = max;
-          actualDataMin = min;
+          actualDataMax = max; // Already in seconds from DataSeries
+          actualDataMin = min; // Already in seconds from DataSeries
         }
       }
       
       // CRITICAL: Calculate new range with right edge at latest data (sticky behavior)
       // This ensures the window always shows the last X minutes from the latest data
-      // Both actualDataMax and windowMs are in milliseconds
-      const padding = windowMs * 0.02; // 2% padding on right edge
-      const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
+      // All values are in SECONDS for SciChart DateTimeNumericAxis
+      const paddingSec = windowSec * 0.02; // 2% padding on right edge
+      const newRange = new NumberRange(actualDataMax - windowSec, actualDataMax + paddingSec);
 
       // Sync all main chart X-axes (linked panes)
       (refs as any).mainChartSyncInProgress = true; // Block minimap-to-main sync during auto-scroll
@@ -5379,11 +5383,12 @@ export function useMultiPaneChart({
       interactionTimeoutRef.current = null;
     }
     
-    // Update X-axis ranges to show latest data
+    // Update X-axis ranges to show latest data (convert to SECONDS for SciChart)
     const lastTime = lastDataTimeRef.current;
     if (lastTime > 0) {
-      const windowMs = 5 * 60 * 1000;
-      const newRange = new NumberRange(lastTime - windowMs, lastTime + windowMs * 0.05);
+      const lastTimeSec = lastTime / 1000; // Convert ms to seconds
+      const windowSec = 5 * 60; // 5 minutes in seconds
+      const newRange = new NumberRange(lastTimeSec - windowSec, lastTimeSec + windowSec * 0.05);
       
       // Update all dynamic panes
       for (const [, paneSurface] of chartRefs.current.paneSurfaces) {
@@ -5481,24 +5486,24 @@ export function useMultiPaneChart({
     // CRITICAL: Use the actual latest data timestamp, not the passed dataClockMs
     // This ensures the time window includes all available data
     // Use lastDataTimeRef as primary source, fallback to dataClockMs, then Date.now()
-    const actualLatestTime = lastDataTimeRef.current > 0 
+    const actualLatestTimeMs = lastDataTimeRef.current > 0 
       ? lastDataTimeRef.current 
       : (dataClockMs > 0 ? dataClockMs : Date.now());
     
-    const windowMs = minutes * 60 * 1000;
-    // CRITICAL: Data is stored in milliseconds (t_ms), so X-axis range must also be in milliseconds
-    // DateTimeNumericAxis can handle milliseconds directly (as shown in reference code)
-    const endMs = actualLatestTime; // Keep in milliseconds
-    const startMs = endMs - windowMs;
-    const padding = windowMs * 0.02; // 2% padding on right edge
-    const newRange = new NumberRange(startMs, endMs + padding);
+    // CRITICAL: Convert to SECONDS for SciChart DateTimeNumericAxis
+    // SciChart expects Unix timestamps in seconds, not milliseconds
+    const windowSec = minutes * 60; // Window size in seconds
+    const endSec = actualLatestTimeMs / 1000; // Convert ms to seconds
+    const startSec = endSec - windowSec;
+    const paddingSec = windowSec * 0.02; // 2% padding on right edge
+    const newRange = new NumberRange(startSec, endSec + paddingSec);
     
-    console.log(`[setTimeWindow] Setting ${minutes} min window using latest timestamp ${actualLatestTime}: ${new Date(startMs).toISOString()} - ${new Date(endMs).toISOString()}`);
-    console.log(`[setTimeWindow] Window range in ms: ${startMs} to ${endMs + padding} (window size: ${windowMs}ms = ${minutes} minutes)`);
-    console.log(`[setTimeWindow] Current time: ${new Date().toISOString()}, Latest data time: ${new Date(actualLatestTime).toISOString()}`);
+    console.log(`[setTimeWindow] Setting ${minutes} min window using latest timestamp ${actualLatestTimeMs}: ${new Date(startSec * 1000).toISOString()} - ${new Date(endSec * 1000).toISOString()}`);
+    console.log(`[setTimeWindow] Window range in SECONDS: ${startSec} to ${endSec + paddingSec} (window size: ${windowSec}s = ${minutes} minutes)`);
+    console.log(`[setTimeWindow] Current time: ${new Date().toISOString()}, Latest data time: ${new Date(actualLatestTimeMs).toISOString()}`);
 
-    // Store the window size for sticky mode auto-scroll
-    minimapTimeWindowRef.current = windowMs;
+    // Store the window size for sticky mode auto-scroll (keep in SECONDS for consistency)
+    minimapTimeWindowRef.current = windowSec * 1000; // Store as ms for ref but use sec for ranges
     
     // Clear any pending interaction timeout
     if (interactionTimeoutRef.current) {
@@ -5509,7 +5514,7 @@ export function useMultiPaneChart({
     // CRITICAL: Update X-axis ranges FIRST, before updating minimap selection
     // This ensures all series are visible in the new range before the minimap updates
     // REQUIREMENT: Only change X-axis range - do NOT affect series visibility
-    console.log(`[setTimeWindow] Setting X-axis range on all panes FIRST: ${newRange.min} to ${newRange.max} (${new Date(newRange.min).toISOString()} to ${new Date(newRange.max).toISOString()})`);
+    console.log(`[setTimeWindow] Setting X-axis range on all panes FIRST: ${newRange.min} to ${newRange.max}`);
     
     // CRITICAL: Suspend updates on all surfaces to prevent SciChart from auto-updating the range
     const surfacesToResume: any[] = [];
@@ -5684,12 +5689,12 @@ export function useMultiPaneChart({
     // Mark that a time window was selected (for auto-scroll to use)
     timeWindowSelectedRef.current = true;
     
-    // Notify parent component to update Toolbar display
+    // Notify parent component to update Toolbar display (convert back to ms for UI display)
     if (onTimeWindowChanged) {
       onTimeWindowChanged({
         minutes,
-        startTime: startMs,
-        endTime: endMs + padding,
+        startTime: startSec * 1000, // Convert back to ms for display
+        endTime: (endSec + paddingSec) * 1000, // Convert back to ms for display
       });
     }
     
