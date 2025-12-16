@@ -318,6 +318,24 @@ export function useMultiPaneChart({
     if (plotLayout) {
       // Layout is already parsed, just update the manager's internal state
       layoutManagerRef.current?.loadLayout(plotLayout.layout);
+      
+      // Initialize session mode based on layout's default X-axis range
+      const defaultRange = plotLayout.xAxisDefaultRange;
+      if (defaultRange?.mode === 'session') {
+        // Enable session mode for "entire session" default
+        sessionModeRef.current = true;
+        selectedWindowMinutesRef.current = null;
+        minimapStickyRef.current = true;
+        timeWindowSelectedRef.current = true;
+        console.log('[MultiPaneChart] Initialized session mode from layout JSON');
+      } else if (defaultRange?.mode === 'lastMinutes' && defaultRange.value) {
+        // Set specific time window from layout
+        sessionModeRef.current = false;
+        selectedWindowMinutesRef.current = defaultRange.value;
+        minimapStickyRef.current = true;
+        timeWindowSelectedRef.current = true;
+        console.log(`[MultiPaneChart] Initialized ${defaultRange.value} minute window from layout JSON`);
+      }
     }
   }, [plotLayout]);
 
@@ -815,6 +833,7 @@ export function useMultiPaneChart({
   const userInteractedRef = useRef(false);
   const timeWindowSelectedRef = useRef(false); // When true, a time window preset was explicitly selected
   const selectedWindowMinutesRef = useRef<number | null>(null); // Store the selected window size in minutes (null = entire session)
+  const sessionModeRef = useRef(false); // When true, show entire session (expand with data)
   const lastDataTimeRef = useRef(0);
   const settingTimeWindowRef = useRef(false); // Flag to prevent auto-scroll from overriding during setTimeWindow
   const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -4528,36 +4547,65 @@ export function useMultiPaneChart({
     if (shouldRunAutoScroll) {
       const now = performance.now();
       
-      // CRITICAL: If a time window preset is selected, use that window size
-      // Otherwise, use the stored minimap window width (from manual drag)
-      // NOTE: All range calculations are in SECONDS for SciChart DateTimeNumericAxis
-      let windowSec: number;
-      if (hasSelectedWindow && selectedWindowMinutesRef.current !== null) {
-        // Use the selected window size (convert minutes to seconds)
-        windowSec = selectedWindowMinutesRef.current * 60;
-      } else {
-        // Use the stored minimap window width (convert from ms to seconds)
-        windowSec = minimapTimeWindowRef.current / 1000;
-      }
-      
       // CRITICAL: For time windows, use latestTime directly (much faster than iterating all series)
-      // Only iterate through series if we don't have a time window selected
       // latestTime comes in as milliseconds, convert to seconds for range calculations
       const latestTimeSec = latestTime / 1000;
       const X_SCROLL_THRESHOLD = 0.1; // Small threshold (0.1 seconds) for minimap mode
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
       
-      // CRITICAL: Always use latestTimeSec directly for smooth scrolling
-      // Previously, minimap mode iterated through ALL series which caused choppy scrolling
-      // latestTimeSec is already available and much faster
-      const actualDataMax = latestTimeSec; // In seconds
-      const actualDataMin = latestTimeSec - windowSec; // In seconds
+      let newRange: NumberRange;
       
-      // CRITICAL: Calculate new range with right edge at latest data (sticky behavior)
-      // This ensures the window always shows the last X minutes from the latest data
-      // All values are in SECONDS for SciChart DateTimeNumericAxis
-      const paddingSec = windowSec * 0.02; // 2% padding on right edge
-      const newRange = new NumberRange(actualDataMax - windowSec, actualDataMax + paddingSec);
+      // Handle "Entire Session" mode - expand to show all data from min to max
+      if (sessionModeRef.current) {
+        // Calculate actual data min/max from all series
+        let globalDataMin = Infinity;
+        let globalDataMax = -Infinity;
+        
+        for (const [seriesId, entry] of refs.dataSeriesStore) {
+          if (entry.dataSeries && entry.dataSeries.count() > 0) {
+            try {
+              const xRange = entry.dataSeries.getXRange();
+              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                globalDataMin = Math.min(globalDataMin, xRange.min);
+                globalDataMax = Math.max(globalDataMax, xRange.max);
+              }
+            } catch (e) {
+              // Continue with other series
+            }
+          }
+        }
+        
+        // If we found valid data, create range from min to max
+        if (isFinite(globalDataMin) && isFinite(globalDataMax) && globalDataMax > globalDataMin) {
+          const dataRange = globalDataMax - globalDataMin;
+          const paddingSec = dataRange * 0.02; // 2% padding
+          newRange = new NumberRange(globalDataMin - paddingSec, globalDataMax + paddingSec);
+        } else {
+          // Fallback to latestTimeSec with default window
+          const windowSec = 300; // 5 minutes default
+          newRange = new NumberRange(latestTimeSec - windowSec, latestTimeSec + 10);
+        }
+      } else {
+        // CRITICAL: If a time window preset is selected, use that window size
+        // Otherwise, use the stored minimap window width (from manual drag)
+        // NOTE: All range calculations are in SECONDS for SciChart DateTimeNumericAxis
+        let windowSec: number;
+        if (hasSelectedWindow && selectedWindowMinutesRef.current !== null) {
+          // Use the selected window size (convert minutes to seconds)
+          windowSec = selectedWindowMinutesRef.current * 60;
+        } else {
+          // Use the stored minimap window width (convert from ms to seconds)
+          windowSec = minimapTimeWindowRef.current / 1000;
+        }
+        
+        // CRITICAL: Always use latestTimeSec directly for smooth scrolling
+        const actualDataMax = latestTimeSec; // In seconds
+        
+        // CRITICAL: Calculate new range with right edge at latest data (sticky behavior)
+        // All values are in SECONDS for SciChart DateTimeNumericAxis
+        const paddingSec = windowSec * 0.02; // 2% padding on right edge
+        newRange = new NumberRange(actualDataMax - windowSec, actualDataMax + paddingSec);
+      }
 
       // Sync all main chart X-axes (linked panes)
       (refs as any).mainChartSyncInProgress = true; // Block minimap-to-main sync during auto-scroll
@@ -5428,14 +5476,20 @@ export function useMultiPaneChart({
     const refs = chartRefs.current;
     
     if (minutes <= 0) {
-      // Zero or negative means show all data (zoom extents for minimap)
-      // Disable sticky mode
-      minimapStickyRef.current = false;
-      timeWindowSelectedRef.current = false; // Clear time window flag for "Entire Session"
+      // Zero or negative means show all data (entire session mode)
+      // Enable session mode to expand with data in live mode
+      sessionModeRef.current = true;
+      minimapStickyRef.current = true; // Keep sticky so minimap follows latest data
+      timeWindowSelectedRef.current = true; // Mark as selected to trigger auto-scroll
       selectedWindowMinutesRef.current = null; // Clear selected window size
+      isLiveRef.current = true; // Enable live mode for auto-scroll
+      userInteractedRef.current = false;
       zoomExtents();
       return;
     }
+    
+    // Disable session mode when a specific time window is selected
+    sessionModeRef.current = false;
     
     // Store the selected window size so we can continuously update it in live mode
     // This ensures the window always shows the last X minutes from the latest data
