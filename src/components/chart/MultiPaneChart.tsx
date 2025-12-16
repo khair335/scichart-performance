@@ -4789,68 +4789,59 @@ export function useMultiPaneChart({
       return;
     }
     
-    // CRITICAL: Auto-zoom extents during history/delta mode to show latest data as it loads
-    // This mimics the Z key behavior automatically during history/delta loading
-    // Uses requestAnimationFrame for smooth updates (same as continuous Z key presses)
+    // CRITICAL: During history/delta mode, enable smooth X-axis scrolling to follow latest data
+    // This avoids the "shaking" caused by continuous zoomExtents() which recalculates both X and Y axes
+    // Instead, we use the same smooth scrolling approach as live mode
     if (feedStage === 'history' || feedStage === 'delta') {
-      let animationFrameId: number | null = null;
-      let lastZoomTime = 0;
-      const ZOOM_THROTTLE_MS = 100; // Throttle to 100ms for smooth but not excessive updates
+      // Enable session mode during history/delta to show all data as it loads
+      sessionModeRef.current = true;
+      isLiveRef.current = true; // Enable auto-scroll behavior
+      minimapStickyRef.current = true; // Enable sticky minimap
+      userInteractedRef.current = false; // Allow auto-scroll
       
-      const performAutoZoom = () => {
+      // Set up periodic Y-axis update (not every frame to avoid shaking)
+      let yAxisUpdateInterval: ReturnType<typeof setInterval> | null = null;
+      let lastYAxisTime = 0;
+      const Y_AXIS_UPDATE_INTERVAL = 500; // Update Y-axis every 500ms
+      
+      yAxisUpdateInterval = setInterval(() => {
         const now = performance.now();
-        
-        // Throttle zoom calls to avoid excessive updates
-        if (now - lastZoomTime < ZOOM_THROTTLE_MS) {
-          animationFrameId = requestAnimationFrame(performAutoZoom);
-          return;
-        }
+        if (now - lastYAxisTime < Y_AXIS_UPDATE_INTERVAL) return;
         
         if ((feedStageRef.current === 'history' || feedStageRef.current === 'delta') && isReady) {
-          // Only zoom if we have data and chart is ready
-          let hasData = false;
-          for (const [, entry] of chartRefs.current.dataSeriesStore) {
-            if (entry.dataSeries && entry.dataSeries.count() > 0) {
-              hasData = true;
-              break;
+          const refs = chartRefs.current;
+          
+          // Suspend all surfaces for batched Y-axis update
+          const surfaces: SciChartSurface[] = [];
+          for (const [, paneSurface] of refs.paneSurfaces) {
+            if (paneSurface.surface) surfaces.push(paneSurface.surface);
+          }
+          if (refs.tickSurface) surfaces.push(refs.tickSurface);
+          if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
+          
+          for (const surface of surfaces) {
+            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
+          }
+          
+          try {
+            // Only zoom Y-axis extents (not X), which avoids horizontal shaking
+            for (const surface of surfaces) {
+              try { surface.zoomExtentsY(); } catch (e) { /* ignore */ }
+            }
+          } finally {
+            for (const surface of surfaces) {
+              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
             }
           }
           
-          if (hasData) {
-            // Call zoomExtents directly on all surfaces for smooth updates
-            for (const [paneId, paneSurface] of chartRefs.current.paneSurfaces) {
-              try {
-                paneSurface.surface.zoomExtents();
-              } catch (e) {
-                // Silently ignore errors during rapid updates
-              }
-            }
-            // Also zoom legacy surfaces if they exist
-            try {
-              chartRefs.current.tickSurface?.zoomExtents();
-              chartRefs.current.ohlcSurface?.zoomExtents();
-            } catch (e) {
-              // Silently ignore errors
-            }
-            
-            lastZoomTime = now;
-          }
-          
-          // Continue the animation loop
-          animationFrameId = requestAnimationFrame(performAutoZoom);
-        } else {
-          // Stop if we're no longer in history/delta mode
-          animationFrameId = null;
+          lastYAxisTime = now;
         }
-      };
-      
-      // Start the animation loop
-      animationFrameId = requestAnimationFrame(performAutoZoom);
+      }, Y_AXIS_UPDATE_INTERVAL);
       
       return () => {
-        if (animationFrameId !== null) {
-          cancelAnimationFrame(animationFrameId);
-          animationFrameId = null;
+        if (yAxisUpdateInterval !== null) {
+          clearInterval(yAxisUpdateInterval);
+          yAxisUpdateInterval = null;
         }
       };
     }
