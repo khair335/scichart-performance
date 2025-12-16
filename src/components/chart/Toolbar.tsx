@@ -65,6 +65,7 @@ interface ToolbarProps {
   // Time window presets
   timeWindowPresets?: TimeWindowPreset[];
   onTimeWindowSelect?: (minutes: number) => void;
+  currentTimeWindow?: { minutes: number; startTime: number; endTime: number } | null;
   // Layout history
   layoutHistory?: LayoutHistoryEntry[];
   onLoadHistoryLayout?: (entry: LayoutHistoryEntry) => void;
@@ -95,6 +96,7 @@ export function Toolbar({
   onZoomModeChange,
   timeWindowPresets = [],
   onTimeWindowSelect,
+  currentTimeWindow = null,
   layoutHistory = [],
   onLoadHistoryLayout,
   visible = true,
@@ -200,6 +202,15 @@ export function Toolbar({
               >
                 <Clock className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Window</span>
+                {currentTimeWindow && (
+                  <span className="hidden md:inline text-xs font-semibold text-primary/80 ml-1">
+                    {(() => {
+                      // Find the matching preset label
+                      const preset = timeWindowPresets.find(p => p.minutes === currentTimeWindow.minutes);
+                      return preset ? preset.label : `Last ${currentTimeWindow.minutes} min`;
+                    })()}
+                  </span>
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="min-w-[140px]">

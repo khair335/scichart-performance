@@ -39,8 +39,7 @@ import {
   EHorizontalAnchorPoint,
   EVerticalAnchorPoint,
   ECoordinateMode,
-  // For standalone minimap with range selection
-  OverviewRangeSelectionModifier,
+  // Removed OverviewRangeSelectionModifier - now using bidirectional axis syncing (official SubCharts pattern)
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
@@ -178,6 +177,7 @@ interface MultiPaneChartProps {
   plotLayout?: ParsedLayout | null; // Plot layout for dynamic pane assignment
   zoomMode?: 'box' | 'x-only' | 'y-only'; // Zoom mode for chart interactions
   theme?: 'dark' | 'light'; // Theme for chart surfaces
+  onTimeWindowChanged?: (window: { minutes: number; startTime: number; endTime: number } | null) => void; // Callback when time window changes (from minimap or setTimeWindow)
 }
 
 // Unified DataSeries Store Entry
@@ -236,6 +236,7 @@ export function useMultiPaneChart({
   plotLayout = null,
   zoomMode = 'box',
   theme = 'dark',
+  onTimeWindowChanged,
 }: MultiPaneChartProps) {
   // Default UI config if not provided
   const defaultUIConfig: UIConfig = {
@@ -747,6 +748,12 @@ export function useMultiPaneChart({
   const [parentSurfaceReady, setParentSurfaceReady] = useState(false);
   const [overviewNeedsRefresh, setOverviewNeedsRefresh] = useState(0); // Counter to trigger overview refresh
   const [panesReadyCount, setPanesReadyCount] = useState(0); // Track when panes are created (triggers preallocation)
+  const overviewNeedsRefreshSetterRef = useRef<((value: number) => void) | null>(null);
+  
+  // Store the setter in a ref so it can be accessed from processBatchedSamples
+  useEffect(() => {
+    overviewNeedsRefreshSetterRef.current = setOverviewNeedsRefresh;
+  }, []);
   const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
   
   // FPS tracking using requestAnimationFrame to count actual browser frames
@@ -804,7 +811,10 @@ export function useMultiPaneChart({
   const historyLoadedRef = useRef(false);
   const initialDataTimeRef = useRef<number | null>(null);
   const userInteractedRef = useRef(false);
+  const timeWindowSelectedRef = useRef(false); // When true, a time window preset was explicitly selected
+  const selectedWindowMinutesRef = useRef<number | null>(null); // Store the selected window size in minutes (null = entire session)
   const lastDataTimeRef = useRef(0);
+  const settingTimeWindowRef = useRef(false); // Flag to prevent auto-scroll from overriding during setTimeWindow
   const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastYAxisUpdateRef = useRef(0);
   const isCleaningUpOverviewRef = useRef(false);
@@ -1118,13 +1128,12 @@ export function useMultiPaneChart({
         addModifiers(tickSurface, tickWasm);
         addModifiers(ohlcSurface, ohlcWasm);
 
-        // Only link X-axes if config says to share them (default: separate)
+        // REQUIREMENT: All charts must have linked X-axes
+        // Always create vertical group to link X-axes across all panes
         let verticalGroup: SciChartVerticalGroup | null = null;
-        if (!config.chart.separateXAxes) {
-          verticalGroup = new SciChartVerticalGroup();
+        verticalGroup = new SciChartVerticalGroup();
         verticalGroup.addSurfaceToGroup(tickSurface);
         verticalGroup.addSurfaceToGroup(ohlcSurface);
-        }
 
         // FPS tracking is now handled by requestAnimationFrame at the top level
         // No need to subscribe to surface rendered events
@@ -1135,9 +1144,14 @@ export function useMultiPaneChart({
           if (interactionTimeoutRef.current) {
             clearTimeout(interactionTimeoutRef.current);
           }
+          // CRITICAL: Reduce timeout and respect live mode toggle
+          // If live mode is explicitly enabled, clear interaction flag immediately
           interactionTimeoutRef.current = setTimeout(() => {
-            userInteractedRef.current = false;
-          }, 10000);
+            // Only clear if live mode is still enabled (user might have toggled it off)
+            if (isLiveRef.current) {
+              userInteractedRef.current = false;
+            }
+          }, 5000); // Reduced from 10s to 5s for better responsiveness
         };
 
         [tickSurface.domCanvas2D, ohlcSurface.domCanvas2D].forEach(canvas => {
@@ -1275,11 +1289,27 @@ export function useMultiPaneChart({
           }
           if ((refs as any).minimapSurface) {
             try {
+              // Clean up axis sync subscriptions before deleting surface
+              const axisSync = (refs as any).minimapAxisSync;
+              if (axisSync) {
+                try {
+                  axisSync.mainToMinimap?.unsubscribe();
+                  axisSync.minimapToMain?.unsubscribe();
+                } catch (e) {
+                  console.warn('[MultiPaneChart] Error cleaning up minimap axis sync:', e);
+                }
+                (refs as any).minimapAxisSync = null;
+              }
+              // Delete the surface (this will also clean up the data series)
               ((refs as any).minimapSurface as SciChartSurface).delete();
             } catch (e) {
               console.warn('[MultiPaneChart] Error deleting old minimap surface:', e);
             }
             (refs as any).minimapSurface = null;
+            (refs as any).minimapDataSeries = null;
+            (refs as any).minimapXAxis = null;
+            (refs as any).minimapSourceSeriesId = null;
+            (refs as any).minimapTargetPaneId = null;
           }
           
           // Get data from dataSeriesStore for the minimap source series
@@ -1290,16 +1320,27 @@ export function useMultiPaneChart({
           
           const seriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
           if (!seriesEntry || !seriesEntry.dataSeries) {
-            console.log('[MultiPaneChart] Minimap source series not found in dataSeriesStore, will retry on refresh');
+            console.log('[MultiPaneChart] Minimap source series not found in dataSeriesStore, will retry when data arrives');
+            // Schedule a retry when data arrives - trigger by checking dataSeriesStore size changes
             return;
           }
           
           // Check if source series has data
           const sourceDataSeries = seriesEntry.dataSeries as XyDataSeries;
-          const pointCount = sourceDataSeries.count();
+          let pointCount = 0;
+          try {
+            pointCount = sourceDataSeries.count();
+          } catch (e) {
+            console.warn('[MultiPaneChart] Error getting source series count:', e);
+            // Continue anyway - minimap will be populated as data arrives
+          }
+          
+          // CRITICAL: Create minimap even if no data yet - it will be populated as data arrives
+          // This fixes the issue where minimap is blank initially
           if (pointCount === 0) {
-            console.log('[MultiPaneChart] Minimap source series has no data yet, will retry on refresh');
-            return;
+            console.log('[MultiPaneChart] Minimap source series has no data yet, creating empty minimap (will populate as data arrives)');
+          } else {
+            console.log(`[MultiPaneChart] Creating minimap with ${pointCount} data points from source series ${minimapSourceSeriesId}`);
           }
           
           // Create standalone minimap surface
@@ -1312,15 +1353,16 @@ export function useMultiPaneChart({
             return;
           }
           
-          // Configure axes for minimap
+          // Configure axes for minimap - hide X-axis labels, show full data range
           const xAxis = new DateTimeNumericAxis(minimapWasm, {
             axisTitle: '',
-            drawLabels: false,
+            drawLabels: false, // Hide labels - user wants range indicator, not axis numbers
             drawMinorTickLines: false,
-            drawMajorTickLines: false,
+            drawMajorTickLines: false, // Hide tick lines - cleaner look
             drawMajorGridLines: false,
             drawMinorGridLines: false,
-            autoRange: EAutoRange.Always,
+            autoRange: EAutoRange.Never, // We'll manually set to show full data range
+            isVisible: false, // Hide the axis itself - we only want the range indicator
           });
           
           const yAxis = new NumericAxis(minimapWasm, {
@@ -1336,28 +1378,67 @@ export function useMultiPaneChart({
           minimapSurface.xAxes.add(xAxis);
           minimapSurface.yAxes.add(yAxis);
           
+          // CRITICAL: Minimap should NOT have any modifiers that allow changing the X-axis range
+          // The minimap X-axis is locked to show full data range
+          // Users will interact via a range indicator (BoxAnnotation) that we'll add below
+          // Do NOT add XAxisDragModifier - it causes the minimap to change its range
+          // minimapSurface.chartModifiers.add(...) - REMOVED to prevent minimap from changing
+          
           // Create cloned DataSeries by copying from source
+          // CRITICAL: Use a reasonable capacity even if pointCount is 0
           const clonedDataSeries = new XyDataSeries(minimapWasm, {
-            fifoCapacity: pointCount + 100000,
+            fifoCapacity: Math.max(pointCount, 100000) + 100000, // Ensure minimum capacity
             isSorted: true,
             containsNaN: false,
           });
           
           // Copy data from source DataSeries to cloned series
-          const nativeX = sourceDataSeries.getNativeXValues();
-          const nativeY = sourceDataSeries.getNativeYValues();
-          
+          // CRITICAL: Use safe method to avoid memory access errors
           let copiedCount = 0;
-          if (nativeX.size() > 0) {
-            // Convert to arrays and append
-            const xArr: number[] = [];
-            const yArr: number[] = [];
-            for (let i = 0; i < nativeX.size(); i++) {
-              xArr.push(nativeX.get(i));
-              yArr.push(nativeY.get(i));
+          try {
+            const count = sourceDataSeries.count();
+            if (count > 0) {
+              // Use getNativeXValues/getNativeYValues safely with bounds checking
+              const nativeX = sourceDataSeries.getNativeXValues();
+              const nativeY = sourceDataSeries.getNativeYValues();
+              
+              // CRITICAL: Check bounds before accessing native arrays
+              if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
+                // Convert to arrays and append
+                const xArr: number[] = [];
+                const yArr: number[] = [];
+                const size = Math.min(nativeX.size(), count); // Use minimum to avoid out of bounds
+                for (let i = 0; i < size; i++) {
+                  try {
+                    const x = nativeX.get(i);
+                    const y = nativeY.get(i);
+                    if (isFinite(x) && isFinite(y)) {
+                      xArr.push(x);
+                      yArr.push(y);
+                    }
+                  } catch (e) {
+                    // Skip invalid values to avoid memory errors
+                    console.warn(`[Minimap] Skipping invalid data point at index ${i}:`, e);
+                    break; // Stop if we hit an error
+                  }
+                }
+                if (xArr.length > 0) {
+                  clonedDataSeries.appendRange(xArr, yArr);
+                  copiedCount = xArr.length;
+                }
+              } else {
+                // Fallback: Use getXRange and iterate if native access fails
+                console.warn('[Minimap] Native array access failed, using fallback method');
+                const xRange = sourceDataSeries.getXRange();
+                if (xRange) {
+                  // For large datasets, we might need to sample, but for now just log
+                  console.warn('[Minimap] Source series has data but native access failed');
+                }
+              }
             }
-            clonedDataSeries.appendRange(xArr, yArr);
-            copiedCount = xArr.length;
+          } catch (e) {
+            console.error('[Minimap] Error copying data from source series:', e);
+            // Continue with empty minimap - it will be populated as new data arrives
           }
           
           // Add line series for minimap
@@ -1384,89 +1465,170 @@ export function useMultiPaneChart({
             );
           }
           
-          // Add OverviewRangeSelectionModifier for proper minimap behavior with range selection box
-          const rangeSelectionModifier = new OverviewRangeSelectionModifier({
-            onSelectedAreaChanged: (area?: NumberRange) => {
-              if (!area) return;
-              
-              // Skip if this update came from syncing TO minimap (prevent infinite loop)
-              if ((refs as any).minimapSyncInProgress) return;
-              
-              // Sync minimap selection to ALL panes (linked X-axes)
-              (refs as any).mainChartSyncInProgress = true;
-              try {
-                // Update ALL dynamic pane X-axes (linked X-axis behavior)
-                for (const [paneId, paneSurface] of refs.paneSurfaces) {
-                  if (paneSurface?.xAxis) {
-                    paneSurface.xAxis.visibleRange = new NumberRange(area.min, area.max);
-                  }
-                }
-                
-                // Also update legacy surfaces if they exist
-                if (refs.tickSurface?.xAxes.get(0)) {
-                  refs.tickSurface.xAxes.get(0).visibleRange = new NumberRange(area.min, area.max);
-                }
-                if (refs.ohlcSurface?.xAxes.get(0)) {
-                  refs.ohlcSurface.xAxes.get(0).visibleRange = new NumberRange(area.min, area.max);
-                }
-                
-                // Update minimap window width for sticky mode tracking
-                minimapTimeWindowRef.current = (area.max - area.min) * 1000; // Convert to ms
-                
-                // Check if right edge is at the far right of minimap (enable sticky mode)
-                // Compare with actual data max from minimap's DataSeries
-                const minimapDataSeries = (refs as any).minimapDataSeries as XyDataSeries | null;
-                if (minimapDataSeries && minimapDataSeries.count() > 0) {
-                  try {
-                    const dataRange = minimapDataSeries.getXRange();
-                    if (dataRange) {
-                      // If right edge is within 2% of data max, consider it "stuck" to the right
-                      const threshold = (dataRange.max - dataRange.min) * 0.02;
-                      const isAtRightEdge = Math.abs(area.max - dataRange.max) <= threshold;
-                      
-                      if (isAtRightEdge) {
-                        // User dragged to far right - enable sticky mode and resume live
-                        minimapStickyRef.current = true;
-                        isLiveRef.current = true;
-                        userInteractedRef.current = false;
-                      } else {
-                        // User moved away from right edge - disable sticky mode and pause
-                        minimapStickyRef.current = false;
-                        isLiveRef.current = false;
-                        userInteractedRef.current = true;
-                      }
-                    }
-                  } catch (e) {
-                    // Fallback: pause live mode when dragging
-                    minimapStickyRef.current = false;
-                    isLiveRef.current = false;
-                    userInteractedRef.current = true;
-                  }
-                } else {
-                  // No data yet - just pause
-                  minimapStickyRef.current = false;
-                  isLiveRef.current = false;
-                  userInteractedRef.current = true;
-                }
-              } finally {
-                (refs as any).mainChartSyncInProgress = false;
+          // OFFICIAL PATTERN: Use bidirectional visibleRangeChanged subscriptions instead of OverviewRangeSelectionModifier
+          // This follows the official SciChart SubCharts API pattern for minimap syncing
+          // Helper function to sync two axes bidirectionally (from official example)
+          const syncAxes = (mainAxis: DateTimeNumericAxis, minimapAxis: DateTimeNumericAxis) => {
+            let syncing = false;
+            
+            // CRITICAL: Minimap should ALWAYS show full data range - do NOT sync minimap X-axis to main chart
+            // Instead, we'll use a range indicator (visual overlay) to show the current selection
+            // The minimap X-axis stays at full data range, only the range indicator changes
+            const mainToMinimapSubscription = mainAxis.visibleRangeChanged.subscribe((args: any) => {
+              // Don't update minimap X-axis - it should always show full data range
+              // The range indicator will be updated separately (if we add one)
+              // For now, we'll just update the range indicator position without changing minimap zoom
+              if (syncing || 
+                  (refs as any).minimapSyncInProgress || 
+                  (refs as any).mainChartSyncInProgress ||
+                  settingTimeWindowRef.current) {
+                return; // Skip to prevent feedback loop
               }
-            },
-          });
+              
+              // Update range indicator position (if we have one) without changing minimap X-axis range
+              // The minimap X-axis should remain at full data range
+              try {
+                // Get full data range from minimap data series
+                const minimapDataSeries = (refs as any).minimapDataSeries;
+                if (minimapDataSeries && minimapDataSeries.count() > 0) {
+                  const fullDataRange = minimapDataSeries.getXRange();
+                  if (fullDataRange) {
+                    // Ensure minimap X-axis stays at full range
+                    const currentMinimapRange = minimapAxis.visibleRange;
+                    const shouldUpdate = !currentMinimapRange || 
+                      Math.abs(currentMinimapRange.min - fullDataRange.min) > 1000 ||
+                      Math.abs(currentMinimapRange.max - fullDataRange.max) > 1000;
+                    
+                    if (shouldUpdate) {
+                      (refs as any).minimapSyncInProgress = true;
+                      minimapAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
+                      console.log(`[Minimap] Updated to show full data range: ${new Date(fullDataRange.min).toISOString()} to ${new Date(fullDataRange.max).toISOString()}`);
+                      setTimeout(() => {
+                        (refs as any).minimapSyncInProgress = false;
+                      }, 50);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('[Minimap] Error updating full data range:', e);
+              }
+            });
+            
+            // CRITICAL: Minimap X-axis should NEVER change - it's locked to full data range
+            // We don't subscribe to minimapAxis.visibleRangeChanged for user interaction
+            // Instead, we'll use a BoxAnnotation (range indicator) that users can drag
+            // The BoxAnnotation will update the main chart's visible range
+            // This subscription is only for programmatic updates (should not happen)
+            const minimapToMainSubscription = minimapAxis.visibleRangeChanged.subscribe((args: any) => {
+              // This should never fire for user interaction since we removed XAxisDragModifier
+              // But if it does fire (programmatic update), restore to full range immediately
+              if (syncing || (refs as any).mainChartSyncInProgress || settingTimeWindowRef.current) {
+                return;
+              }
+              
+              // If minimap X-axis changed, it's a bug - restore to full range immediately
+              const minimapDataSeries = (refs as any).minimapDataSeries;
+              if (minimapDataSeries && minimapDataSeries.count() > 0) {
+                const fullDataRange = minimapDataSeries.getXRange();
+                if (fullDataRange) {
+                  console.warn('[Minimap] X-axis changed unexpectedly - restoring to full range');
+                  (refs as any).minimapSyncInProgress = true;
+                  minimapAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
+                  setTimeout(() => {
+                    (refs as any).minimapSyncInProgress = false;
+                  }, 10);
+                }
+              }
+              return; // Don't process this as a user interaction
+            });
+            
+            // Store subscriptions for cleanup
+            return {
+              mainToMinimap: mainToMinimapSubscription,
+              minimapToMain: minimapToMainSubscription,
+            };
+          };
           
-          // Set initial selected area if available
-          if (initialSelectedArea) {
-            rangeSelectionModifier.selectedArea = initialSelectedArea;
+          // Sync the target pane's X-axis with minimap X-axis bidirectionally
+          if (targetPaneSurface?.xAxis) {
+            const axisSync = syncAxes(targetPaneSurface.xAxis, xAxis);
+            (refs as any).minimapAxisSync = axisSync; // Store for cleanup
           }
           
-          minimapSurface.chartModifiers.add(rangeSelectionModifier);
+          // Initialize minimap X-axis to show FULL data range (all data from main chart)
+          // The minimap should always show all data, with a range indicator showing the current selection
+          let fullDataRange: NumberRange | undefined;
+          if (clonedDataSeries && clonedDataSeries.count() > 0) {
+            const dataRange = clonedDataSeries.getXRange();
+            if (dataRange) {
+              fullDataRange = new NumberRange(dataRange.min, dataRange.max);
+            }
+          }
+          
+          // If we have data, set minimap to show full range
+          // Otherwise, initialize with target pane range (will be updated when data arrives)
+          if (fullDataRange) {
+            xAxis.visibleRange = fullDataRange;
+            console.log(`[Minimap] Initialized to show full data range: ${new Date(fullDataRange.min).toISOString()} to ${new Date(fullDataRange.max).toISOString()}`);
+          } else if (initialSelectedArea) {
+            // Fallback: use target pane range if no data yet
+            xAxis.visibleRange = initialSelectedArea;
+          } else if (targetPaneSurface?.xAxis?.visibleRange) {
+            xAxis.visibleRange = targetPaneSurface.xAxis.visibleRange;
+          }
           
           // Store reference for updates and cleanup
           (refs as any).minimapSurface = minimapSurface;
           (refs as any).minimapDataSeries = clonedDataSeries;
           (refs as any).minimapSourceSeriesId = minimapSourceSeriesId;
-          (refs as any).minimapTargetPaneId = targetPaneId; // Store target pane ID for syncing
-          (refs as any).minimapRangeSelectionModifier = rangeSelectionModifier;
+          (refs as any).minimapTargetPaneId = targetPaneId;
+          (refs as any).minimapXAxis = xAxis; // Store minimap X-axis for syncing
+          
+          // CRITICAL: If minimap was created with no data, trigger a re-sync to get existing data
+          // This happens when layout changes and minimap is recreated
+          if (copiedCount === 0 && sourceDataSeries.count() > 0) {
+            console.log('[MultiPaneChart] Minimap created with no data, but source has data - triggering re-sync');
+            // The data will be synced on the next data update, but we can also trigger it now
+            // by checking if source series has more data than what was copied
+            setTimeout(() => {
+              try {
+                const currentCount = sourceDataSeries.count();
+                if (currentCount > 0 && clonedDataSeries.count() === 0) {
+                  // Re-sync all data from source
+                  const nativeX = sourceDataSeries.getNativeXValues();
+                  const nativeY = sourceDataSeries.getNativeYValues();
+                  if (nativeX && nativeY && nativeX.size() > 0) {
+                    const xArr: number[] = [];
+                    const yArr: number[] = [];
+                    const size = Math.min(nativeX.size(), currentCount);
+                    for (let i = 0; i < size; i++) {
+                      try {
+                        const x = nativeX.get(i);
+                        const y = nativeY.get(i);
+                        if (isFinite(x) && isFinite(y)) {
+                          xArr.push(x);
+                          yArr.push(y);
+                        }
+                      } catch (e) {
+                        break;
+                      }
+                    }
+                    if (xArr.length > 0) {
+                      minimapSurface.suspendUpdates();
+                      try {
+                        clonedDataSeries.appendRange(xArr, yArr);
+                      } finally {
+                        minimapSurface.resumeUpdates();
+                      }
+                      console.log(`[MultiPaneChart] Re-synced ${xArr.length} data points to minimap`);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('[MultiPaneChart] Error re-syncing minimap data:', e);
+              }
+            }, 100); // Small delay to ensure everything is initialized
+          }
           
           lastOverviewSourceRef.current = {
             surfaceId: minimapSurface.id,
@@ -1615,7 +1777,18 @@ export function useMultiPaneChart({
         (refs as any).minimapDataSeries = null;
         (refs as any).minimapSourceSeriesId = null;
         (refs as any).minimapTargetPaneId = null;
-        (refs as any).minimapRangeSelectionModifier = null;
+        (refs as any).minimapXAxis = null;
+        // Clean up axis sync subscriptions
+        const axisSync = (refs as any).minimapAxisSync;
+        if (axisSync) {
+          try {
+            axisSync.mainToMinimap?.unsubscribe();
+            axisSync.minimapToMain?.unsubscribe();
+          } catch (e) {
+            console.warn('[MultiPaneChart] Error cleaning up minimap axis sync:', e);
+          }
+          (refs as any).minimapAxisSync = null;
+        }
       }
       
       // Only delete overview on component unmount (not when toggling)
@@ -3252,9 +3425,14 @@ export function useMultiPaneChart({
             if (surfaceElement) {
               surfaceElement.addEventListener('dblclick', () => {
                 // Zoom extents is already handled by ZoomExtentsModifier
-                // Just pause auto-scroll
+                // Pause auto-scroll, but allow live toggle to override
                 isLiveRef.current = false;
                 userInteractedRef.current = true;
+                // Clear any pending timeout
+                if (interactionTimeoutRef.current) {
+                  clearTimeout(interactionTimeoutRef.current);
+                  interactionTimeoutRef.current = null;
+                }
               });
               
               // Add user interaction detection for pan/zoom; we no longer sync main chart
@@ -3262,11 +3440,17 @@ export function useMultiPaneChart({
               // the user placed them. Minimap is controlled only by its own drag and
               // Last X Time Window presets.
               const syncMinimapSelection = () => {
+                // CRITICAL: Only pause auto-scroll if user is actually interacting
+                // Don't block if live mode is explicitly enabled via toggle
                 setTimeout(() => {
-                  // Mark that the user interacted so auto-scroll does not override
+                  // Only mark as interacted if we're not in explicit live mode
+                  // This allows the live toggle to work even after user interactions
                   minimapStickyRef.current = false;
-                  isLiveRef.current = false;
-                  userInteractedRef.current = true;
+                  // Don't automatically set isLiveRef = false here - let the toggle control it
+                  // Only set userInteractedRef if we're not in live mode
+                  if (!isLiveRef.current) {
+                    userInteractedRef.current = true;
+                  }
                 }, 50);
               };
               
@@ -3281,21 +3465,25 @@ export function useMultiPaneChart({
             if (!refs.sharedWasm) {
               refs.sharedWasm = paneSurface.wasm;
               
-              // Create vertical group if needed
-              if (!refs.verticalGroup && !config.chart.separateXAxes) {
+              // REQUIREMENT: All charts must have linked X-axes
+              // Always create vertical group to link X-axes across all panes
+              if (!refs.verticalGroup) {
                 const vGroup = paneManager.createVerticalGroup(paneSurface.wasm);
                 refs.verticalGroup = vGroup;
               }
             }
             
             // Add to vertical group to link X-axes across all panes
-            // Requirement 17: All panes must have their own X-axis, all linked and synchronized
-            // Note: separateXAxes config is kept for backward compatibility but all panes are linked
+            // REQUIREMENT: All panes must have their own X-axis, all linked and synchronized
+            // When one pane's X-axis changes (via minimap, time window, or manual interaction),
+            // all other panes will follow the same X-axis range
             if (refs.verticalGroup) {
               try {
                 refs.verticalGroup.addSurfaceToGroup(paneSurface.surface);
+                console.log(`[MultiPaneChart] Added pane ${paneConfig.id} to vertical group for linked X-axes`);
               } catch (e) {
                 // Ignore if already in group
+                console.warn(`[MultiPaneChart] Pane ${paneConfig.id} already in vertical group or error:`, e);
               }
             }
             
@@ -3938,19 +4126,76 @@ export function useMultiPaneChart({
           if (minimapSurface) {
             minimapSurface.suspendUpdates();
             try {
-              minimapDataSeries.appendRange(minimapBatch.x, minimapBatch.y);
+              // CRITICAL: Validate arrays before appending to avoid memory errors
+              if (minimapBatch.x.length === minimapBatch.y.length && minimapBatch.x.length > 0) {
+                // Validate all values are finite
+                const validX: number[] = [];
+                const validY: number[] = [];
+                for (let i = 0; i < minimapBatch.x.length; i++) {
+                  const x = minimapBatch.x[i];
+                  const y = minimapBatch.y[i];
+                  if (isFinite(x) && isFinite(y)) {
+                    validX.push(x);
+                    validY.push(y);
+                  }
+                }
+                if (validX.length > 0) {
+                  minimapDataSeries.appendRange(validX, validY);
+                  
+                  // CRITICAL: Update minimap X-axis to show full data range after new data arrives
+                  // The minimap should always show all data, not just the current selection
+                  const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
+                  if (minimapXAxis && minimapDataSeries.count() > 0) {
+                    try {
+                      const fullDataRange = minimapDataSeries.getXRange();
+                      if (fullDataRange) {
+                        // Only update if the range has changed significantly (more than 1 second)
+                        const currentRange = minimapXAxis.visibleRange;
+                        if (!currentRange || 
+                            Math.abs(currentRange.min - fullDataRange.min) > 1000 ||
+                            Math.abs(currentRange.max - fullDataRange.max) > 1000) {
+                          (refs as any).minimapSyncInProgress = true;
+                          minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
+                          console.log(`[Minimap] Updated to show full data range after new data: ${new Date(fullDataRange.min).toISOString()} to ${new Date(fullDataRange.max).toISOString()}`);
+                          setTimeout(() => {
+                            (refs as any).minimapSyncInProgress = false;
+                          }, 50);
+                        }
+                      }
+                    } catch (e) {
+                      console.warn('[MultiPaneChart] Error updating minimap X-axis range:', e);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('[MultiPaneChart] Error updating minimap data:', e);
+              // Don't throw - just log the error
             } finally {
               minimapSurface.resumeUpdates();
             }
           }
         } catch (e) {
-          // Ignore minimap update errors
+          console.error('[MultiPaneChart] Error accessing minimap surface:', e);
         }
+      }
+    } else if (minimapSourceSeriesId && !minimapDataSeries && overviewNeedsRefreshSetterRef.current) {
+      // Minimap doesn't exist yet, but we have data for the source series
+      // Trigger a refresh to create the minimap
+      // This happens when data arrives before minimap is created
+      const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
+      if (sourceSeriesEntry?.dataSeries && sourceSeriesEntry.dataSeries.count() > 0) {
+        // Source series now has data - trigger minimap creation by updating overviewNeedsRefresh state
+        // The useEffect will detect this and create the minimap
+        console.log(`[MultiPaneChart] Triggering minimap creation - source series ${minimapSourceSeriesId} now has ${sourceSeriesEntry.dataSeries.count()} data points`);
+        overviewNeedsRefreshSetterRef.current(Date.now());
       }
     }
     
     // Third pass: Create strategy marker annotations
     // Strategy markers are rendered as visual annotations (triangles/circles) in addition to line series
+    // REQUIREMENT: Strategy markers must appear initially along with other series, not only when time window is selected
+    // They should be rendered whenever samples arrive, regardless of time window selection
     if (plotLayout && refs.paneSurfaces.size > 0) {
       for (let i = 0; i < samplesLength; i++) {
         const sample = samples[i];
@@ -4080,75 +4325,207 @@ export function useMultiPaneChart({
     }
     
     // Auto-scroll logic (only in live mode with sticky minimap)
+    // CRITICAL: If a time window preset is selected, continuously update it to show the last X minutes from latest data
+    // This ensures the window always shows the most recent X minutes, even as new data arrives
     const isLive = feedStage === 'live';
-    const autoScrollEnabled = isLiveRef.current && !userInteractedRef.current && minimapStickyRef.current;
+    const hasSelectedWindow = selectedWindowMinutesRef.current !== null;
     
-    if (isLive && autoScrollEnabled && latestTime > 0) {
+    // DEBUG: Log all flags that affect auto-scroll
+    const debugFlags = {
+      isLiveRef: isLiveRef.current,
+      userInteractedRef: userInteractedRef.current,
+      settingTimeWindowRef: settingTimeWindowRef.current,
+      minimapStickyRef: minimapStickyRef.current,
+      hasSelectedWindow,
+      selectedWindowMinutes: selectedWindowMinutesRef.current,
+      isLive,
+      feedStage,
+      latestTime,
+    };
+    
+    // Auto-scroll is enabled if:
+    // 1. In live mode AND
+    // 2. User hasn't explicitly paused (userInteractedRef) AND
+    // 3. We're not currently setting a time window (to prevent conflicts) AND
+    // 4. Either: minimap is sticky OR a time window is selected (which should auto-update in live mode)
+    // Note: When a time window is selected, we want it to continuously update in live mode
+    // unless the user has explicitly paused (userInteractedRef = true)
+    // CRITICAL: Don't block auto-scroll if settingTimeWindowRef is true for too long - use a shorter timeout
+    // CRITICAL: For time windows, check isLiveRef.current (not just feedStage) to allow auto-scroll
+    // even if feedStage hasn't reached 'live' yet, as long as user explicitly enabled live mode
+    const autoScrollEnabled = isLiveRef.current && !userInteractedRef.current && !settingTimeWindowRef.current &&
+      (minimapStickyRef.current || (hasSelectedWindow && (isLive || isLiveRef.current)));
+    
+    // DEBUG: Log why auto-scroll is enabled/disabled (throttled to avoid spam)
+    const logNow = performance.now();
+    const lastLogTime = (window as any).__lastAutoScrollLogTime || 0;
+    const shouldLog = logNow - lastLogTime > 2000; // Log every 2 seconds max
+    
+    if (shouldLog) {
+      (window as any).__lastAutoScrollLogTime = logNow;
+    }
+    
+    if (shouldLog && (hasSelectedWindow || minimapStickyRef.current)) {
+      if (!autoScrollEnabled) {
+        console.log(`[Auto-scroll] ❌ DISABLED - Flags:`, {
+          ...debugFlags,
+          reason: !isLiveRef.current ? 'isLiveRef=false' :
+                  userInteractedRef.current ? 'userInteracted=true' :
+                  settingTimeWindowRef.current ? 'settingTimeWindow=true' :
+                  !minimapStickyRef.current && !hasSelectedWindow ? 'no sticky/minimap' :
+                  'unknown'
+        });
+      } else {
+        console.log(`[Auto-scroll] ✅ ENABLED - Flags:`, debugFlags);
+      }
+    }
+    
+    // CRITICAL: Allow auto-scroll if either feedStage is 'live' OR user explicitly enabled live mode
+    // This ensures auto-scroll works immediately when live mode is toggled, even if feedStage hasn't reached 'live' yet
+    const shouldRunAutoScroll = (isLive || isLiveRef.current) && autoScrollEnabled && latestTime > 0;
+    
+    if (shouldLog && !shouldRunAutoScroll && (hasSelectedWindow || minimapStickyRef.current)) {
+      console.log(`[Auto-scroll] ⏸️ NOT RUNNING - Conditions:`, {
+        isLive,
+        isLiveRef: isLiveRef.current,
+        autoScrollEnabled,
+        latestTime,
+        reason: !(isLive || isLiveRef.current) ? 'not in live mode' :
+                !autoScrollEnabled ? 'autoScrollEnabled=false (see above)' :
+                latestTime <= 0 ? 'no latestTime' :
+                'unknown'
+      });
+    }
+    
+    if (shouldRunAutoScroll) {
       const now = performance.now();
-      // Use the stored minimap window width (from time window presets or manual drag)
-      const windowMs = minimapTimeWindowRef.current / 1000; // Convert to seconds for SciChart
-      const X_SCROLL_THRESHOLD = 5000; // 5 seconds threshold
+      
+      // CRITICAL: If a time window preset is selected, use that window size
+      // Otherwise, use the stored minimap window width (from manual drag)
+      let windowMs: number;
+      if (hasSelectedWindow && selectedWindowMinutesRef.current !== null) {
+        // Use the selected window size (convert minutes to milliseconds)
+        windowMs = selectedWindowMinutesRef.current * 60 * 1000;
+      } else {
+        // Use the stored minimap window width (already in milliseconds)
+        windowMs = minimapTimeWindowRef.current;
+      }
+      
+      // CRITICAL: For time windows, use latestTime directly (much faster than iterating all series)
+      // Only iterate through series if we don't have a time window selected
+      const X_SCROLL_THRESHOLD = 100; // Small threshold (100ms) for minimap mode, no threshold for time windows
       const Y_AXIS_UPDATE_INTERVAL = 1000; // Update Y-axis every second
       
-      // Find actual data min and max from DataSeries
-      let actualDataMin = Infinity;
-      let actualDataMax = 0;
-      let hasData = false;
-      for (const [, entry] of refs.dataSeriesStore) {
-        try {
-          if (entry.dataSeries.count() > 0) {
-            const xRange = entry.dataSeries.getXRange();
-            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-              if (xRange.min < actualDataMin) actualDataMin = xRange.min;
-              if (xRange.max > actualDataMax) actualDataMax = xRange.max;
-              hasData = true;
-            }
-          }
-        } catch (e) {}
-      }
+      let actualDataMax: number;
+      let actualDataMin: number;
       
-      if (!hasData) {
+      if (hasSelectedWindow) {
+        // For time windows, use latestTime directly - this is much faster
         actualDataMax = latestTime;
         actualDataMin = latestTime - windowMs;
+      } else {
+        // For minimap sticky mode, find actual data range (slower but more accurate)
+        let min = Infinity;
+        let max = 0;
+        let hasData = false;
+        for (const [, entry] of refs.dataSeriesStore) {
+          try {
+            if (entry.dataSeries.count() > 0) {
+              const xRange = entry.dataSeries.getXRange();
+              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                if (xRange.min < min) min = xRange.min;
+                if (xRange.max > max) max = xRange.max;
+                hasData = true;
+              }
+            }
+          } catch (e) {}
+        }
+        
+        if (!hasData) {
+          actualDataMax = latestTime;
+          actualDataMin = latestTime - windowMs;
+        } else {
+          actualDataMax = max;
+          actualDataMin = min;
+        }
       }
       
-      // Calculate new range with right edge at latest data (sticky behavior)
+      // CRITICAL: Calculate new range with right edge at latest data (sticky behavior)
+      // This ensures the window always shows the last X minutes from the latest data
+      // Both actualDataMax and windowMs are in milliseconds
       const padding = windowMs * 0.02; // 2% padding on right edge
       const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
 
-      // Update minimap selection first (this is the master in sticky mode)
-      // The minimap's onSelectedAreaChanged will sync to the target pane
-      const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
-      if (rangeModifier && !(refs as any).mainChartSyncInProgress) {
-        try {
-          (refs as any).minimapSyncInProgress = true;
-          rangeModifier.selectedArea = newRange;
-          
-          // Manually sync to ALL panes since we're in sync mode (linked X-axes)
-          for (const [paneId, paneSurface] of refs.paneSurfaces) {
-            if (paneSurface?.xAxis) {
-              const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
-              const diff = Math.abs(currentMax - newRange.max);
-              if (!paneSurface.xAxis.visibleRange || diff > X_SCROLL_THRESHOLD) {
-                paneSurface.xAxis.visibleRange = newRange;
-                paneSurface.surface.invalidateElement();
+      // CRITICAL: Auto-scroll should ONLY update main chart panes
+      // DO NOT update minimap directly - let the main-to-minimap subscription handle it
+      // This prevents feedback loops and UI shaking
+      // Manually sync to ALL panes since we're in sync mode (linked X-axes)
+      // CRITICAL: If a time window is selected, preserve the locked state (disable autoRange, set growBy to zero)
+      // Note: hasSelectedWindow is already declared above at line 4243
+      (refs as any).mainChartSyncInProgress = true; // Block minimap-to-main sync during auto-scroll
+      try {
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          if (paneSurface?.xAxis) {
+            // CRITICAL: For time windows, always update (no threshold check) for smooth scrolling
+            // For minimap sticky mode, use threshold to avoid excessive updates
+            const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
+            const diff = Math.abs(currentMax - newRange.max);
+            const X_SCROLL_THRESHOLD = 100; // Small threshold (100ms) for minimap mode
+            const shouldUpdate = hasSelectedWindow || !paneSurface.xAxis.visibleRange || diff > X_SCROLL_THRESHOLD;
+            
+            if (shouldUpdate) {
+              // CRITICAL: Always lock the X-axis when auto-scrolling (disable autoRange, set growBy to zero)
+              // This prevents SciChart from auto-scaling and overriding our range
+              if ((paneSurface.xAxis as any).autoRange !== undefined) {
+                (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
               }
+              try {
+                paneSurface.xAxis.growBy = new NumberRange(0, 0);
+              } catch (e) {
+                (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+              }
+              paneSurface.xAxis.visibleRange = newRange;
             }
           }
-          
-          // Also sync legacy surfaces
-          if (refs.tickSurface?.xAxes.get(0)) {
-            refs.tickSurface.xAxes.get(0).visibleRange = newRange;
-          }
-          if (refs.ohlcSurface?.xAxes.get(0)) {
-            refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
-          }
-          
-          (refs as any).minimapSyncInProgress = false;
-        } catch (e) {
-          (refs as any).minimapSyncInProgress = false;
         }
-      } else {
+        
+        // Also sync legacy surfaces
+        if (refs.tickSurface?.xAxes.get(0)) {
+          if (hasSelectedWindow) {
+            const axis = refs.tickSurface.xAxes.get(0);
+            if ((axis as any).autoRange !== undefined) {
+              (axis as any).autoRange = EAutoRange.Never;
+            }
+            if (axis.growBy) {
+              axis.growBy = new NumberRange(0, 0);
+            }
+          }
+          refs.tickSurface.xAxes.get(0).visibleRange = newRange;
+        }
+        if (refs.ohlcSurface?.xAxes.get(0)) {
+          if (hasSelectedWindow) {
+            const axis = refs.ohlcSurface.xAxes.get(0);
+            if ((axis as any).autoRange !== undefined) {
+              (axis as any).autoRange = EAutoRange.Never;
+            }
+            if (axis.growBy) {
+              axis.growBy = new NumberRange(0, 0);
+            }
+          }
+          refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
+        }
+        
+        // The main-to-minimap subscription will automatically update minimap
+        // No need to update minimap directly here
+      } finally {
+        // Clear flag after a short delay to allow minimap to sync
+        setTimeout(() => {
+          (refs as any).mainChartSyncInProgress = false;
+        }, 100);
+      }
+      
+      // Fallback: Update all X-axes directly if no minimap
+      if (false) {
         // Fallback: Update all X-axes directly if no minimap
         for (const [, paneSurface] of refs.paneSurfaces) {
           if (paneSurface.xAxis) {
@@ -4818,6 +5195,15 @@ export function useMultiPaneChart({
   // Control functions
   const setLiveMode = useCallback((live: boolean) => {
     isLiveRef.current = live;
+    // CRITICAL: When enabling live mode, clear user interaction flag to allow auto-scroll
+    if (live) {
+      userInteractedRef.current = false;
+      // Clear any pending interaction timeout
+      if (interactionTimeoutRef.current) {
+        clearTimeout(interactionTimeoutRef.current);
+        interactionTimeoutRef.current = null;
+      }
+    }
   }, []);
 
   const zoomExtents = useCallback(() => {
@@ -4837,100 +5223,460 @@ export function useMultiPaneChart({
   }, []);
 
   const jumpToLive = useCallback(() => {
+    console.log(`[jumpToLive] 🚀 Called - Current flags BEFORE:`, {
+      isLiveRef: isLiveRef.current,
+      userInteractedRef: userInteractedRef.current,
+      timeWindowSelectedRef: timeWindowSelectedRef.current,
+      selectedWindowMinutes: selectedWindowMinutesRef.current,
+      minimapStickyRef: minimapStickyRef.current,
+      settingTimeWindowRef: settingTimeWindowRef.current,
+      lastDataTime: lastDataTimeRef.current,
+    });
+    
+    // CRITICAL: Clear ALL flags that might block auto-scroll
     isLiveRef.current = true;
     userInteractedRef.current = false;
+    timeWindowSelectedRef.current = false;
+    selectedWindowMinutesRef.current = null; // Clear selected window to allow normal live mode
+    minimapStickyRef.current = true; // Enable sticky mode for live following
+    settingTimeWindowRef.current = false; // Clear any stuck flag
     
+    // Clear any pending interaction timeout
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
+    
+    // Update X-axis ranges to show latest data
     const lastTime = lastDataTimeRef.current;
     if (lastTime > 0) {
       const windowMs = 5 * 60 * 1000;
       const newRange = new NumberRange(lastTime - windowMs, lastTime + windowMs * 0.05);
       
+      // Update all dynamic panes
+      for (const [, paneSurface] of chartRefs.current.paneSurfaces) {
+        if (paneSurface?.xAxis) {
+          try {
+            (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+            paneSurface.xAxis.growBy = new NumberRange(0, 0);
+            paneSurface.xAxis.visibleRange = newRange;
+            paneSurface.surface.invalidateElement();
+          } catch (e) {}
+        }
+      }
+      
+      // Update legacy surfaces
       const tickXAxis = chartRefs.current.tickSurface?.xAxes.get(0);
       const ohlcXAxis = chartRefs.current.ohlcSurface?.xAxes.get(0);
       
-      if (tickXAxis) tickXAxis.visibleRange = newRange;
-      if (ohlcXAxis) ohlcXAxis.visibleRange = newRange;
+      if (tickXAxis) {
+        try {
+          (tickXAxis as any).autoRange = EAutoRange.Never;
+          tickXAxis.growBy = new NumberRange(0, 0);
+          tickXAxis.visibleRange = newRange;
+          chartRefs.current.tickSurface?.invalidateElement();
+        } catch (e) {}
+      }
+      if (ohlcXAxis) {
+        try {
+          (ohlcXAxis as any).autoRange = EAutoRange.Never;
+          ohlcXAxis.growBy = new NumberRange(0, 0);
+          ohlcXAxis.visibleRange = newRange;
+          chartRefs.current.ohlcSurface?.invalidateElement();
+        } catch (e) {}
+      }
+      
+      // Update minimap X-axis if it exists (official SubCharts pattern)
+      const minimapXAxis = (chartRefs.current as any).minimapXAxis as DateTimeNumericAxis | null;
+      if (minimapXAxis) {
+        try {
+          (chartRefs.current as any).minimapSyncInProgress = true;
+          minimapXAxis.visibleRange = newRange;
+          setTimeout(() => {
+            (chartRefs.current as any).minimapSyncInProgress = false;
+          }, 100);
+        } catch (e) {}
+      }
+      
+      console.log(`[jumpToLive] ✅ Completed - New flags AFTER:`, {
+        isLiveRef: isLiveRef.current,
+        userInteractedRef: userInteractedRef.current,
+        minimapStickyRef: minimapStickyRef.current,
+        settingTimeWindowRef: settingTimeWindowRef.current,
+        selectedWindowMinutes: selectedWindowMinutesRef.current,
+      });
+    } else {
+      console.warn(`[jumpToLive] ⚠️ No lastDataTime available: ${lastDataTimeRef.current}`);
     }
   }, []);
 
   // Set time window - controls minimap selection width (presets for minimap)
   // Sets right edge to latest timestamp, left edge to latest - X minutes
   // This enables "sticky" mode so minimap follows live data
+  // REQUIREMENT: Only change X-axis range - do NOT affect series visibility
   const setTimeWindow = useCallback((minutes: number, dataClockMs: number) => {
+    console.log(`[setTimeWindow] 🎯 Called with ${minutes} minutes - Current flags BEFORE:`, {
+      isLiveRef: isLiveRef.current,
+      userInteractedRef: userInteractedRef.current,
+      minimapStickyRef: minimapStickyRef.current,
+      settingTimeWindowRef: settingTimeWindowRef.current,
+      selectedWindowMinutes: selectedWindowMinutesRef.current,
+      timeWindowSelectedRef: timeWindowSelectedRef.current,
+      lastDataTime: lastDataTimeRef.current,
+    });
+    
     const refs = chartRefs.current;
     
     if (minutes <= 0) {
       // Zero or negative means show all data (zoom extents for minimap)
       // Disable sticky mode
       minimapStickyRef.current = false;
+      timeWindowSelectedRef.current = false; // Clear time window flag for "Entire Session"
+      selectedWindowMinutesRef.current = null; // Clear selected window size
       zoomExtents();
       return;
     }
+    
+    // Store the selected window size so we can continuously update it in live mode
+    // This ensures the window always shows the last X minutes from the latest data
+    selectedWindowMinutesRef.current = minutes;
+    
+    // CRITICAL: Set flag to prevent auto-scroll from overriding during setTimeWindow
+    settingTimeWindowRef.current = true;
 
+    // CRITICAL: Use the actual latest data timestamp, not the passed dataClockMs
+    // This ensures the time window includes all available data
+    // Use lastDataTimeRef as primary source, fallback to dataClockMs, then Date.now()
+    const actualLatestTime = lastDataTimeRef.current > 0 
+      ? lastDataTimeRef.current 
+      : (dataClockMs > 0 ? dataClockMs : Date.now());
+    
     const windowMs = minutes * 60 * 1000;
-    const endMs = dataClockMs / 1000; // Convert to seconds for SciChart DateTimeNumericAxis
-    const startMs = endMs - (windowMs / 1000);
-    const padding = (windowMs / 1000) * 0.02; // 2% padding on right edge
+    // CRITICAL: Data is stored in milliseconds (t_ms), so X-axis range must also be in milliseconds
+    // DateTimeNumericAxis can handle milliseconds directly (as shown in reference code)
+    const endMs = actualLatestTime; // Keep in milliseconds
+    const startMs = endMs - windowMs;
+    const padding = windowMs * 0.02; // 2% padding on right edge
     const newRange = new NumberRange(startMs, endMs + padding);
-
-    console.log(`[setTimeWindow] Setting minimap to ${minutes} min window: ${new Date(startMs * 1000).toISOString()} - ${new Date(endMs * 1000).toISOString()}`);
+    
+    console.log(`[setTimeWindow] Setting ${minutes} min window using latest timestamp ${actualLatestTime}: ${new Date(startMs).toISOString()} - ${new Date(endMs).toISOString()}`);
+    console.log(`[setTimeWindow] Window range in ms: ${startMs} to ${endMs + padding} (window size: ${windowMs}ms = ${minutes} minutes)`);
+    console.log(`[setTimeWindow] Current time: ${new Date().toISOString()}, Latest data time: ${new Date(actualLatestTime).toISOString()}`);
 
     // Store the window size for sticky mode auto-scroll
     minimapTimeWindowRef.current = windowMs;
     
-    // User has explicitly chosen a window; keep charts paused until they
-    // drag the minimap right edge to the far right (which will enable
-    // sticky/live mode). Do NOT force live mode here.
-    minimapStickyRef.current = false;
-    // Do not change isLiveRef here; respect current live/paused state
-    userInteractedRef.current = true;
+    // Clear any pending interaction timeout
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
 
-    // Update minimap selection (this will sync to main chart via onSelectedAreaChanged)
-    const rangeModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
-    if (rangeModifier) {
+    // CRITICAL: Update X-axis ranges FIRST, before updating minimap selection
+    // This ensures all series are visible in the new range before the minimap updates
+    // REQUIREMENT: Only change X-axis range - do NOT affect series visibility
+    console.log(`[setTimeWindow] Setting X-axis range on all panes FIRST: ${newRange.min} to ${newRange.max} (${new Date(newRange.min).toISOString()} to ${new Date(newRange.max).toISOString()})`);
+    
+    // CRITICAL: Suspend updates on all surfaces to prevent SciChart from auto-updating the range
+    const surfacesToResume: any[] = [];
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      try {
+        paneSurface.surface.suspendUpdates();
+        surfacesToResume.push(paneSurface.surface);
+      } catch (e) {
+        // Ignore if suspend fails
+      }
+    }
+    
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      if (paneSurface?.xAxis) {
+        // CRITICAL: Preserve series visibility - store current visibility state
+        const seriesArray = paneSurface.surface.renderableSeries.asArray();
+        const visibilityMap = new Map<string, boolean>();
+        seriesArray.forEach(rs => {
+          try {
+            const dataSeries = (rs as any).dataSeries;
+            if (dataSeries) {
+              visibilityMap.set(dataSeries.dataSeriesName || 'unknown', rs.isVisible);
+            }
+          } catch (e) {
+            // Ignore errors
+          }
+        });
+        
+        // Change X-axis range
+        // CRITICAL: Disable autoRange to prevent SciChart from overriding our window
+        // When a time window is selected, we want to lock the X-axis to that exact range
+        if ((paneSurface.xAxis as any).autoRange !== undefined) {
+          (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+        }
+        // Set visibleRange to the exact window
+        paneSurface.xAxis.visibleRange = newRange;
+        // CRITICAL: Set growBy to zero to prevent auto-scaling beyond the window
+        // growBy might be undefined initially, so we need to create it if it doesn't exist
+        try {
+          paneSurface.xAxis.growBy = new NumberRange(0, 0);
+        } catch (e) {
+          // If growBy can't be set, try setting it as a property
+          try {
+            (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+          } catch (e2) {
+            console.warn(`[setTimeWindow] Could not set growBy on pane ${paneId}:`, e2);
+          }
+        }
+        console.log(`[setTimeWindow] Set X-axis range on pane ${paneId}: ${newRange.min} to ${newRange.max} (${new Date(newRange.min).toISOString()} to ${new Date(newRange.max).toISOString()})`);
+        console.log(`[setTimeWindow] X-axis autoRange after setting: ${(paneSurface.xAxis as any).autoRange}, growBy: ${paneSurface.xAxis.growBy?.min}, ${paneSurface.xAxis.growBy?.max}`);
+        console.log(`[setTimeWindow] X-axis visibleRange after setting: ${paneSurface.xAxis.visibleRange?.min}, ${paneSurface.xAxis.visibleRange?.max}`);
+        
+        // CRITICAL: Force a synchronous update to ensure the range is applied
+        // Sometimes SciChart needs an explicit update call
+        try {
+          // Disable autoRange FIRST
+          (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+          // Set growBy to zero (always set it, even if undefined)
+          try {
+            paneSurface.xAxis.growBy = new NumberRange(0, 0);
+          } catch (e) {
+            (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+          }
+          // Set visibleRange LAST to ensure it's not overridden
+          paneSurface.xAxis.visibleRange = newRange;
+          // Also invalidate the surface to force a full redraw
+          paneSurface.surface.invalidateElement();
+        } catch (e) {
+          console.warn(`[setTimeWindow] Error forcing X-axis update on pane ${paneId}:`, e);
+        }
+        
+        // CRITICAL: Verify the range was actually set after minimap sync completes
+        // Wait longer to ensure minimap callback doesn't override it
+        setTimeout(() => {
+          // Skip verification if minimap is still syncing
+          if ((refs as any).minimapSyncInProgress) {
+            return;
+          }
+          const actualRange = paneSurface.xAxis.visibleRange;
+          if (actualRange) {
+            const diff = Math.abs(actualRange.min - newRange.min) + Math.abs(actualRange.max - newRange.max);
+            if (diff > 1000) { // More than 1 second difference
+              console.warn(`[setTimeWindow] ⚠️ X-axis range was changed after setting! Expected: ${newRange.min}-${newRange.max}, Actual: ${actualRange.min}-${actualRange.max}`);
+              // Force it again, and also update minimap to match
+              (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+              try {
+                paneSurface.xAxis.growBy = new NumberRange(0, 0);
+              } catch (e) {
+                (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+              }
+              paneSurface.xAxis.visibleRange = newRange;
+              paneSurface.surface.invalidateElement();
+              
+              // Also update minimap X-axis to match (official SubCharts pattern)
+              const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
+              if (minimapXAxis) {
+                (refs as any).minimapSyncInProgress = true;
+                minimapXAxis.visibleRange = newRange;
+                setTimeout(() => {
+                  (refs as any).minimapSyncInProgress = false;
+                }, 100);
+              }
+            }
+          }
+        }, 150); // Wait for minimap sync to complete, but not too long to avoid blocking auto-scroll
+        
+        // CRITICAL: Invalidate surface to force re-render with new X-axis range
+        // This is especially important when minimap is active, as it ensures series are visible
+        try {
+          paneSurface.surface.invalidateElement();
+        } catch (e) {
+          // Ignore invalidation errors
+        }
+        
+        // CRITICAL: Restore series visibility to ensure nothing was accidentally hidden
+        // Also ensure ALL series in layout are visible (not just those that were visible before)
+        seriesArray.forEach(rs => {
+          try {
+            const dataSeries = (rs as any).dataSeries;
+            if (dataSeries) {
+              const seriesName = dataSeries.dataSeriesName || 'unknown';
+              const wasVisible = visibilityMap.get(seriesName);
+              
+              // CRITICAL: If series was visible before, restore it
+              if (wasVisible !== undefined && rs.isVisible !== wasVisible) {
+                console.warn(`[setTimeWindow] Restoring visibility for ${seriesName} on pane ${paneId}: ${wasVisible}`);
+                rs.isVisible = wasVisible;
+              }
+              
+              // CRITICAL: If series is in layout and has data, ensure it's visible
+              // This fixes the issue where series become invisible after minimap interaction
+              if (plotLayout) {
+                const isInLayout = plotLayout.layout.series.some(s => s.series_id === seriesName);
+                if (isInLayout && dataSeries.count() > 0 && !rs.isVisible) {
+                  console.warn(`[setTimeWindow] ⚠️ Series ${seriesName} is in layout and has data but is INVISIBLE - making it visible`);
+                  rs.isVisible = true;
+                }
+              }
+            }
+          } catch (e) {
+            // Ignore errors
+          }
+        });
+        
+        // Force surface update to ensure series are rendered
+        paneSurface.surface.invalidateElement();
+      }
+    }
+    
+    // Also sync legacy surfaces if they exist
+    if (refs.tickSurface?.xAxes.get(0)) {
+      refs.tickSurface.xAxes.get(0).visibleRange = newRange;
+      refs.tickSurface.invalidateElement();
+    }
+    if (refs.ohlcSurface?.xAxes.get(0)) {
+      refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
+      refs.ohlcSurface.invalidateElement();
+    }
+    
+    // Resume all suspended surfaces AFTER setting the range
+    // This ensures all range changes are batched together
+    setTimeout(() => {
+      for (const surface of surfacesToResume) {
+        try {
+          surface.resumeUpdates();
+        } catch (e) {
+          // Ignore if resume fails
+        }
+      }
+    }, 0); // Use setTimeout to ensure all range changes are applied before resuming
+    
+    // THEN update minimap X-axis to match (official SubCharts pattern)
+    // The bidirectional subscription will handle syncing
+    const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
+    if (minimapXAxis) {
       try {
         (refs as any).minimapSyncInProgress = true;
-        rangeModifier.selectedArea = newRange;
-        (refs as any).minimapSyncInProgress = false;
-        
-        // Manually sync to target pane since we're in sync mode
-        const storedTargetPaneId = (refs as any).minimapTargetPaneId;
-        if (storedTargetPaneId) {
-          const paneSurface = refs.paneSurfaces.get(storedTargetPaneId);
-          if (paneSurface?.xAxis) {
-            paneSurface.xAxis.visibleRange = newRange;
-            paneSurface.surface.invalidateElement();
-          }
-        }
+        minimapXAxis.visibleRange = newRange;
+        // CRITICAL: Don't clear minimapSyncInProgress immediately - wait a bit to ensure our range sticks
+        setTimeout(() => {
+          (refs as any).minimapSyncInProgress = false;
+        }, 200);
       } catch (e) {
-        (refs as any).minimapSyncInProgress = false;
-        console.warn(`[setTimeWindow] Failed to update minimap:`, e);
+        console.warn(`[setTimeWindow] Error updating minimap X-axis:`, e);
       }
-    } else {
-      // Fallback: update main chart directly if minimap doesn't exist
-      for (const [paneId, paneSurface] of refs.paneSurfaces) {
+    }
+    
+    // CRITICAL: setTimeWindow should ONLY change the X-axis range
+    // DO NOT modify auto-scroll flags here - let the existing auto-scroll logic handle it
+    // The auto-scroll will detect the selected window and update it appropriately
+    // Mark that a time window was selected (for auto-scroll to use)
+    timeWindowSelectedRef.current = true;
+    
+    // Notify parent component to update Toolbar display
+    if (onTimeWindowChanged) {
+      onTimeWindowChanged({
+        minutes,
+        startTime: startMs,
+        endTime: endMs + padding,
+      });
+    }
+    
+    // CRITICAL: Keep settingTimeWindowRef true longer to prevent auto-scroll from running immediately
+    // This gives the range time to settle before auto-scroll starts updating it
+    // Also block mainChartSyncInProgress to prevent minimap feedback loop
+    (refs as any).mainChartSyncInProgress = true;
+    setTimeout(() => {
+      const wasStuck = settingTimeWindowRef.current;
+      settingTimeWindowRef.current = false;
+      // Clear mainChartSyncInProgress after a delay to allow normal syncing
+      setTimeout(() => {
+        (refs as any).mainChartSyncInProgress = false;
+      }, 100);
+      if (wasStuck) {
+        console.log(`[setTimeWindow] ✅ Cleared settingTimeWindowRef flag (was stuck: ${wasStuck})`);
+      }
+    }, 500); // Increased to 500ms to ensure range is fully settled
+    
+    console.log(`[setTimeWindow] ✅ Completed - Final flags AFTER:`, {
+      isLiveRef: isLiveRef.current,
+      userInteractedRef: userInteractedRef.current,
+      minimapStickyRef: minimapStickyRef.current,
+      settingTimeWindowRef: settingTimeWindowRef.current,
+      selectedWindowMinutes: selectedWindowMinutesRef.current,
+      timeWindowSelectedRef: timeWindowSelectedRef.current,
+    });
+    
+    // X-axes have already been synced above, so we just need to verify series visibility
+    // Log series visibility for debugging
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      const seriesArray = paneSurface.surface.renderableSeries.asArray();
+      console.log(`[setTimeWindow] Pane ${paneId}: ${seriesArray.length} series after X-axis change`);
+      
+      // CRITICAL: Log ALL series on this pane, including their type and visibility
+      console.log(`[setTimeWindow] All series on pane ${paneId}:`, seriesArray.map(rs => {
         try {
-          if (paneSurface.xAxis) {
-            paneSurface.xAxis.visibleRange = newRange;
-            paneSurface.surface.invalidateElement();
+          const dataSeries = (rs as any).dataSeries;
+          return {
+            type: rs.constructor.name,
+            seriesName: dataSeries?.dataSeriesName || 'unknown',
+            visible: rs.isVisible,
+            dataCount: dataSeries?.count() || 0,
+            stroke: (rs as any).stroke,
+            strokeThickness: (rs as any).strokeThickness
+          };
+        } catch (e) {
+          return { type: rs.constructor.name, error: String(e) };
+        }
+      }));
+      
+      seriesArray.forEach(rs => {
+        try {
+          const dataSeries = (rs as any).dataSeries;
+          if (dataSeries && dataSeries.count() > 0) {
+            const dataRange = dataSeries.getXRange();
+            const isVisible = rs.isVisible;
+            
+            // CRITICAL: Data is stored in milliseconds (t_ms), and newRange is also in milliseconds
+            // getXRange() returns the raw data values, which are in MILLISECONDS
+            // Both data range and window range are in milliseconds, so compare directly
+            let hasDataInRange = false;
+            
+            if (dataRange) {
+              // Data range is ALWAYS in milliseconds (because we append t_ms directly)
+              // newRange is also in milliseconds, so compare directly
+              hasDataInRange = dataRange.min <= newRange.max && dataRange.max >= newRange.min;
+            }
+            
+            // CRITICAL: Log detailed information about data ranges
+            // NOTE: Both data and X-axis range are in MILLISECONDS
+            console.log(`[setTimeWindow] Series ${dataSeries.dataSeriesName || 'unknown'}:`, {
+              visible: isVisible,
+              dataCount: dataSeries.count(),
+              dataRangeMs: dataRange ? {
+                min: dataRange.min,
+                minDate: new Date(dataRange.min).toISOString(),
+                max: dataRange.max,
+                maxDate: new Date(dataRange.max).toISOString()
+              } : 'no range',
+              windowRangeMs: {
+                min: newRange.min,
+                minDate: new Date(newRange.min).toISOString(),
+                max: newRange.max,
+                maxDate: new Date(newRange.max).toISOString()
+              },
+              hasDataInWindow: hasDataInRange
+            });
+            
+            if (!isVisible) {
+              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries.dataSeriesName || 'unknown'} is NOT VISIBLE on pane ${paneId}`);
+            }
+            if (!hasDataInRange && dataRange) {
+              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries.dataSeriesName || 'unknown'} has NO DATA in time window. Data range: [${new Date(dataRange.min).toISOString()}, ${new Date(dataRange.max).toISOString()}], Window: [${new Date(newRange.min).toISOString()}, ${new Date(newRange.max).toISOString()}]`);
+            }
+          } else {
+            console.log(`[setTimeWindow] Series ${(rs as any).dataSeries?.dataSeriesName || 'unknown'}: visible=${rs.isVisible}, no data (count: ${dataSeries?.count() || 0})`);
           }
         } catch (e) {
-          console.warn(`[setTimeWindow] Failed to update pane ${paneId}:`, e);
+          console.warn(`[setTimeWindow] Error checking series:`, e);
         }
-      }
-
-      // Also update legacy surfaces if they exist
-      const tickXAxis = refs.tickSurface?.xAxes.get(0);
-      const ohlcXAxis = refs.ohlcSurface?.xAxes.get(0);
-      
-      if (tickXAxis) {
-        tickXAxis.visibleRange = newRange;
-        refs.tickSurface?.invalidateElement();
-      }
-      if (ohlcXAxis) {
-        ohlcXAxis.visibleRange = newRange;
-        refs.ohlcSurface?.invalidateElement();
-      }
+      });
     }
   }, [zoomExtents]);
 

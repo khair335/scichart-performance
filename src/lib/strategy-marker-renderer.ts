@@ -12,7 +12,7 @@ import {
 } from 'scichart';
 
 export interface MarkerData {
-  x: number; // Unix timestamp in seconds
+  x: number; // Unix timestamp in milliseconds (matches X-axis units)
   y: number; // Price level
   type: 'entry' | 'exit' | 'signal';
   direction?: 'long' | 'short';
@@ -121,7 +121,7 @@ export function parseMarkerFromSample(sample: {
   }
 
   return {
-    x: sample.t_ms / 1000, // Convert to seconds for SciChart
+    x: sample.t_ms, // Keep in milliseconds to match X-axis (DateTimeNumericAxis can handle milliseconds)
     y: sample.v,
     type: markerType,
     direction,

@@ -191,6 +191,9 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     { label: 'Last 4 hours', minutes: 240 },
   ]);
   
+  // Track current time window selection
+  const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(null);
+  
   // Auto-hide configuration
   const [autoHideEnabled, setAutoHideEnabled] = useState(false);
   const [autoHideDelayMs, setAutoHideDelayMs] = useState(3000);
@@ -364,6 +367,14 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     feedStage: demoMode ? 'demo' : feedState.stage,
     uiConfig: uiConfig,
     registry: registry, // Pass registry for global data clock calculation
+    onTimeWindowChanged: (window) => {
+      // Sync Toolbar display when time window changes (from minimap or setTimeWindow)
+      if (window) {
+        setCurrentTimeWindow(window);
+      } else {
+        setCurrentTimeWindow(null);
+      }
+    },
     plotLayout: plotLayout, // Pass parsed layout
     zoomMode: zoomMode, // Pass zoom mode
     theme: theme, // Pass theme for chart surfaces
@@ -659,25 +670,18 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     if (registry.length === 0) return;
 
     setVisibleSeries(prev => {
-      // Initial load: show price and indicators, but hide strategy series by default
-      // Strategy series (PnL, signals, markers) have different Y-axis scales and can make price data appear tiny
+      // Initial load: show ALL series by default, including strategy markers
+      // REQUIREMENT: Strategy markers must appear initially along with other series
+      // Strategy markers are rendered as annotations (not regular series), so they're always visible
+      // But we still need to include them in visibleSeries for consistency
       // CRITICAL: Initialize even if hasInitializedRef is true IF prev.size is 0 and registry has data
       // This handles the case where registry wasn't populated during first initialization
       if (prev.size === 0 && (!hasInitializedRef.current || registry.length > 0)) {
         hasInitializedRef.current = true;
-        // Filter out strategy series - they should be hidden by default
-        const visible = new Set(
-          registry
-            .filter(row => {
-              const seriesInfo = parseSeriesType(row.id);
-              // Hide strategy series by default (they have different Y-axis scales)
-              return seriesInfo.type !== 'strategy-pnl' &&
-                     seriesInfo.type !== 'strategy-signal' &&
-                     seriesInfo.type !== 'strategy-marker';
-            })
-            .map(r => r.id)
-        );
-        console.log(`[TradingChart] 🔄 Initializing visibleSeries with ${visible.size} series from registry of ${registry.length}`);
+        // Show ALL series by default, including strategy markers
+        // Strategy markers are rendered as annotations, but we include them here for consistency
+        const visible = new Set(registry.map(r => r.id));
+        console.log(`[TradingChart] 🔄 Initializing visibleSeries with ${visible.size} series from registry of ${registry.length} (including strategy markers)`);
         return visible;
       }
       
@@ -900,15 +904,27 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       // Entire session - zoom to fit all data
       zoomExtents();
       setIsLive(false); // Pause auto-scroll when viewing entire session
+      setCurrentTimeWindow(null); // Clear window display for "Entire Session"
     } else {
       // Set minimap to show last N minutes; charts remain paused until
       // user explicitly drags minimap to the right edge to enable
       // sticky live-follow behaviour.
       const clockMs = dataClockMs || Date.now();
+      const windowMs = minutes * 60 * 1000;
+      const endTime = clockMs;
+      const startTime = endTime - windowMs;
+      console.log(`[TradingChart] Setting time window: ${minutes} min, range: ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`);
       setTimeWindow(minutes, clockMs);
-      setIsLive(false);
+      // CRITICAL: Don't pause live mode - allow the window to continuously update
+      // The window will show the last X minutes from the latest data as new data arrives
+      // setIsLive(false); // Removed - allow live updates for selected window
+      setCurrentTimeWindow({ minutes, startTime, endTime });
     }
   }, [zoomExtents, dataClockMs, setTimeWindow]);
+  
+  // NOTE: Removed the continuous update of currentTimeWindow display
+  // The Toolbar now shows just the preset label (e.g., "Last 15 min") instead of the time range
+  // This prevents unnecessary re-renders and makes the UI cleaner
 
   // Handle loading layout from history
   const handleLoadHistoryLayout = useCallback(async (entry: { name: string; path?: string; loadedAt: number }) => {
@@ -994,6 +1010,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         onZoomModeChange={setZoomMode}
         timeWindowPresets={timeWindowPresets}
         onTimeWindowSelect={handleTimeWindowSelect}
+        currentTimeWindow={currentTimeWindow}
         layoutHistory={layoutHistory}
         onLoadHistoryLayout={handleLoadHistoryLayout}
         visible={toolbarVisible}
