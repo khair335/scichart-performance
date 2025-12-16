@@ -354,54 +354,57 @@ export class DynamicPaneManager {
    * propagate the change to all other panes.
    */
   private setupXAxisSync(paneId: string, xAxis: DateTimeNumericAxis): void {
-    // Store the callback so we can reference it for cleanup
+    // Avoid double-subscribe
+    if (this.axisSubscriptions.has(paneId)) return;
+
     const syncCallback = (args: any) => {
       // Prevent infinite recursion
       if (this.isSyncingXAxis) return;
-      
+
+      const newRange: NumberRange | undefined = args?.visibleRange;
+      if (!newRange) return;
+
       this.isSyncingXAxis = true;
       try {
-        const newRange = args.visibleRange;
-        
         // Propagate to all other panes
         for (const [otherPaneId, paneSurface] of this.paneSurfaces) {
-          if (otherPaneId === paneId) continue; // Skip source pane
-          
+          if (otherPaneId === paneId) continue;
+
           try {
             const otherXAxis = paneSurface.xAxis;
-            // Only update if range is different (with small tolerance for floating point)
             if (!newRange.equals(otherXAxis.visibleRange)) {
               otherXAxis.visibleRange = new NumberRange(newRange.min, newRange.max);
             }
-          } catch (e) {
+          } catch {
             // Ignore errors on individual panes
           }
-        }
-        
-        // Notify parent component of manual X-axis change
-        if (this.onXAxisManualChange) {
-          this.onXAxisManualChange(new NumberRange(newRange.min, newRange.max));
         }
       } finally {
         this.isSyncingXAxis = false;
       }
-    };
-    
-    // Subscribe to visibleRangeChanged
-    xAxis.visibleRangeChanged.subscribe(syncCallback);
-    
-    // Store reference to axis for cleanup (subscriptions are cleaned up when axis is deleted)
-    this.axisSubscriptions.set(paneId, { unsubscribe: () => {
+
+      // Notify parent component of manual X-axis change
+      // IMPORTANT: this is called only for the *source* axis change (not the propagated ones)
+      // because propagated updates happen while isSyncingXAxis=true.
       try {
-        // SciChart subscriptions are cleaned up automatically when the axis is deleted
-        // But we can clear handlers if needed via unsubscribeAll (if available)
-        if ((xAxis.visibleRangeChanged as any).unsubscribeAll) {
-          (xAxis.visibleRangeChanged as any).unsubscribeAll();
-        }
-      } catch (e) {
+        this.onXAxisManualChange?.(new NumberRange(newRange.min, newRange.max));
+      } catch {
         // Ignore
       }
-    }});
+    };
+
+    // Subscribe and store the specific subscription so we don't accidentally remove
+    // other listeners (e.g., minimap syncing) via unsubscribeAll.
+    const subscription = xAxis.visibleRangeChanged.subscribe(syncCallback) as any;
+    this.axisSubscriptions.set(paneId, {
+      unsubscribe: () => {
+        try {
+          subscription?.unsubscribe?.();
+        } catch {
+          // Ignore
+        }
+      },
+    });
   }
 
   /**
@@ -409,14 +412,14 @@ export class DynamicPaneManager {
    */
   private cleanupXAxisSync(paneId: string): void {
     const subscription = this.axisSubscriptions.get(paneId);
-    if (subscription) {
-      try {
-        subscription.unsubscribe();
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-      this.axisSubscriptions.delete(paneId);
+    if (!subscription) return;
+
+    try {
+      subscription.unsubscribe();
+    } catch {
+      // Ignore cleanup errors
     }
+    this.axisSubscriptions.delete(paneId);
   }
 
   /**
