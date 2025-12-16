@@ -1523,11 +1523,6 @@ export function useMultiPaneChart({
           
           // Helper function to apply X range to all linked charts
           const applyLinkedXRange = (range: NumberRange) => {
-            // Any minimap interaction is a "paused window" selection.
-            isLiveRef.current = false;
-            minimapStickyRef.current = false;
-            userInteractedRef.current = true;
-
             // Dynamic panes
             for (const [, paneSurface] of refs.paneSurfaces) {
               try {
@@ -1569,12 +1564,39 @@ export function useMultiPaneChart({
               endTime: range.max,
             });
           };
-          
-          // When the range selection is moved/resized, update the linked main charts
+
+          // When the range selection is moved/resized, update the linked main charts.
+          // If the user positions the right edge at the far-right of the data, we treat this as
+          // "follow latest" and keep live+sticky enabled.
           rangeSelectionModifier.onSelectedAreaChanged = (selectedRange: NumberRange) => {
-            if (settingTimeWindowRef.current) {
-              return; // Prevent feedback loop during time window presets
+            if (settingTimeWindowRef.current) return;
+
+            // Remember user-chosen window width for live sticky tracking
+            const widthMs = Math.max(1, selectedRange.max - selectedRange.min);
+            minimapTimeWindowRef.current = widthMs;
+
+            // Decide whether to enable sticky mode
+            let dataMax = 0;
+            try {
+              const mmDs = (refs as any).minimapDataSeries as XyDataSeries | null;
+              const xRange = mmDs?.getXRange();
+              if (xRange && isFinite(xRange.max)) dataMax = xRange.max;
+            } catch {}
+
+            const stickyThresholdMs = Math.max(widthMs * 0.02, 1000); // 2% of window or 1s
+            const shouldStickRight = dataMax > 0 && Math.abs(selectedRange.max - dataMax) <= stickyThresholdMs;
+
+            if (shouldStickRight) {
+              minimapStickyRef.current = true;
+              isLiveRef.current = true;
+              userInteractedRef.current = false;
+            } else {
+              // User explicitly moved away from the right edge → pause / manual explore
+              minimapStickyRef.current = false;
+              isLiveRef.current = false;
+              userInteractedRef.current = true;
             }
+
             applyLinkedXRange(selectedRange);
           };
           
@@ -4510,26 +4532,17 @@ export function useMultiPaneChart({
       const padding = windowMs * 0.02; // 2% padding on right edge
       const newRange = new NumberRange(actualDataMax - windowMs, actualDataMax + padding);
 
-      // CRITICAL: Auto-scroll should ONLY update main chart panes
-      // DO NOT update minimap directly - let the main-to-minimap subscription handle it
-      // This prevents feedback loops and UI shaking
-      // Manually sync to ALL panes since we're in sync mode (linked X-axes)
-      // CRITICAL: If a time window is selected, preserve the locked state (disable autoRange, set growBy to zero)
-      // Note: hasSelectedWindow is already declared above at line 4243
+      // Sync all main chart X-axes (linked panes)
       (refs as any).mainChartSyncInProgress = true; // Block minimap-to-main sync during auto-scroll
       try {
         for (const [paneId, paneSurface] of refs.paneSurfaces) {
           if (paneSurface?.xAxis) {
-            // CRITICAL: For time windows, always update (no threshold check) for smooth scrolling
-            // For minimap sticky mode, use threshold to avoid excessive updates
             const currentMax = paneSurface.xAxis.visibleRange?.max || 0;
             const diff = Math.abs(currentMax - newRange.max);
             const X_SCROLL_THRESHOLD = 100; // Small threshold (100ms) for minimap mode
             const shouldUpdate = hasSelectedWindow || !paneSurface.xAxis.visibleRange || diff > X_SCROLL_THRESHOLD;
-            
+
             if (shouldUpdate) {
-              // CRITICAL: Always lock the X-axis when auto-scrolling (disable autoRange, set growBy to zero)
-              // This prevents SciChart from auto-scaling and overriding our range
               if ((paneSurface.xAxis as any).autoRange !== undefined) {
                 (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
               }
@@ -4542,7 +4555,7 @@ export function useMultiPaneChart({
             }
           }
         }
-        
+
         // Also sync legacy surfaces
         if (refs.tickSurface?.xAxes.get(0)) {
           if (hasSelectedWindow) {
@@ -4568,11 +4581,16 @@ export function useMultiPaneChart({
           }
           refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
         }
-        
-        // The main-to-minimap subscription will automatically update minimap
-        // No need to update minimap directly here
+
+        // IMPORTANT: If we're in minimap sticky mode, keep the indicator pinned to the right edge.
+        // If sticky is false, do NOT move the indicator (it should stay where the user left it).
+        const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+        if (rangeSelectionModifier && minimapStickyRef.current && !settingTimeWindowRef.current) {
+          try {
+            rangeSelectionModifier.selectedArea = newRange;
+          } catch {}
+        }
       } finally {
-        // Clear flag after a short delay to allow minimap to sync
         setTimeout(() => {
           (refs as any).mainChartSyncInProgress = false;
         }, 100);
