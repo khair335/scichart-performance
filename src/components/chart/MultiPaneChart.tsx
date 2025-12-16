@@ -842,6 +842,7 @@ export function useMultiPaneChart({
   const overviewContainerIdRef = useRef<string | null>(null); // Store the container ID used to create overview
   const lastOverviewSourceRef = useRef<{ surfaceId?: string; minimapSourceSeries?: string } | null>(null); // Track last overview source
   const triggerYAxisScalingOnNextBatchRef = useRef(false); // Flag to trigger Y-axis scaling after data is processed
+  const yAxisManuallyStretchedRef = useRef(false); // When true, skip auto Y-axis scaling to preserve user's manual stretch
   
   // Track X-axis range state before tab is hidden to restore it when visible again
   const savedXAxisRangeRef = useRef<{
@@ -2761,12 +2762,14 @@ export function useMultiPaneChart({
                   console.log(`[MultiPaneChart] 📊 Setting X-axis range for ${paneId}: all data (${dataMin - padding} to ${dataMax + padding})`);
                 }
                 
-                // Set X-axis range and auto-scale Y-axis
+                // Set X-axis range and auto-scale Y-axis (unless user manually stretched)
                 paneSurface.surface.suspendUpdates();
                 try {
                   paneSurface.xAxis.visibleRange = newXRange;
-                  // Auto-scale Y-axis based on data
-                  paneSurface.surface.zoomExtentsY();
+                  // Auto-scale Y-axis based on data (skip if user manually stretched)
+                  if (!yAxisManuallyStretchedRef.current) {
+                    paneSurface.surface.zoomExtentsY();
+                  }
                 } finally {
                   paneSurface.surface.resumeUpdates();
                 }
@@ -3604,6 +3607,27 @@ export function useMultiPaneChart({
                   // so auto-scroll continues working after axis stretch
                 }, 50);
               };
+              
+              // Detect Y-axis drag to set manual stretch flag
+              // Y-axis is typically on the right side of the chart
+              let yAxisDragging = false;
+              surfaceElement.addEventListener('mousedown', (e: MouseEvent) => {
+                const rect = surfaceElement.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                // Y-axis area is typically the rightmost ~60px of the chart
+                const yAxisAreaWidth = 60;
+                if (x > rect.width - yAxisAreaWidth) {
+                  yAxisDragging = true;
+                }
+              }, { passive: true });
+              
+              surfaceElement.addEventListener('mouseup', () => {
+                if (yAxisDragging) {
+                  // User finished dragging Y-axis - set manual stretch flag
+                  yAxisManuallyStretchedRef.current = true;
+                  yAxisDragging = false;
+                }
+              }, { passive: true });
               
               // Still listen to interactions so we can pause auto-scroll, but do NOT
               // alter the minimap selection box from main chart interactions.
@@ -4707,8 +4731,8 @@ export function useMultiPaneChart({
         }
       }
       
-      // Update Y-axes periodically
-      if (now - lastYAxisUpdateRef.current >= Y_AXIS_UPDATE_INTERVAL) {
+      // Update Y-axes periodically (only if user hasn't manually stretched Y-axis)
+      if (now - lastYAxisUpdateRef.current >= Y_AXIS_UPDATE_INTERVAL && !yAxisManuallyStretchedRef.current) {
         lastYAxisUpdateRef.current = now;
         
         // Update Y-axis for all panes
@@ -4826,8 +4850,11 @@ export function useMultiPaneChart({
           
           try {
             // Only zoom Y-axis extents (not X), which avoids horizontal shaking
-            for (const surface of surfaces) {
-              try { surface.zoomExtentsY(); } catch (e) { /* ignore */ }
+            // Skip if user has manually stretched Y-axis
+            if (!yAxisManuallyStretchedRef.current) {
+              for (const surface of surfaces) {
+                try { surface.zoomExtentsY(); } catch (e) { /* ignore */ }
+              }
             }
           } finally {
             for (const surface of surfaces) {
@@ -5356,6 +5383,9 @@ export function useMultiPaneChart({
   }, []);
 
   const zoomExtents = useCallback(() => {
+    // Reset Y-axis manual stretch flag so auto-scaling resumes
+    yAxisManuallyStretchedRef.current = false;
+    
     // Zoom all dynamic pane surfaces
     for (const [paneId, paneSurface] of chartRefs.current.paneSurfaces) {
       try {
