@@ -121,7 +121,7 @@ export function parseMarkerFromSample(sample: {
   }
 
   return {
-    x: sample.t_ms, // Keep in milliseconds to match X-axis (DateTimeNumericAxis can handle milliseconds)
+    x: sample.t_ms / 1000, // Convert to Unix seconds to match DateTimeNumericAxis (which uses seconds, not milliseconds)
     y: sample.v,
     type: markerType,
     direction,
