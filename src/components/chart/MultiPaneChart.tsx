@@ -1419,9 +1419,16 @@ export function useMultiPaneChart({
           // minimapSurface.chartModifiers.add(...) - REMOVED to prevent minimap from changing
           
           // Create cloned DataSeries by copying from source
-          // CRITICAL: Use a reasonable capacity even if pointCount is 0
+          // IMPORTANT: minimap must keep the FULL session for its source series.
+          // Using a small FIFO here will drop old points, making the minimap look like it
+          // doesn't show the full data range.
+          const minimapCapacity =
+            config.data?.buffers.maxPointsTotal ??
+            config.data?.buffers.pointsPerSeries ??
+            2_000_000;
+
           const clonedDataSeries = new XyDataSeries(minimapWasm, {
-            fifoCapacity: Math.max(pointCount, 100000) + 100000, // Ensure minimum capacity
+            fifoCapacity: minimapCapacity,
             isSorted: true,
             containsNaN: false,
           });
