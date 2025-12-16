@@ -1601,6 +1601,7 @@ export function useMultiPaneChart({
             // Clear toolbar selection immediately so auto-scroll uses minimap window
             settingTimeWindowRef.current = false;
             selectedWindowMinutesRef.current = null; // Clear toolbar selection
+            sessionModeRef.current = false; // Disable "entire session" mode when user manually drags minimap
 
             // Remember user-chosen window width for live sticky tracking (in SECONDS since data is in seconds)
             const widthSec = Math.max(0.001, selectedRange.max - selectedRange.min);
