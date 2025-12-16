@@ -79,6 +79,13 @@ export class DynamicPaneManager {
   private parentSurface: SciChartSurface | null = null; // Parent surface for SubCharts API
   private gridRows: number = 1; // Current grid rows
   private gridCols: number = 1; // Current grid cols
+  
+  // X-axis synchronization state
+  private isSyncingXAxis: boolean = false; // Prevents infinite recursion during axis sync
+  private axisSubscriptions: Map<string, { unsubscribe: () => void }> = new Map(); // Track subscriptions for cleanup
+  
+  // Callback to notify parent component when X-axis is manually changed
+  public onXAxisManualChange?: (range: NumberRange) => void;
 
   constructor(theme: ChartTheme, timezone: string = 'UTC') {
     this.theme = theme;
@@ -342,6 +349,96 @@ export class DynamicPaneManager {
   }
 
   /**
+   * Set up X-axis synchronization for a pane
+   * When X-axis range changes on one pane (via pan, zoom, wheel, axis drag),
+   * propagate the change to all other panes.
+   */
+  private setupXAxisSync(paneId: string, xAxis: DateTimeNumericAxis): void {
+    // Store the callback so we can reference it for cleanup
+    const syncCallback = (args: any) => {
+      // Prevent infinite recursion
+      if (this.isSyncingXAxis) return;
+      
+      this.isSyncingXAxis = true;
+      try {
+        const newRange = args.visibleRange;
+        
+        // Propagate to all other panes
+        for (const [otherPaneId, paneSurface] of this.paneSurfaces) {
+          if (otherPaneId === paneId) continue; // Skip source pane
+          
+          try {
+            const otherXAxis = paneSurface.xAxis;
+            // Only update if range is different (with small tolerance for floating point)
+            if (!newRange.equals(otherXAxis.visibleRange)) {
+              otherXAxis.visibleRange = new NumberRange(newRange.min, newRange.max);
+            }
+          } catch (e) {
+            // Ignore errors on individual panes
+          }
+        }
+        
+        // Notify parent component of manual X-axis change
+        if (this.onXAxisManualChange) {
+          this.onXAxisManualChange(new NumberRange(newRange.min, newRange.max));
+        }
+      } finally {
+        this.isSyncingXAxis = false;
+      }
+    };
+    
+    // Subscribe to visibleRangeChanged
+    xAxis.visibleRangeChanged.subscribe(syncCallback);
+    
+    // Store reference to axis for cleanup (subscriptions are cleaned up when axis is deleted)
+    this.axisSubscriptions.set(paneId, { unsubscribe: () => {
+      try {
+        // SciChart subscriptions are cleaned up automatically when the axis is deleted
+        // But we can clear handlers if needed via unsubscribeAll (if available)
+        if ((xAxis.visibleRangeChanged as any).unsubscribeAll) {
+          (xAxis.visibleRangeChanged as any).unsubscribeAll();
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }});
+  }
+
+  /**
+   * Clean up X-axis subscription for a pane
+   */
+  private cleanupXAxisSync(paneId: string): void {
+    const subscription = this.axisSubscriptions.get(paneId);
+    if (subscription) {
+      try {
+        subscription.unsubscribe();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+      this.axisSubscriptions.delete(paneId);
+    }
+  }
+
+  /**
+   * Apply a visible range to all panes synchronously
+   * Used by external components (minimap, toolbar) to set range on all panes
+   */
+  applyVisibleRangeToAllPanes(range: NumberRange): void {
+    this.isSyncingXAxis = true;
+    try {
+      for (const [, paneSurface] of this.paneSurfaces) {
+        try {
+          paneSurface.xAxis.visibleRange = new NumberRange(range.min, range.max);
+        } catch (e) {
+          // Ignore errors on individual panes
+        }
+      }
+    } finally {
+      this.isSyncingXAxis = false;
+    }
+  }
+
+  /**
    * Create a new pane surface using SubCharts API
    * This creates a sub-chart within the parent surface, sharing the WebGL context
    */
@@ -489,6 +586,11 @@ export class DynamicPaneManager {
     };
 
     this.paneSurfaces.set(paneId, paneSurface);
+    
+    // Set up X-axis synchronization AFTER pane is registered
+    // This ensures that when this pane's X-axis changes, all other panes are updated
+    this.setupXAxisSync(paneId, xAxis);
+    
     return paneSurface;
   }
 
@@ -533,6 +635,9 @@ export class DynamicPaneManager {
   destroyPane(paneId: string): void {
     const pane = this.paneSurfaces.get(paneId);
     if (pane) {
+      // Clean up X-axis synchronization subscription first
+      this.cleanupXAxisSync(paneId);
+      
       // CRITICAL: Suspend updates first to prevent render attempts during cleanup
       try {
         pane.surface.suspendUpdates();
