@@ -901,9 +901,10 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   // When a preset is selected, minimap enters "sticky" mode (right edge follows live data)
   const handleTimeWindowSelect = useCallback((minutes: number) => {
     if (minutes === 0) {
-      // Entire session - zoom to fit all data
-      zoomExtents();
-      setIsLive(false); // Pause auto-scroll when viewing entire session
+      // Entire session - show all data and keep live mode for continuous expansion
+      setTimeWindow(0, dataClockMs || Date.now()); // Pass 0 to trigger session mode
+      // CRITICAL: Keep live mode enabled so chart expands with new data
+      // setIsLive(false); // Removed - allow live updates for entire session
       setCurrentTimeWindow(null); // Clear window display for "Entire Session"
     } else {
       // Set minimap to show last N minutes; charts remain paused until
@@ -920,7 +921,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       // setIsLive(false); // Removed - allow live updates for selected window
       setCurrentTimeWindow({ minutes, startTime, endTime });
     }
-  }, [zoomExtents, dataClockMs, setTimeWindow]);
+  }, [dataClockMs, setTimeWindow]);
   
   // NOTE: Removed the continuous update of currentTimeWindow display
   // The Toolbar now shows just the preset label (e.g., "Last 15 min") instead of the time range
