@@ -4816,6 +4816,24 @@ export function useMultiPaneChart({
     const prevStage = feedStageRef.current;
     feedStageRef.current = feedStage;
     
+    // CRITICAL: When session completes, clear all buffers to prevent stale data processing
+    // This ensures no data re-plots when coming back to tab or on page refresh
+    if (feedStage === 'complete') {
+      console.log('[MultiPaneChart] 🛑 Session complete, clearing all sample buffers');
+      sampleBufferRef.current = [];
+      processingQueueRef.current = [];
+      isProcessingRef.current = false;
+      if (pendingUpdateRef.current) {
+        if (isUsingTimeoutRef.current) {
+          clearTimeout(pendingUpdateRef.current as NodeJS.Timeout);
+        } else {
+          cancelAnimationFrame(pendingUpdateRef.current as number);
+        }
+        pendingUpdateRef.current = null;
+      }
+      return;
+    }
+    
     // Reset history loaded flag when starting new connection
     if (feedStage === 'history' && prevStage === 'idle') {
       historyLoadedRef.current = false;
@@ -5062,7 +5080,15 @@ export function useMultiPaneChart({
          
         }
       } else {
-        // Tab is becoming visible - ALWAYS jump to latest data (requirement)
+        // Tab is becoming visible
+        // CRITICAL: Skip all processing if session is complete
+        // This prevents re-plotting data or modifying chart state after session ends
+        if (feedStage === 'complete') {
+          console.log('[MultiPaneChart] Tab visible but session complete, skipping data processing');
+          return;
+        }
+        
+        // ALWAYS jump to latest data (requirement)
         // The chart should have been processing in background, but process a few more batches
         // to catch up on any remaining samples, then restore the range smoothly
      
@@ -5289,12 +5315,19 @@ export function useMultiPaneChart({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [processBatchedSamples]);
+  }, [processBatchedSamples, feedStage]);
 
   // Append samples with batching - ALWAYS collect data even when paused
   // Data collection continues in background per UI config
   const appendSamples = useCallback((samples: Sample[]) => {
     if (samples.length === 0) return;
+    
+    // CRITICAL: Do not accept any samples after session is complete
+    // This prevents data re-plotting when coming back to tab or server restart
+    if (feedStageRef.current === 'complete') {
+      console.log('[MultiPaneChart] ⏸️ Session complete, ignoring', samples.length, 'samples');
+      return;
+    }
     
     // Add samples to buffer - use config buffer size (default 10M)
     // This ensures we can handle large data streams without dropping samples
