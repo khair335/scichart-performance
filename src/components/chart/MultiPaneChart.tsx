@@ -3573,6 +3573,20 @@ export function useMultiPaneChart({
             // Store in refs
             refs.paneSurfaces.set(paneConfig.id, paneSurface);
             
+            // Create strategy marker scatter series if this pane is eligible
+            // CRITICAL: Create once during pane initialization, NOT during updates
+            if (plotLayout?.strategyMarkerPanes?.has(paneConfig.id)) {
+              const capacity = config.data?.buffers.pointsPerSeries ?? 100000;
+              const scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneConfig.id);
+              refs.markerScatterSeries.set(paneConfig.id, scatterSeriesMap);
+              
+              // Add all 5 scatter series to the surface
+              for (const group of scatterSeriesMap.values()) {
+                paneSurface.surface.renderableSeries.add(group.renderableSeries);
+              }
+              console.log(`[MultiPaneChart] Created strategy marker scatter series for pane: ${paneConfig.id}`);
+            }
+            
             // FPS tracking is now handled by requestAnimationFrame at the top level
             // No need to subscribe to surface rendered events
             
@@ -4430,21 +4444,11 @@ export function useMultiPaneChart({
         const paneSurface = refs.paneSurfaces.get(paneId);
         if (!paneSurface || !paneSurface.surface) continue;
         
-        // Get or create scatter series for this pane
-        let scatterSeriesMap = refs.markerScatterSeries.get(paneId);
-        if (!scatterSeriesMap) {
-          // Create all 5 scatter series for this pane
-          const capacity = config.data?.buffers.pointsPerSeries ?? 100000;
-          scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId);
-          refs.markerScatterSeries.set(paneId, scatterSeriesMap);
-          
-          // Add all scatter series to the surface
-          for (const group of scatterSeriesMap.values()) {
-            paneSurface.surface.renderableSeries.add(group.renderableSeries);
-          }
-        }
+        // Get scatter series for this pane (already created during pane initialization)
+        const scatterSeriesMap = refs.markerScatterSeries.get(paneId);
+        if (!scatterSeriesMap) continue; // Pane not eligible for markers
         
-        // Append data to each scatter series type
+        // Append data to each scatter series type - simple fast update, no creation
         for (const [markerType, batch] of typeBatches) {
           if (batch.x.length === 0) continue;
           
