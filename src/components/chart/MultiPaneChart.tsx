@@ -34,12 +34,6 @@ import {
   DpiHelper,
   EResamplingMode,
   EExecuteOn,
-  // Annotations for strategy markers
-  CustomAnnotation,
-  BoxAnnotation,
-  EHorizontalAnchorPoint,
-  EVerticalAnchorPoint,
-  ECoordinateMode,
   // Official SciChart minimap range selection modifier
   OverviewRangeSelectionModifier,
 } from 'scichart';
@@ -51,7 +45,14 @@ import type { ParsedLayout, PlotLayout } from '@/types/plot-layout';
 import { DynamicPaneManager, type PaneSurface as DynamicPaneSurface } from '@/lib/dynamic-pane-manager';
 import { renderHorizontalLines, renderVerticalLines } from '@/lib/overlay-renderer';
 import { groupStrategyMarkers, getConsolidatedSeriesId, type MarkerGroup } from '@/lib/strategy-marker-consolidator';
-import { MarkerAnnotationPool, parseMarkerFromSample, type MarkerData } from '@/lib/strategy-marker-renderer';
+import { parseMarkerFromSample, type MarkerData } from '@/lib/strategy-marker-renderer';
+import { 
+  createAllMarkerScatterSeries, 
+  getMarkerSeriesType, 
+  createEmptyMarkerBatches,
+  type MarkerSeriesType,
+  type MarkerScatterGroup 
+} from '@/lib/strategy-marker-scatter';
 
 /**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
@@ -218,8 +219,8 @@ interface ChartRefs {
   overview: SciChartOverview | null;
   // Shared WASM context for all panes (created once)
   sharedWasm: TSciChart | null;
-  // Strategy marker annotation pools per pane
-  markerAnnotationPools: Map<string, MarkerAnnotationPool>;
+  // Strategy marker scatter series per pane (5 series per pane for each marker type)
+  markerScatterSeries: Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
 }
@@ -763,7 +764,7 @@ export function useMultiPaneChart({
     verticalGroup: null,
     overview: null,
     sharedWasm: null, // Shared WASM context for all dynamic panes
-    markerAnnotationPools: new Map<string, MarkerAnnotationPool>(), // Strategy marker annotation pools
+    markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(), // Strategy marker scatter series per pane
   });
 
   const [isReady, setIsReady] = useState(false);
@@ -1209,8 +1210,8 @@ export function useMultiPaneChart({
           paneSurfaces: new Map<string, PaneSurface>(),
           // Shared WASM context (will be set from first pane when dynamic panes are created)
           sharedWasm: null,
-          // Strategy marker annotation pools
-          markerAnnotationPools: new Map<string, MarkerAnnotationPool>(),
+          // Strategy marker scatter series per pane (5 series per pane)
+          markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
         };
 
         // Note: Axis titles are intentionally omitted during initialization
@@ -4373,11 +4374,19 @@ export function useMultiPaneChart({
       }
     }
     
-    // Third pass: Create strategy marker annotations
-    // Strategy markers are rendered as visual annotations (triangles/circles) in addition to line series
-    // REQUIREMENT: Strategy markers must appear initially along with other series, not only when time window is selected
-    // They should be rendered whenever samples arrive, regardless of time window selection
+    // Third pass: Strategy markers using scatter series with appendRange (efficient batch updates)
+    // REQUIREMENT: Strategy markers must appear initially along with other series
     if (plotLayout && refs.paneSurfaces.size > 0) {
+      // Create empty batches for accumulating markers per pane
+      const paneMarkerBatches = new Map<string, Map<MarkerSeriesType, { x: number[], y: number[] }>>();
+      
+      // Initialize batches for eligible panes
+      const eligiblePanes = plotLayout.strategyMarkerPanes;
+      for (const paneId of eligiblePanes) {
+        paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
+      }
+      
+      // Accumulate markers into batches
       for (let i = 0; i < samplesLength; i++) {
         const sample = samples[i];
         const { series_id, t_ms, payload } = sample;
@@ -4386,52 +4395,62 @@ export function useMultiPaneChart({
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
         
-        // Strategy marker series don't have dataSeriesStore entries (chartTarget: 'none')
-        // They are rendered as annotations directly using strategyMarkerPanes from layout
+        // Parse marker data
+        const markerData = parseMarkerFromSample({
+          t_ms,
+          v: (payload.price as number) || (payload.value as number) || 0,
+          side: payload.side as string,
+          tag: payload.tag as string,
+          type: payload.type as string,
+          direction: payload.direction as string,
+          label: payload.label as string,
+        }, series_id);
         
-        // Get all eligible panes for strategy markers
-        const eligiblePanes = plotLayout.strategyMarkerPanes;
+        // Skip invalid markers
+        if (markerData.y === 0) continue;
         
+        // Determine marker series type
+        const markerType = getMarkerSeriesType(markerData);
+        
+        // Add to batches for all eligible panes
         for (const paneId of eligiblePanes) {
-          const paneSurface = refs.paneSurfaces.get(paneId);
-          if (!paneSurface || !paneSurface.surface) continue;
-          
-          // Get or create annotation pool for this pane
-          let pool = refs.markerAnnotationPools.get(paneId);
-          if (!pool) {
-            pool = new MarkerAnnotationPool();
-            refs.markerAnnotationPools.set(paneId, pool);
-          }
-          
-          // Parse marker data - map server fields to expected format
-          const markerData = parseMarkerFromSample({
-            t_ms,
-            v: (payload.price as number) || (payload.value as number) || 0,
-            // Binary format: side, tag
-            side: payload.side as string,
-            tag: payload.tag as string,
-            // JSON format: type, direction, label
-            type: payload.type as string,
-            direction: payload.direction as string,
-            label: payload.label as string,
-          }, series_id);
-          
-          // Skip invalid markers
-          if (markerData.y === 0) continue;
-          
-          // Create unique key for this marker
-          const markerKey = `${series_id}:${t_ms}`;
-          
-          try {
-            // Get or create annotation
-            const annotation = pool.getAnnotation(markerData, markerKey, paneSurface.wasm);
-            
-            // Add to surface if not already added
-            if (!paneSurface.surface.annotations.contains(annotation)) {
-              paneSurface.surface.annotations.add(annotation);
+          const typeBatches = paneMarkerBatches.get(paneId);
+          if (typeBatches) {
+            const batch = typeBatches.get(markerType);
+            if (batch) {
+              batch.x.push(markerData.x);
+              batch.y.push(markerData.y);
             }
-          } catch (e) {
-            // Silently ignore annotation creation errors
+          }
+        }
+      }
+      
+      // Use appendRange to efficiently add markers to scatter series
+      for (const [paneId, typeBatches] of paneMarkerBatches) {
+        const paneSurface = refs.paneSurfaces.get(paneId);
+        if (!paneSurface || !paneSurface.surface) continue;
+        
+        // Get or create scatter series for this pane
+        let scatterSeriesMap = refs.markerScatterSeries.get(paneId);
+        if (!scatterSeriesMap) {
+          // Create all 5 scatter series for this pane
+          const capacity = config.data?.buffers.pointsPerSeries ?? 100000;
+          scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId);
+          refs.markerScatterSeries.set(paneId, scatterSeriesMap);
+          
+          // Add all scatter series to the surface
+          for (const group of scatterSeriesMap.values()) {
+            paneSurface.surface.renderableSeries.add(group.renderableSeries);
+          }
+        }
+        
+        // Append data to each scatter series type
+        for (const [markerType, batch] of typeBatches) {
+          if (batch.x.length === 0) continue;
+          
+          const scatterGroup = scatterSeriesMap.get(markerType);
+          if (scatterGroup) {
+            scatterGroup.dataSeries.appendRange(batch.x, batch.y);
           }
         }
       }
