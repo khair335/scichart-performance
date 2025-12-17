@@ -71,12 +71,11 @@ export function createMarkerScatterSeries(
       strokeThickness: type === 'exitLong' ? 2 : 1,
     });
   } else {
-    // Triangle pointing down for short positions (rotated via negative height trick or custom SVG)
-    // SciChart's TrianglePointMarker doesn't have rotation, so we use a square marker with custom styling
-    // For now, use triangle with different styling to distinguish
-    pointMarker = new TrianglePointMarker(wasmContext, {
+    // Triangle pointing down for short positions
+    // Use EllipsePointMarker (square shape) to distinguish from long positions
+    pointMarker = new EllipsePointMarker(wasmContext, {
       width: style.size,
-      height: -style.size, // Negative height flips the triangle
+      height: style.size,
       fill: style.fill,
       stroke: style.stroke,
       strokeThickness: type === 'exitShort' ? 2 : 1,
