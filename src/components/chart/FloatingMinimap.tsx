@@ -77,9 +77,9 @@ export function FloatingMinimap({
         const deltaX = e.clientX - resizeStartRef.current.x;
         const deltaY = e.clientY - resizeStartRef.current.y;
         
-        // Calculate new size with minimum bounds
-        const newWidth = Math.max(200, Math.min(600, resizeStartRef.current.width + deltaX));
-        const newHeight = Math.max(60, Math.min(300, resizeStartRef.current.height + deltaY));
+        // Calculate new size - allow free resizing with only minimal constraints
+        const newWidth = Math.max(100, resizeStartRef.current.width + deltaX);
+        const newHeight = Math.max(40, resizeStartRef.current.height + deltaY);
         
         setSize({ width: newWidth, height: newHeight });
       }
