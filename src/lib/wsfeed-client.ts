@@ -295,6 +295,32 @@ export class WsFeedClient {
     this.lastDeltaFrameTime = 0;
   }
 
+  /**
+   * Clear localStorage on session complete to ensure fresh start on page refresh.
+   * This prevents showing "SESSION COMPLETE" with no data on first refresh,
+   * and prevents mixing old data with new data when server restarts.
+   */
+  private _clearStorageOnSessionComplete(): void {
+    console.log(`[WsFeedClient] 🧹 Clearing stored lastSeq on session complete to ensure fresh start`);
+    this.lastSeq = 0;
+    this.resumeFromRequested = 1;
+    if (this.storage) {
+      if (typeof this.storage.removeItem === 'function') {
+        try {
+          this.storage.removeItem(this.storageKey);
+        } catch {
+          // ignore
+        }
+      } else if (typeof this.storage.setItem === 'function') {
+        try {
+          this.storage.setItem(this.storageKey, '0');
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
   private _scheduleReconnect(reason: { code?: number; reason?: string }): void {
     if (!this._autoReconnect || this._explicitClose) return;
 
@@ -597,6 +623,11 @@ export class WsFeedClient {
           this.setAutoReconnect(false); // Disable auto-reconnect to prevent reloading
           this._explicitClose = true; // Mark as explicit close to prevent reconnection
           this._clearReconnectTimer(); // Clear any pending reconnect timers
+          
+          // CRITICAL: Clear localStorage on session complete to ensure fresh start on refresh
+          // This prevents showing "SESSION COMPLETE" with no data on first refresh
+          this._clearStorageOnSessionComplete();
+          
           this._emitStatus(true);
           this.onEvent(msg as FeedEvent);
           
