@@ -919,8 +919,8 @@ export function useMultiPaneChart({
   const historyLoadedRef = useRef(false);
   const initialDataTimeRef = useRef<number | null>(null);
   const userInteractedRef = useRef(false);
-  const timeWindowSelectedRef = useRef(true); // When true, a time window preset was explicitly selected - default to true for initial 15min
-  const selectedWindowMinutesRef = useRef<number | null>(15); // Store the selected window size in minutes (null = entire session) - default to 15min
+  const timeWindowSelectedRef = useRef(false); // When true, a time window preset was explicitly selected - will be set from layout JSON
+  const selectedWindowMinutesRef = useRef<number | null>(null); // Store the selected window size in minutes (null = entire session) - will be set from layout JSON
   const sessionModeRef = useRef(false); // When true, show entire session (expand with data)
   const lastDataTimeRef = useRef(0);
   const settingTimeWindowRef = useRef(false); // Flag to prevent auto-scroll from overriding during setTimeWindow
@@ -932,6 +932,7 @@ export function useMultiPaneChart({
   const triggerYAxisScalingOnNextBatchRef = useRef(false); // Flag to trigger Y-axis scaling after data is processed
   const yAxisManuallyStretchedRef = useRef(false); // When true, skip auto Y-axis scaling to preserve user's manual stretch
   const prevAutoScrollStateRef = useRef<boolean | null>(null); // Track previous auto-scroll state to detect changes
+  const lastMinimapRangeRef = useRef<{ min: number; max: number } | null>(null); // Track last minimap range to prevent flickering
   
   // Track X-axis range state before tab is hidden to restore it when visible again
   const savedXAxisRangeRef = useRef<{
@@ -1622,9 +1623,10 @@ export function useMultiPaneChart({
           if (initialSelectedArea) {
             rangeSelectionModifier.selectedArea = initialSelectedArea;
           } else {
-            // Default to showing last 2 minutes if no initial range (in SECONDS for SciChart)
+            // Default to layout JSON time window value, or 5 minutes if not set (in SECONDS for SciChart)
+            const defaultWindowMinutes = selectedWindowMinutesRef.current ?? 5;
             const nowSec = Date.now() / 1000;
-            rangeSelectionModifier.selectedArea = new NumberRange(nowSec - 2 * 60, nowSec);
+            rangeSelectionModifier.selectedArea = new NumberRange(nowSec - defaultWindowMinutes * 60, nowSec);
           }
           
           // Helper function to apply X range to all linked charts
@@ -4925,21 +4927,26 @@ export function useMultiPaneChart({
           refs.ohlcSurface.xAxes.get(0).visibleRange = newRange;
         }
 
-        // LIVE MODE: Always pin the minimap indicator's right edge to the latest timestamp
-        // This ensures the indicator follows new data as it arrives when sticky/live mode is active
-        // CRITICAL: Use re-entry guard to prevent triggering onSelectedAreaChanged
+        // LIVE MODE: Pin the minimap indicator's right edge to the latest timestamp
+        // CRITICAL: Only update when range actually changed to prevent flickering
         const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
         const setUpdatingFlag = (refs as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
         if (rangeSelectionModifier && minimapStickyRef.current) {
-          try {
-            // Set re-entry guard before updating
-            if (setUpdatingFlag) setUpdatingFlag(true);
-            // Use the same range that we're applying to main charts
-            // This ensures the indicator right edge = latest data timestamp
-            rangeSelectionModifier.selectedArea = newRange;
-            if (setUpdatingFlag) setUpdatingFlag(false);
-          } catch {
-            if (setUpdatingFlag) setUpdatingFlag(false);
+          // Check if range actually changed (threshold: 0.1 seconds to prevent micro-updates)
+          const lastRange = lastMinimapRangeRef.current;
+          const rangeChanged = !lastRange || 
+            Math.abs(lastRange.min - newRange.min) > 0.1 ||
+            Math.abs(lastRange.max - newRange.max) > 0.1;
+          
+          if (rangeChanged) {
+            try {
+              if (setUpdatingFlag) setUpdatingFlag(true);
+              rangeSelectionModifier.selectedArea = newRange;
+              lastMinimapRangeRef.current = { min: newRange.min, max: newRange.max };
+              if (setUpdatingFlag) setUpdatingFlag(false);
+            } catch {
+              if (setUpdatingFlag) setUpdatingFlag(false);
+            }
           }
         }
       } finally {
@@ -5742,6 +5749,8 @@ export function useMultiPaneChart({
       if (rangeSelectionModifier) {
         try {
           rangeSelectionModifier.selectedArea = newRange;
+          // Update tracking ref to prevent immediate re-update in auto-scroll
+          lastMinimapRangeRef.current = { min: newRange.min, max: newRange.max };
         } catch (e) {}
       }
       
@@ -6004,6 +6013,8 @@ export function useMultiPaneChart({
     if (rangeSelectionModifier) {
       try {
         rangeSelectionModifier.selectedArea = newRange;
+        // Update tracking ref to prevent immediate re-update in auto-scroll
+        lastMinimapRangeRef.current = { min: newRange.min, max: newRange.max };
       } catch (e) {
         console.warn('[setTimeWindow] Error updating minimap range selection:', e);
       }
