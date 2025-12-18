@@ -55,6 +55,20 @@ import {
 } from '@/lib/strategy-marker-scatter';
 
 /**
+ * Safely get count from a SciChart dataSeries
+ * Returns 0 if dataSeries is null, deleted, or throws an error
+ */
+function safeDataSeriesCount(dataSeries: XyDataSeries | OhlcDataSeries | null | undefined): number {
+  if (!dataSeries) return 0;
+  try {
+    return dataSeries.count();
+  } catch (e) {
+    // DataSeries was deleted or is invalid
+    return 0;
+  }
+}
+
+/**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
  * Shows spinner and LIST of pending series_ids when assigned series don't have data yet
  */
@@ -85,8 +99,8 @@ function updatePaneWaitingOverlay(
   for (const seriesId of assignedSeries) {
     const seriesEntry = refs.dataSeriesStore.get(seriesId);
     if (seriesEntry && seriesEntry.dataSeries) {
-      // Check if series has data
-      const count = seriesEntry.dataSeries.count();
+      // Use safe count to avoid "aborted()" errors from deleted dataSeries
+      const count = safeDataSeriesCount(seriesEntry.dataSeries);
       if (count > 0) {
         hasAnyData = true;
       } else {
@@ -1883,7 +1897,7 @@ export function useMultiPaneChart({
               // Update waiting overlay
               if (minimapSourceSeriesId) {
                 const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-                const hasData = sourceSeriesEntry?.dataSeries && sourceSeriesEntry.dataSeries.count() > 0;
+                const hasData = sourceSeriesEntry?.dataSeries && safeDataSeriesCount(sourceSeriesEntry.dataSeries) > 0;
                 const waitingOverlay = document.getElementById('overview-chart-waiting');
                 if (waitingOverlay) {
                   waitingOverlay.style.display = hasData ? 'none' : 'flex';
@@ -2320,7 +2334,7 @@ export function useMultiPaneChart({
           // Check if preserved data exists and is valid (not deleted)
           if (!isLiveFeed && preserved && preserved.dataSeries && !(preserved.dataSeries as any).isDeleted) {
             try {
-              const preservedCount = preserved.dataSeries.count();
+              const preservedCount = safeDataSeriesCount(preserved.dataSeries);
               if (preservedCount > 0) {
                 dataRestoredDuringPreallocation = true; // Mark that we restored data
                 seriesWithRestoredData.add(seriesId); // Track this specific series
@@ -2735,7 +2749,7 @@ export function useMultiPaneChart({
               let hasData = false;
               
               for (const [seriesId, entry] of refs.dataSeriesStore) {
-                if (entry.paneId === paneId && entry.dataSeries && entry.dataSeries.count() > 0) {
+                if (entry.paneId === paneId && entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
                   hasData = true;
                   try {
                     const xRange = entry.dataSeries.getXRange();
@@ -2808,7 +2822,7 @@ export function useMultiPaneChart({
                 // Check if pane has data and axis exists
                 let hasData = false;
                 for (const [seriesId, entry] of refs.dataSeriesStore) {
-                  if (entry.paneId === paneId && entry.dataSeries && entry.dataSeries.count() > 0) {
+                  if (entry.paneId === paneId && entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
                     hasData = true;
                     break;
                   }
@@ -2839,9 +2853,9 @@ export function useMultiPaneChart({
             for (const [preservedSeriesId, preserved] of preservedDataSeriesRef.current.entries()) {
               try {
                 const entry = refs.dataSeriesStore.get(preservedSeriesId);
-                if (entry && entry.dataSeries && entry.dataSeries.count() === 0) {
+                if (entry && entry.dataSeries && safeDataSeriesCount(entry.dataSeries) === 0) {
                   // Series exists but has no data - restore it
-                  const preservedCount = preserved.dataSeries.count();
+                  const preservedCount = safeDataSeriesCount(preserved.dataSeries);
                   if (preservedCount > 0 && !(preserved.dataSeries as any).isDeleted) {
                     console.log(`[MultiPaneChart] 🔄 Late restoration for ${preservedSeriesId}: ${preservedCount} points`);
                     
@@ -2944,7 +2958,7 @@ export function useMultiPaneChart({
           // Check if any series have data
           let hasDataInSeries = false;
           for (const [, entry] of refs.dataSeriesStore) {
-            if (entry.dataSeries && entry.dataSeries.count() > 0) {
+            if (entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
               hasDataInSeries = true;
               break;
             }
@@ -3002,7 +3016,7 @@ export function useMultiPaneChart({
           
           // Check if any series have data
           for (const [, entry] of refs.dataSeriesStore) {
-            if (entry.dataSeries && entry.dataSeries.count() > 0) {
+            if (entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
               hasAnyData = true;
               break;
             }
@@ -3273,7 +3287,7 @@ export function useMultiPaneChart({
                   continue; // Skip deleted DataSeries
                 }
                 
-                const dataCount = entry.dataSeries.count();
+                const dataCount = safeDataSeriesCount(entry.dataSeries);
                 if (dataCount > 0 && dataCount < 1000000) { // Sanity check: reasonable data size
                   // Get WASM from renderableSeries surface or from sharedWasm
                   const wasm = (entry.renderableSeries as any).sciChartSurface?.webAssemblyContext2D || refs.sharedWasm;
@@ -3372,7 +3386,7 @@ export function useMultiPaneChart({
                   continue; // Skip deleted DataSeries
                 }
                 
-                const dataCount = entry.dataSeries.count();
+                const dataCount = safeDataSeriesCount(entry.dataSeries);
                 if (dataCount > 0 && dataCount < 1000000) { // Sanity check: reasonable data size
                   // Get WASM from renderableSeries surface or from sharedWasm
                   const wasm = (entry.renderableSeries as any).sciChartSurface?.webAssemblyContext2D || refs.sharedWasm;
@@ -4393,10 +4407,10 @@ export function useMultiPaneChart({
       // Trigger a refresh to create the minimap
       // This happens when data arrives before minimap is created
       const sourceSeriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
-      if (sourceSeriesEntry?.dataSeries && sourceSeriesEntry.dataSeries.count() > 0) {
+      if (sourceSeriesEntry?.dataSeries && safeDataSeriesCount(sourceSeriesEntry.dataSeries) > 0) {
         // Source series now has data - trigger minimap creation by updating overviewNeedsRefresh state
         // The useEffect will detect this and create the minimap
-        console.log(`[MultiPaneChart] Triggering minimap creation - source series ${minimapSourceSeriesId} now has ${sourceSeriesEntry.dataSeries.count()} data points`);
+        console.log(`[MultiPaneChart] Triggering minimap creation - source series ${minimapSourceSeriesId} now has ${safeDataSeriesCount(sourceSeriesEntry.dataSeries)} data points`);
         overviewNeedsRefreshSetterRef.current(Date.now());
       }
     }
@@ -4638,7 +4652,7 @@ export function useMultiPaneChart({
         let globalDataMax = -Infinity;
         
         for (const [seriesId, entry] of refs.dataSeriesStore) {
-          if (entry.dataSeries && entry.dataSeries.count() > 0) {
+          if (entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
             try {
               const xRange = entry.dataSeries.getXRange();
               if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
@@ -4968,7 +4982,7 @@ export function useMultiPaneChart({
           let hasData = false;
           
           for (const [, entry] of refs.dataSeriesStore) {
-            const count = entry.dataSeries.count();
+            const count = safeDataSeriesCount(entry.dataSeries);
             if (count > 0) {
               try {
                 const xRange = entry.dataSeries.getXRange();
@@ -5083,7 +5097,7 @@ export function useMultiPaneChart({
           let isFullRange = false;
           // Find any series with data to determine if we're showing full range
           for (const [seriesId, entry] of refs.dataSeriesStore) {
-            if (entry.dataSeries.count() > 0) {
+            if (safeDataSeriesCount(entry.dataSeries) > 0) {
               try {
                 const dataXRange = entry.dataSeries.getXRange();
                 if (dataXRange) {
@@ -5197,7 +5211,7 @@ export function useMultiPaneChart({
                   let dataMin = latestTimestamp - windowMs; // Fallback
                   // Find earliest data point from any series in store
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
-                    if (entry.dataSeries.count() > 0) {
+                    if (safeDataSeriesCount(entry.dataSeries) > 0) {
                       try {
                         const xRange = entry.dataSeries.getXRange();
                         if (xRange && isFinite(xRange.min)) {
