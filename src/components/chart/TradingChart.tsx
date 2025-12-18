@@ -191,10 +191,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     { label: 'Last 4 hours', minutes: 240 },
   ]);
   
-  // Track current time window selection - default to "Last 15 min" (first preset)
-  const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(
-    { minutes: 15, startTime: Date.now() - 15 * 60 * 1000, endTime: Date.now() }
-  );
+  // Track current time window selection - initially null, will be set from layout JSON
+  const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(null);
   
   // Auto-hide configuration
   const [autoHideEnabled, setAutoHideEnabled] = useState(false);
@@ -348,7 +346,26 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     };
   }, [plotLayout]);
 
-  // Initialize multi-pane charts
+  // Set initial time window from layout JSON when plotLayout changes
+  useEffect(() => {
+    if (!plotLayout) return;
+    
+    const defaultRange = plotLayout.xAxisDefaultRange;
+    if (defaultRange?.mode === 'lastMinutes' && defaultRange.value) {
+      const minutes = defaultRange.value;
+      const now = Date.now();
+      setCurrentTimeWindow({
+        minutes,
+        startTime: now - minutes * 60 * 1000,
+        endTime: now,
+      });
+      console.log(`[TradingChart] Set initial time window from layout JSON: ${minutes} minutes`);
+    } else if (defaultRange?.mode === 'session') {
+      // Entire session mode
+      setCurrentTimeWindow(null);
+      console.log('[TradingChart] Set initial time window from layout JSON: Entire Session');
+    }
+  }, [plotLayout]);
   const {
     isReady,
     appendSamples,
