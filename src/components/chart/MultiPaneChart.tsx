@@ -919,8 +919,8 @@ export function useMultiPaneChart({
   const historyLoadedRef = useRef(false);
   const initialDataTimeRef = useRef<number | null>(null);
   const userInteractedRef = useRef(false);
-  const timeWindowSelectedRef = useRef(false); // When true, a time window preset was explicitly selected
-  const selectedWindowMinutesRef = useRef<number | null>(null); // Store the selected window size in minutes (null = entire session)
+  const timeWindowSelectedRef = useRef(true); // When true, a time window preset was explicitly selected - default to true for initial 15min
+  const selectedWindowMinutesRef = useRef<number | null>(15); // Store the selected window size in minutes (null = entire session) - default to 15min
   const sessionModeRef = useRef(false); // When true, show entire session (expand with data)
   const lastDataTimeRef = useRef(0);
   const settingTimeWindowRef = useRef(false); // Flag to prevent auto-scroll from overriding during setTimeWindow
@@ -3712,19 +3712,58 @@ export function useMultiPaneChart({
             // FPS tracking is now handled by requestAnimationFrame at the top level
             // No need to subscribe to surface rendered events
             
-            // Add double-click handler for fit-all + pause
-            // Requirement 22.1: Double-click = fit-all + pause
+            // Add double-click handler for fit both X and Y + pause
+            // Requirement: Double-click = fit X range (to current time window or full session) + fit Y + pause
             const surfaceElement = paneSurface.surface.domCanvas2D;
             if (surfaceElement) {
               surfaceElement.addEventListener('dblclick', () => {
-                // Zoom extents is already handled by ZoomExtentsModifier
-                // Pause auto-scroll, but allow live toggle to override
+                // Pause auto-scroll
                 isLiveRef.current = false;
                 userInteractedRef.current = true;
+                yAxisManuallyStretchedRef.current = false; // Reset manual stretch flag
+                
                 // Clear any pending timeout
                 if (interactionTimeoutRef.current) {
                   clearTimeout(interactionTimeoutRef.current);
                   interactionTimeoutRef.current = null;
+                }
+                
+                // Fit both X and Y axes for all panes
+                // Use selectedWindowMinutesRef if set, otherwise fit to full data range
+                const windowMinutes = selectedWindowMinutesRef.current;
+                
+                for (const [, ps] of refs.paneSurfaces) {
+                  try {
+                    ps.surface.suspendUpdates();
+                    
+                    // First fit Y-axis to visible data
+                    ps.yAxis.autoRange = EAutoRange.Once;
+                    
+                    // Then set X-axis range based on toolbar time window or full session
+                    if (windowMinutes && windowMinutes > 0) {
+                      // Use the toolbar time window setting
+                      const clockMs = lastDataTimeRef.current || Date.now();
+                      const windowMs = windowMinutes * 60 * 1000;
+                      const endSec = clockMs / 1000;
+                      const startSec = endSec - windowMs / 1000;
+                      ps.xAxis.visibleRange = new NumberRange(startSec, endSec);
+                    } else {
+                      // Fit to full data range
+                      ps.xAxis.autoRange = EAutoRange.Once;
+                    }
+                    
+                    ps.surface.resumeUpdates();
+                    
+                    // Force Y-axis to recalculate based on visible X range
+                    setTimeout(() => {
+                      try {
+                        ps.yAxis.autoRange = EAutoRange.Once;
+                        ps.surface.invalidateElement();
+                      } catch {}
+                    }, 50);
+                  } catch (e) {
+                    try { ps.surface.resumeUpdates(); } catch {}
+                  }
                 }
               });
               
@@ -4139,10 +4178,47 @@ export function useMultiPaneChart({
   // Update theme for all surfaces when theme changes
   useEffect(() => {
     const paneManager = paneManagerRef.current;
+    const refs = chartRefs.current;
     
     if (paneManager) {
       // Update theme in pane manager (this updates all dynamic panes)
       paneManager.setTheme(chartTheme);
+    }
+    
+    // CRITICAL: Also update minimap surface theme
+    const minimapSurface = (refs as any).minimapSurface as SciChartSurface | null;
+    if (minimapSurface) {
+      try {
+        minimapSurface.background = chartTheme.sciChartBackground;
+        
+        // Update minimap axes styles
+        const xAxis = minimapSurface.xAxes.get(0);
+        const yAxis = minimapSurface.yAxes.get(0);
+        
+        if (xAxis) {
+          xAxis.axisTitleStyle = { ...xAxis.axisTitleStyle, color: chartTheme.axisTitleColor };
+          xAxis.labelStyle = { ...xAxis.labelStyle, color: chartTheme.tickTextBrush };
+          xAxis.majorGridLineStyle = { ...xAxis.majorGridLineStyle, color: chartTheme.majorGridLineBrush };
+          xAxis.minorGridLineStyle = { ...xAxis.minorGridLineStyle, color: chartTheme.minorGridLineBrush };
+        }
+        
+        if (yAxis) {
+          yAxis.axisTitleStyle = { ...yAxis.axisTitleStyle, color: chartTheme.axisTitleColor };
+          yAxis.labelStyle = { ...yAxis.labelStyle, color: chartTheme.tickTextBrush };
+          yAxis.majorGridLineStyle = { ...yAxis.majorGridLineStyle, color: chartTheme.majorGridLineBrush };
+          yAxis.minorGridLineStyle = { ...yAxis.minorGridLineStyle, color: chartTheme.minorGridLineBrush };
+        }
+        
+        // Update minimap line series color based on theme
+        const lineSeries = minimapSurface.renderableSeries.get(0);
+        if (lineSeries) {
+          lineSeries.stroke = chartTheme.type === 'Dark' ? '#4CAF50' : '#2196F3';
+        }
+        
+        minimapSurface.invalidateElement();
+      } catch (e) {
+        // Ignore errors if minimap is not ready
+      }
     }
   }, [theme, chartTheme]);
   

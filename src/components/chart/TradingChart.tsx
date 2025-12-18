@@ -191,8 +191,10 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     { label: 'Last 4 hours', minutes: 240 },
   ]);
   
-  // Track current time window selection
-  const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(null);
+  // Track current time window selection - default to "Last 15 min" (first preset)
+  const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(
+    { minutes: 15, startTime: Date.now() - 15 * 60 * 1000, endTime: Date.now() }
+  );
   
   // Auto-hide configuration
   const [autoHideEnabled, setAutoHideEnabled] = useState(false);
@@ -1132,8 +1134,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       <FloatingMinimap
         visible={minimapEnabled}
         onClose={() => setMinimapEnabled(false)}
-        defaultPosition={{ x: window.innerWidth - 340, y: window.innerHeight - 160 }}
-        defaultSize={{ width: 320, height: 120 }}
+        defaultPosition={{ x: 10, y: window.innerHeight - 140 }}
+        defaultSize={{ width: window.innerWidth - 20, height: 100 }}
       >
         <div id="overview-chart" className="w-full h-full" />
       </FloatingMinimap>
