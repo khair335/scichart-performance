@@ -674,40 +674,47 @@ export function useMultiPaneChart({
     }
     
     try {
-      const capacity = getSeriesCapacity();
-      
+      // NOTE: This is the on-demand fallback path. Do not allocate huge buffers here.
+      // Normal preallocation uses getSeriesCapacity() with FIFO for performance.
+
       // paneId, surface, wasm already validated above
-      
+
       // Get renderable series type from layout or infer from series type
       const renderableSeriesType = getRenderableSeriesType(seriesId);
-      
+
       // CRITICAL: Use sharedWasm for DataSeries to prevent sharing issues
       // But ensure WASM is actually valid before using it
       const dataSeriesWasm = refs.sharedWasm || wasm;
-      
+
       // CRITICAL: Validate WASM context before creating DataSeries
       // WASM abort errors occur when WASM context is invalid or not properly initialized
       if (!dataSeriesWasm || !wasm) {
         // Invalid WASM context - silently skip
         return null;
       }
-      
-      // Create DataSeries with preallocated circular buffer
+
+      // ON-DEMAND SERIES CREATION (fallback path):
+      // Avoid huge upfront FIFO/capacity allocations because those can trigger SciChart WASM "Aborted()"
+      // and freeze the UI when many unseen series appear.
+      // Preallocation (the normal path) still uses the configured FIFO buffers.
+      const onDemandInitialCapacity = 10_000;
+
+      // Create DataSeries
       let dataSeries: XyDataSeries | OhlcDataSeries;
       let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
-      
+
       if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
-          // OHLC bar series - must use OhlcDataSeries
-          // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
-          dataSeries = new OhlcDataSeries(dataSeriesWasm, {
+        // OHLC bar series - must use OhlcDataSeries
+        // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
+        dataSeries = new OhlcDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
-          fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
-          capacity: capacity,
+          // NOTE: no fifoCapacity here (on-demand). This prevents WASM abort on large preallocation.
+          capacity: onDemandInitialCapacity,
           containsNaN: false,
           dataIsSortedInX: true,
           dataEvenlySpacedInX: true,
         });
-        
+
         // PERF: Use Auto resampling for 10M+ point performance
         renderableSeries = new FastCandlestickRenderableSeries(wasm, {
           dataSeries: dataSeries as OhlcDataSeries,
@@ -723,8 +730,8 @@ export function useMultiPaneChart({
         // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
         dataSeries = new XyDataSeries(dataSeriesWasm, {
           dataSeriesName: seriesId,
-          fifoCapacity: config.performance.fifoEnabled ? capacity : undefined,
-          capacity: capacity,
+          // NOTE: no fifoCapacity here (on-demand). This prevents WASM abort on large preallocation.
+          capacity: onDemandInitialCapacity,
           containsNaN: false,
           dataIsSortedInX: true,
           dataEvenlySpacedInX: true,
