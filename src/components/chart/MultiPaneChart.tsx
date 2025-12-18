@@ -1405,24 +1405,23 @@ export function useMultiPaneChart({
           const seriesEntry = refs.dataSeriesStore.get(minimapSourceSeriesId);
           const sourceDataSeries = seriesEntry?.dataSeries as XyDataSeries | undefined;
           
-          // CRITICAL: Create minimap even if source series doesn't exist yet
-          // The minimap will be populated as data arrives via processBatchedSamples
-          let pointCount = 0;
-          if (sourceDataSeries) {
-            try {
-              pointCount = sourceDataSeries.count();
-            } catch (e) {
-              console.warn('[MultiPaneChart] Error getting source series count:', e);
-            }
+          // CRITICAL: Use safe count to avoid "Aborted()" errors on deleted dataSeries
+          const pointCount = sourceDataSeries ? safeDataSeriesCount(sourceDataSeries) : 0;
+          
+          // CRITICAL: Skip minimap creation entirely if source series doesn't exist in store
+          // This happens when layout JSON specifies series_ids that don't match server data
+          // We should NOT create an empty minimap that will freeze the UI
+          if (!seriesEntry) {
+            console.log('[MultiPaneChart] Minimap source series not in dataSeriesStore, skipping minimap creation');
+            return;
           }
           
-          if (!seriesEntry) {
-            console.log('[MultiPaneChart] Minimap source series not in dataSeriesStore yet, creating empty minimap (will populate as data arrives)');
-          } else if (pointCount === 0) {
-            console.log('[MultiPaneChart] Minimap source series has no data yet, creating empty minimap (will populate as data arrives)');
-          } else {
-            console.log(`[MultiPaneChart] Creating minimap with ${pointCount} data points from source series ${minimapSourceSeriesId}`);
+          if (pointCount === 0) {
+            console.log('[MultiPaneChart] Minimap source series has no data yet, skipping minimap creation (will retry when data arrives)');
+            return;
           }
+          
+          console.log(`[MultiPaneChart] Creating minimap with ${pointCount} data points from source series ${minimapSourceSeriesId}`);
           
           // Create standalone minimap surface
           const { sciChartSurface: minimapSurface, wasmContext: minimapWasm } = await SciChartSurface.create(overviewContainerId, {
@@ -1480,54 +1479,46 @@ export function useMultiPaneChart({
             containsNaN: false,
           });
           
-          // Copy data from source DataSeries to cloned series (only if source exists)
-          // CRITICAL: Use safe method to avoid memory access errors
+          // Copy data from source DataSeries to cloned series
+          // CRITICAL: Use safe methods to avoid "Aborted()" errors
           let copiedCount = 0;
-          if (sourceDataSeries) {
+          if (sourceDataSeries && pointCount > 0) {
             try {
-              const count = sourceDataSeries.count();
-              if (count > 0) {
-                // Use getNativeXValues/getNativeYValues safely with bounds checking
-                const nativeX = sourceDataSeries.getNativeXValues();
-                const nativeY = sourceDataSeries.getNativeYValues();
-                
-                // CRITICAL: Check bounds before accessing native arrays
-                if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
-                  // Convert to arrays and append
-                  const xArr: number[] = [];
-                  const yArr: number[] = [];
-                  const size = Math.min(nativeX.size(), count); // Use minimum to avoid out of bounds
-                  for (let i = 0; i < size; i++) {
-                    try {
-                      const x = nativeX.get(i);
-                      const y = nativeY.get(i);
-                      if (isFinite(x) && isFinite(y)) {
-                        xArr.push(x);
-                        yArr.push(y);
-                      }
-                    } catch (e) {
-                      // Skip invalid values to avoid memory errors
-                      console.warn(`[Minimap] Skipping invalid data point at index ${i}:`, e);
-                      break; // Stop if we hit an error
+              // Use getNativeXValues/getNativeYValues safely with bounds checking
+              const nativeX = sourceDataSeries.getNativeXValues();
+              const nativeY = sourceDataSeries.getNativeYValues();
+              
+              // CRITICAL: Check bounds before accessing native arrays
+              if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
+                // Convert to arrays and append
+                const xArr: number[] = [];
+                const yArr: number[] = [];
+                const size = Math.min(nativeX.size(), pointCount); // Use minimum to avoid out of bounds
+                for (let i = 0; i < size; i++) {
+                  try {
+                    const x = nativeX.get(i);
+                    const y = nativeY.get(i);
+                    if (isFinite(x) && isFinite(y)) {
+                      xArr.push(x);
+                      yArr.push(y);
                     }
+                  } catch (e) {
+                    // Skip invalid values to avoid memory errors
+                    console.warn(`[Minimap] Skipping invalid data point at index ${i}:`, e);
+                    break; // Stop if we hit an error
                   }
-                  if (xArr.length > 0) {
-                    clonedDataSeries.appendRange(xArr, yArr);
-                    copiedCount = xArr.length;
-                  }
-                } else {
-                  // Fallback: Use getXRange and iterate if native access fails
-                  console.warn('[Minimap] Native array access failed, using fallback method');
-                  const xRange = sourceDataSeries.getXRange();
-                  if (xRange) {
-                    // For large datasets, we might need to sample, but for now just log
-                    console.warn('[Minimap] Source series has data but native access failed');
-                  }
+                }
+                if (xArr.length > 0) {
+                  clonedDataSeries.appendRange(xArr, yArr);
+                  copiedCount = xArr.length;
                 }
               }
             } catch (e) {
               console.error('[Minimap] Error copying data from source series:', e);
-              // Continue with empty minimap - it will be populated as new data arrives
+              // Delete the cloned series and surface, return early
+              clonedDataSeries.delete();
+              minimapSurface.delete();
+              return;
             }
           }
           
@@ -1856,6 +1847,26 @@ export function useMultiPaneChart({
           
           if (sourceSurface.renderableSeries.size() === 0) {
             console.log('[MultiPaneChart] Skipping overview creation: source surface has no series');
+            return;
+          }
+          
+          // CRITICAL: Also check that the series has actual data to avoid "Aborted()" errors
+          // SciChartOverview.create will fail if the dataSeries has no data or is deleted
+          let hasValidData = false;
+          try {
+            for (let i = 0; i < sourceSurface.renderableSeries.size(); i++) {
+              const series = sourceSurface.renderableSeries.get(i);
+              if (series?.dataSeries && safeDataSeriesCount(series.dataSeries as XyDataSeries | OhlcDataSeries) > 0) {
+                hasValidData = true;
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn('[MultiPaneChart] Error checking series data:', e);
+          }
+          
+          if (!hasValidData) {
+            console.log('[MultiPaneChart] Skipping overview creation: source series have no data yet');
             return;
           }
           
