@@ -1364,6 +1364,13 @@ export function useMultiPaneChart({
       if (!overviewContainerId) {
         return;
       }
+
+      // Respect ui-config minimap.enabled. If disabled, do not create any overview/minimap.
+      // This avoids SciChart WASM allocations when the minimap feature is turned off.
+      const minimapEnabled = (config as any)?.minimap?.enabled ?? true;
+      if (!minimapEnabled) {
+        return;
+      }
       
       try {
         // Wait a bit to ensure the container is rendered
@@ -1521,14 +1528,11 @@ export function useMultiPaneChart({
           // Do NOT add XAxisDragModifier - it causes the minimap to change its range
           // minimapSurface.chartModifiers.add(...) - REMOVED to prevent minimap from changing
           
-          // Create cloned DataSeries by copying from source
           // IMPORTANT: minimap must keep the FULL session for its source series.
-          // Using a small FIFO here will drop old points, making the minimap look like it
-          // doesn't show the full data range.
-          const minimapCapacity =
-            config.data?.buffers.maxPointsTotal ??
-            config.data?.buffers.pointsPerSeries ??
-            2_000_000;
+          // However, pre-allocating huge FIFO vectors can abort the WASM runtime.
+          // Use a conservative FIFO capacity based on current data with some headroom.
+          const maxPerSeries = config.data?.buffers.pointsPerSeries ?? 2_000_000;
+          const minimapCapacity = Math.max(10_000, Math.min(maxPerSeries, pointCount + 10_000));
 
           const clonedDataSeries = new XyDataSeries(minimapWasm, {
             fifoCapacity: minimapCapacity,
