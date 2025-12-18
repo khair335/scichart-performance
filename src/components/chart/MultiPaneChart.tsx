@@ -36,6 +36,11 @@ import {
   EExecuteOn,
   // Official SciChart minimap range selection modifier
   OverviewRangeSelectionModifier,
+  // TextAnnotation for "Waiting for data" overlay
+  TextAnnotation,
+  ECoordinateMode,
+  EHorizontalAnchorPoint,
+  EVerticalAnchorPoint,
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
@@ -291,6 +296,8 @@ interface ChartRefs {
   sharedWasm: TSciChart | null;
   // Strategy marker scatter series per pane (5 series per pane for each marker type)
   markerScatterSeries: Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>;
+  // "Waiting for data" TextAnnotations per pane (shown when pane has no data)
+  waitingAnnotations: Map<string, TextAnnotation>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
 }
@@ -835,6 +842,7 @@ export function useMultiPaneChart({
     overview: null,
     sharedWasm: null, // Shared WASM context for all dynamic panes
     markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(), // Strategy marker scatter series per pane
+    waitingAnnotations: new Map<string, TextAnnotation>(), // "Waiting for data" TextAnnotations per pane
   });
 
   const [isReady, setIsReady] = useState(false);
@@ -1282,6 +1290,8 @@ export function useMultiPaneChart({
           sharedWasm: null,
           // Strategy marker scatter series per pane (5 series per pane)
           markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
+          // "Waiting for data" TextAnnotations per pane
+          waitingAnnotations: new Map<string, TextAnnotation>(),
         };
 
         // Note: Axis titles are intentionally omitted during initialization
@@ -1608,8 +1618,11 @@ export function useMultiPaneChart({
           
           // Helper function to apply X range to all linked charts
           const applyLinkedXRange = (range: NumberRange) => {
-            // Dynamic panes
+            // Dynamic panes - skip panes without data to prevent issues
             for (const [, paneSurface] of refs.paneSurfaces) {
+              // Skip panes that don't have data yet (they show "Waiting for data" annotation)
+              if (!paneSurface.hasData) continue;
+              
               try {
                 (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
                 paneSurface.xAxis.growBy = new NumberRange(0, 0);
@@ -3648,6 +3661,29 @@ export function useMultiPaneChart({
             // Store in refs
             refs.paneSurfaces.set(paneConfig.id, paneSurface);
             
+            // Mark pane as waiting for data initially
+            paneSurface.hasData = false;
+            paneSurface.waitingForData = true;
+            
+            // Create "Waiting for data" TextAnnotation centered on the pane
+            // This uses SciChart's native annotation (per SciChart AI suggestion)
+            const waitingAnnotation = new TextAnnotation({
+              text: "Waiting for data...",
+              x1: 0.5,
+              y1: 0.5,
+              xCoordinateMode: ECoordinateMode.Relative,
+              yCoordinateMode: ECoordinateMode.Relative,
+              horizontalAnchorPoint: EHorizontalAnchorPoint.Center,
+              verticalAnchorPoint: EVerticalAnchorPoint.Center,
+              fontSize: 16,
+              fontWeight: "Bold",
+              opacity: 0.7,
+              textColor: chartTheme.textAnnotationForeground,
+            });
+            paneSurface.surface.annotations.add(waitingAnnotation);
+            refs.waitingAnnotations.set(paneConfig.id, waitingAnnotation);
+            console.log(`[MultiPaneChart] Added "Waiting for data" annotation to pane: ${paneConfig.id}`);
+            
             // Create strategy marker scatter series if this pane is eligible
             // CRITICAL: Create once during pane initialization, NOT during updates
             if (plotLayout?.strategyMarkerPanes?.has(paneConfig.id)) {
@@ -4548,6 +4584,18 @@ export function useMultiPaneChart({
             // Check if this is the first time data is received for this pane
             if (!paneSurface.hasData) {
               firstDataReceived = true;
+              
+              // Hide the "Waiting for data" TextAnnotation
+              const waitingAnnotation = refs.waitingAnnotations.get(paneId);
+              if (waitingAnnotation) {
+                try {
+                  paneSurface.surface.annotations.remove(waitingAnnotation);
+                  refs.waitingAnnotations.delete(paneId);
+                  console.log(`[MultiPaneChart] Removed "Waiting for data" annotation from pane: ${paneId}`);
+                } catch (e) {
+                  // Ignore errors during annotation removal
+                }
+              }
             }
             paneSurface.hasData = true;
             paneSurface.waitingForData = false;
@@ -4740,9 +4788,15 @@ export function useMultiPaneChart({
       }
 
       // Sync all main chart X-axes (linked panes)
+      // SKIP panes without data to prevent autoscrolling empty panes
       (refs as any).mainChartSyncInProgress = true; // Block minimap-to-main sync during auto-scroll
       try {
         for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          // CRITICAL: Skip autoscrolling for panes that don't have data yet
+          if (!paneSurface.hasData) {
+            continue; // Don't update X-axis for panes waiting for data
+          }
+          
           if (paneSurface?.xAxis) {
             // Always update in live/sticky mode for smooth scrolling
             // Removed threshold check that was causing choppy scrolling when minimap was used
