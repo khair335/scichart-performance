@@ -69,6 +69,53 @@ function safeDataSeriesCount(dataSeries: XyDataSeries | OhlcDataSeries | null | 
 }
 
 /**
+ * Safely get X range from a SciChart dataSeries
+ * Returns null if dataSeries is null, empty, deleted, or throws an error
+ */
+function safeGetXRange(dataSeries: XyDataSeries | OhlcDataSeries | null | undefined): NumberRange | null {
+  if (!dataSeries) return null;
+  try {
+    const count = dataSeries.count();
+    if (count === 0) return null;
+    return dataSeries.getXRange();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Safely get native X values from a SciChart dataSeries
+ * Returns null if dataSeries is null, empty, deleted, or throws an error
+ */
+function safeGetNativeXValues(dataSeries: XyDataSeries | OhlcDataSeries | null | undefined): { get: (i: number) => number; size: () => number } | null {
+  if (!dataSeries) return null;
+  try {
+    const count = dataSeries.count();
+    if (count === 0) return null;
+    return dataSeries.getNativeXValues();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Safely get native Y values from a SciChart XyDataSeries
+ * Returns null if dataSeries is null, empty, deleted, not XyDataSeries, or throws an error
+ */
+function safeGetNativeYValues(dataSeries: XyDataSeries | OhlcDataSeries | null | undefined): { get: (i: number) => number; size: () => number } | null {
+  if (!dataSeries) return null;
+  // Only XyDataSeries has getNativeYValues
+  if (!(dataSeries instanceof XyDataSeries)) return null;
+  try {
+    const count = dataSeries.count();
+    if (count === 0) return null;
+    return dataSeries.getNativeYValues();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
  * Shows spinner and LIST of pending series_ids when assigned series don't have data yet
  */
@@ -491,10 +538,10 @@ export function useMultiPaneChart({
     xMax?: number
   ): { min: number; max: number } | null => {
     try {
-      if (dataSeries.count() === 0) return null;
+      if (safeDataSeriesCount(dataSeries) === 0) return null;
       
-      const xValues = dataSeries.getNativeXValues();
-      const yValues = dataSeries.getNativeYValues();
+      const xValues = safeGetNativeXValues(dataSeries);
+      const yValues = safeGetNativeYValues(dataSeries);
       
       if (!xValues || !yValues || xValues.size() === 0) return null;
       
@@ -1484,9 +1531,9 @@ export function useMultiPaneChart({
           let copiedCount = 0;
           if (sourceDataSeries && pointCount > 0) {
             try {
-              // Use getNativeXValues/getNativeYValues safely with bounds checking
-              const nativeX = sourceDataSeries.getNativeXValues();
-              const nativeY = sourceDataSeries.getNativeYValues();
+              // Use safe wrappers to avoid "Aborted()" errors
+              const nativeX = safeGetNativeXValues(sourceDataSeries);
+              const nativeY = safeGetNativeYValues(sourceDataSeries);
               
               // CRITICAL: Check bounds before accessing native arrays
               if (nativeX && nativeY && nativeX.size() > 0 && nativeX.size() === nativeY.size()) {
@@ -1628,11 +1675,9 @@ export function useMultiPaneChart({
 
             // Get current data max from minimap data series (already in seconds)
             let dataMax = 0;
-            try {
-              const mmDs = (refs as any).minimapDataSeries as XyDataSeries | null;
-              const xRange = mmDs?.getXRange();
-              if (xRange && isFinite(xRange.max)) dataMax = xRange.max;
-            } catch {}
+            const mmDs = (refs as any).minimapDataSeries as XyDataSeries | null;
+            const xRange = safeGetXRange(mmDs);
+            if (xRange && isFinite(xRange.max)) dataMax = xRange.max;
 
             // SMOOTHER STICKY DETECTION:
             // Use a VERY generous threshold - 10% of window width or minimum 5 seconds
@@ -1700,8 +1745,8 @@ export function useMultiPaneChart({
           
           // Initialize minimap X-axis to show FULL data range
           let fullDataRange: NumberRange | undefined;
-          if (clonedDataSeries && clonedDataSeries.count() > 0) {
-            const dataRange = clonedDataSeries.getXRange();
+          if (clonedDataSeries && safeDataSeriesCount(clonedDataSeries) > 0) {
+            const dataRange = safeGetXRange(clonedDataSeries);
             if (dataRange) {
               fullDataRange = new NumberRange(dataRange.min, dataRange.max);
             }
@@ -1730,15 +1775,15 @@ export function useMultiPaneChart({
           // CRITICAL: If minimap was created with no data but source exists, trigger a re-sync
           if (sourceDataSeries && copiedCount === 0) {
             try {
-              const srcCount = sourceDataSeries.count();
+              const srcCount = safeDataSeriesCount(sourceDataSeries);
               if (srcCount > 0) {
                 console.log('[MultiPaneChart] Minimap created with no data, but source has data - triggering re-sync');
                 setTimeout(() => {
                   try {
-                    const currentCount = sourceDataSeries.count();
-                    if (currentCount > 0 && clonedDataSeries.count() === 0) {
-                      const nativeX = sourceDataSeries.getNativeXValues();
-                      const nativeY = sourceDataSeries.getNativeYValues();
+                    const currentCount = safeDataSeriesCount(sourceDataSeries);
+                    if (currentCount > 0 && safeDataSeriesCount(clonedDataSeries) === 0) {
+                      const nativeX = safeGetNativeXValues(sourceDataSeries);
+                      const nativeY = safeGetNativeYValues(sourceDataSeries);
                       if (nativeX && nativeY && nativeX.size() > 0) {
                         const xArr: number[] = [];
                         const yArr: number[] = [];
@@ -1765,7 +1810,7 @@ export function useMultiPaneChart({
                           console.log(`[MultiPaneChart] Re-synced ${xArr.length} data points to minimap`);
                           
                           // Update minimap X-axis to show full range after data sync
-                          const newDataRange = clonedDataSeries.getXRange();
+                          const newDataRange = safeGetXRange(clonedDataSeries);
                           if (newDataRange) {
                             xAxis.visibleRange = new NumberRange(newDataRange.min, newDataRange.max);
                           }
@@ -2762,18 +2807,14 @@ export function useMultiPaneChart({
               for (const [seriesId, entry] of refs.dataSeriesStore) {
                 if (entry.paneId === paneId && entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
                   hasData = true;
-                  try {
-                    const xRange = entry.dataSeries.getXRange();
-                    if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                      if (dataMin === null || xRange.min < dataMin) {
-                        dataMin = xRange.min;
-                      }
-                      if (dataMax === null || xRange.max > dataMax) {
-                        dataMax = xRange.max;
-                      }
+                  const xRange = safeGetXRange(entry.dataSeries);
+                  if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                    if (dataMin === null || xRange.min < dataMin) {
+                      dataMin = xRange.min;
                     }
-                  } catch (e) {
-                    // Continue with other series
+                    if (dataMax === null || xRange.max > dataMax) {
+                      dataMax = xRange.max;
+                    }
                   }
                 }
               }
@@ -4381,23 +4422,17 @@ export function useMultiPaneChart({
                   // The minimap should always show all data, not just the current selection
                   // The range indicator (OverviewRangeSelectionModifier) will stay where user put it
                   const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
-                  if (minimapXAxis && minimapDataSeries.count() > 0) {
-                    try {
-                      const fullDataRange = minimapDataSeries.getXRange();
-                      if (fullDataRange) {
-                        // ALWAYS update minimap X-axis to show full data range (no blocking)
-                        // This ensures minimap always displays all available data
-                        const currentRange = minimapXAxis.visibleRange;
-                        const needsUpdate = !currentRange || 
-                            fullDataRange.min < currentRange.min ||
-                            fullDataRange.max > currentRange.max;
-                        
-                        if (needsUpdate) {
-                          minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
-                        }
-                      }
-                    } catch (e) {
-                      console.warn('[MultiPaneChart] Error updating minimap X-axis range:', e);
+                  const fullDataRange = safeGetXRange(minimapDataSeries);
+                  if (minimapXAxis && fullDataRange) {
+                    // ALWAYS update minimap X-axis to show full data range (no blocking)
+                    // This ensures minimap always displays all available data
+                    const currentRange = minimapXAxis.visibleRange;
+                    const needsUpdate = !currentRange || 
+                        fullDataRange.min < currentRange.min ||
+                        fullDataRange.max > currentRange.max;
+                    
+                    if (needsUpdate) {
+                      minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
                     }
                   }
                 }
@@ -4664,14 +4699,10 @@ export function useMultiPaneChart({
         
         for (const [seriesId, entry] of refs.dataSeriesStore) {
           if (entry.dataSeries && safeDataSeriesCount(entry.dataSeries) > 0) {
-            try {
-              const xRange = entry.dataSeries.getXRange();
-              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                globalDataMin = Math.min(globalDataMin, xRange.min);
-                globalDataMax = Math.max(globalDataMax, xRange.max);
-              }
-            } catch (e) {
-              // Continue with other series
+            const xRange = safeGetXRange(entry.dataSeries);
+            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+              globalDataMin = Math.min(globalDataMin, xRange.min);
+              globalDataMax = Math.max(globalDataMax, xRange.max);
             }
           }
         }
@@ -4995,19 +5026,17 @@ export function useMultiPaneChart({
           for (const [, entry] of refs.dataSeriesStore) {
             const count = safeDataSeriesCount(entry.dataSeries);
             if (count > 0) {
-              try {
-                const xRange = entry.dataSeries.getXRange();
-                if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                  if (!hasData) {
-                    dataMin = xRange.min;
-                    dataMax = xRange.max;
-                    hasData = true;
-                  } else {
-                    if (xRange.min < dataMin) dataMin = xRange.min;
-                    if (xRange.max > dataMax) dataMax = xRange.max;
-                  }
+              const xRange = safeGetXRange(entry.dataSeries);
+              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                if (!hasData) {
+                  dataMin = xRange.min;
+                  dataMax = xRange.max;
+                  hasData = true;
+                } else {
+                  if (xRange.min < dataMin) dataMin = xRange.min;
+                  if (xRange.max > dataMax) dataMax = xRange.max;
                 }
-              } catch (e) { /* ignore */ }
+              }
             }
           }
           
@@ -5109,17 +5138,13 @@ export function useMultiPaneChart({
           // Find any series with data to determine if we're showing full range
           for (const [seriesId, entry] of refs.dataSeriesStore) {
             if (safeDataSeriesCount(entry.dataSeries) > 0) {
-              try {
-                const dataXRange = entry.dataSeries.getXRange();
-                if (dataXRange) {
-                  const dataWidth = dataXRange.max - dataXRange.min;
-                  const visibleWidth = tickRange.max - tickRange.min;
-                  // If visible range is close to data range (within 5%), consider it "full range"
-                  isFullRange = visibleWidth >= dataWidth * 0.95;
-                  break; // Found a series with data, no need to check others
-                }
-              } catch (e) {
-                // Continue with other series
+              const dataXRange = safeGetXRange(entry.dataSeries);
+              if (dataXRange) {
+                const dataWidth = dataXRange.max - dataXRange.min;
+                const visibleWidth = tickRange.max - tickRange.min;
+                // If visible range is close to data range (within 5%), consider it "full range"
+                isFullRange = visibleWidth >= dataWidth * 0.95;
+                break; // Found a series with data, no need to check others
               }
             }
           }
@@ -5223,15 +5248,11 @@ export function useMultiPaneChart({
                   // Find earliest data point from any series in store
                   for (const [seriesId, entry] of refs.dataSeriesStore) {
                     if (safeDataSeriesCount(entry.dataSeries) > 0) {
-                      try {
-                        const xRange = entry.dataSeries.getXRange();
-                        if (xRange && isFinite(xRange.min)) {
-                          if (dataMin === null || xRange.min < dataMin) {
-                            dataMin = xRange.min;
-                          }
+                      const xRange = safeGetXRange(entry.dataSeries);
+                      if (xRange && isFinite(xRange.min)) {
+                        if (dataMin === null || xRange.min < dataMin) {
+                          dataMin = xRange.min;
                         }
-                      } catch (e) {
-                        // Continue with other series
                       }
                     }
                   }
@@ -5901,32 +5922,26 @@ export function useMultiPaneChart({
       seriesArray.forEach(rs => {
         try {
           const dataSeries = (rs as any).dataSeries;
-          if (dataSeries && dataSeries.count() > 0) {
-            const dataRange = dataSeries.getXRange();
-            const isVisible = rs.isVisible;
-            
+          const dataRange = safeGetXRange(dataSeries);
+          const isVisible = rs.isVisible;
+          
+          if (dataRange) {
             // CRITICAL: Data is stored in milliseconds (t_ms), and newRange is also in milliseconds
             // getXRange() returns the raw data values, which are in MILLISECONDS
             // Both data range and window range are in milliseconds, so compare directly
-            let hasDataInRange = false;
-            
-            if (dataRange) {
-              // Data range is ALWAYS in milliseconds (because we append t_ms directly)
-              // newRange is also in milliseconds, so compare directly
-              hasDataInRange = dataRange.min <= newRange.max && dataRange.max >= newRange.min;
-            }
-            
+            const hasDataInRange = dataRange.min <= newRange.max && dataRange.max >= newRange.min;
+              
             // CRITICAL: Log detailed information about data ranges
             // NOTE: Both data and X-axis range are in MILLISECONDS
-            console.log(`[setTimeWindow] Series ${dataSeries.dataSeriesName || 'unknown'}:`, {
+            console.log(`[setTimeWindow] Series ${dataSeries?.dataSeriesName || 'unknown'}:`, {
               visible: isVisible,
-              dataCount: dataSeries.count(),
-              dataRangeMs: dataRange ? {
+              dataCount: safeDataSeriesCount(dataSeries),
+              dataRangeMs: {
                 min: dataRange.min,
                 minDate: new Date(dataRange.min).toISOString(),
                 max: dataRange.max,
                 maxDate: new Date(dataRange.max).toISOString()
-              } : 'no range',
+              },
               windowRangeMs: {
                 min: newRange.min,
                 minDate: new Date(newRange.min).toISOString(),
@@ -5937,13 +5952,13 @@ export function useMultiPaneChart({
             });
             
             if (!isVisible) {
-              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries.dataSeriesName || 'unknown'} is NOT VISIBLE on pane ${paneId}`);
+              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries?.dataSeriesName || 'unknown'} is NOT VISIBLE on pane ${paneId}`);
             }
-            if (!hasDataInRange && dataRange) {
-              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries.dataSeriesName || 'unknown'} has NO DATA in time window. Data range: [${new Date(dataRange.min).toISOString()}, ${new Date(dataRange.max).toISOString()}], Window: [${new Date(newRange.min).toISOString()}, ${new Date(newRange.max).toISOString()}]`);
+            if (!hasDataInRange) {
+              console.warn(`[setTimeWindow] ⚠️ Series ${dataSeries?.dataSeriesName || 'unknown'} has NO DATA in time window. Data range: [${new Date(dataRange.min).toISOString()}, ${new Date(dataRange.max).toISOString()}], Window: [${new Date(newRange.min).toISOString()}, ${new Date(newRange.max).toISOString()}]`);
             }
           } else {
-            console.log(`[setTimeWindow] Series ${(rs as any).dataSeries?.dataSeriesName || 'unknown'}: visible=${rs.isVisible}, no data (count: ${dataSeries?.count() || 0})`);
+            console.log(`[setTimeWindow] Series ${(rs as any).dataSeries?.dataSeriesName || 'unknown'}: visible=${rs.isVisible}, no data (count: ${safeDataSeriesCount(dataSeries)})`);
           }
         } catch (e) {
           console.warn(`[setTimeWindow] Error checking series:`, e);
