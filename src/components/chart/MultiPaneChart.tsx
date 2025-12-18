@@ -4890,8 +4890,11 @@ export function useMultiPaneChart({
       if (now - lastYAxisUpdateRef.current >= Y_AXIS_UPDATE_INTERVAL && !yAxisManuallyStretchedRef.current) {
         lastYAxisUpdateRef.current = now;
         
-        // Update Y-axis for all panes
+        // Update Y-axis for all panes (skip panes without data)
         for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          // Skip panes that don't have data yet
+          if (!paneSurface.hasData) continue;
+          
           try {
             paneSurface.surface.zoomExtentsY();
           } catch (e) {}
@@ -5611,8 +5614,11 @@ export function useMultiPaneChart({
       const windowSec = 5 * 60; // 5 minutes in seconds
       const newRange = new NumberRange(lastTimeSec - windowSec, lastTimeSec + windowSec * 0.05);
       
-      // Update all dynamic panes
+      // Update all dynamic panes (skip panes without data)
       for (const [, paneSurface] of chartRefs.current.paneSurfaces) {
+        // Skip panes that don't have data yet
+        if (!paneSurface.hasData) continue;
+        
         if (paneSurface?.xAxis) {
           try {
             (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
@@ -5755,6 +5761,12 @@ export function useMultiPaneChart({
     }
     
     for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      // Skip panes that don't have data yet to prevent autoscrolling empty panes
+      if (!paneSurface.hasData) {
+        console.log(`[setTimeWindow] Skipping pane ${paneId} - no data yet`);
+        continue;
+      }
+      
       if (paneSurface?.xAxis) {
         // CRITICAL: Preserve series visibility - store current visibility state
         const seriesArray = paneSurface.surface.renderableSeries.asArray();
