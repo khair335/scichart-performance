@@ -56,7 +56,7 @@ import {
 
 /**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
- * Shows spinner and count of pending series when some assigned series don't have data yet
+ * Shows spinner and LIST of pending series_ids when assigned series don't have data yet
  */
 function updatePaneWaitingOverlay(
   refs: ChartRefs,
@@ -79,9 +79,8 @@ function updatePaneWaitingOverlay(
   }
   
   // Check which assigned series have data
-  let pendingCount = 0;
+  const pendingSeries: string[] = [];
   let hasAnyData = false;
-  const seriesStatus: string[] = [];
 
   for (const seriesId of assignedSeries) {
     const seriesEntry = refs.dataSeriesStore.get(seriesId);
@@ -90,15 +89,12 @@ function updatePaneWaitingOverlay(
       const count = seriesEntry.dataSeries.count();
       if (count > 0) {
         hasAnyData = true;
-        seriesStatus.push(`${seriesId}: ${count} points`);
       } else {
-        pendingCount++;
-        seriesStatus.push(`${seriesId}: 0 points (waiting)`);
+        pendingSeries.push(seriesId);
       }
     } else {
       // Series not created yet or not in store
-      pendingCount++;
-      seriesStatus.push(`${seriesId}: not created yet`);
+      pendingSeries.push(seriesId);
     }
   }
 
@@ -108,18 +104,31 @@ function updatePaneWaitingOverlay(
     return; // Overlay elements not rendered in current implementation
   }
 
-  // Get the count element
+  // Get the series list element
+  const seriesListElement = document.getElementById(`pane-${paneId}-waiting-series`);
   const countElement = document.getElementById(`pane-${paneId}-waiting-count`);
 
-  if (pendingCount > 0) {
-    // Show overlay with pending count
+  if (pendingSeries.length > 0) {
+    // Show overlay with pending series list
     waitingOverlay.style.display = 'flex';
+    
+    // Update the series list to show specific series_ids
+    if (seriesListElement) {
+      seriesListElement.innerHTML = pendingSeries.map(id => 
+        `<span class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">${id}</span>`
+      ).join('');
+    }
+    
+    // Update count text
     if (countElement) {
-      countElement.textContent = `${pendingCount} ${pendingCount === 1 ? 'series' : 'series'} pending`;
+      countElement.textContent = `${pendingSeries.length} ${pendingSeries.length === 1 ? 'series' : 'series'} waiting`;
     }
   } else {
     // All assigned series have data - hide overlay
     waitingOverlay.style.display = 'none';
+    if (seriesListElement) {
+      seriesListElement.innerHTML = '';
+    }
     if (countElement) {
       countElement.textContent = '';
     }
@@ -4172,7 +4181,11 @@ export function useMultiPaneChart({
       // SciChart expects Unix timestamps in SECONDS, not milliseconds
       const t_sec = t_ms / 1000;
       
-      if (t_ms > latestTime) {
+      // CRITICAL: Only update latestTime for series that are IN THE LAYOUT
+      // This prevents X-axis scrolling when data arrives for series not defined in layout JSON
+      // If layout specifies MESU5:ticks but server sends ES:ticks, X-axis should NOT scroll
+      const isInLayout = plotLayout ? isSeriesInLayout(series_id) : true;
+      if (t_ms > latestTime && isInLayout) {
         latestTime = t_ms; // Keep latestTime in ms for internal tracking
       }
 
