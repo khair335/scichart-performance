@@ -22,8 +22,8 @@ export function FloatingMinimap({
   onClose,
   children,
   className,
-  defaultPosition = { x: 10, y: 20 },
-  defaultSize = { width: typeof window !== 'undefined' ? window.innerWidth - 20 : 800, height: 100 },
+  defaultPosition = { x: 20, y: 20 },
+  defaultSize = { width: 300, height: 100 },
 }: FloatingMinimapProps) {
   const [position, setPosition] = useState(defaultPosition);
   const [size, setSize] = useState(defaultSize);

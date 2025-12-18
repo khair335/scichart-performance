@@ -196,19 +196,18 @@ export function DynamicPlotGrid({
           waitingOverlay.id = `${containerId}-waiting`;
           // Position overlay to cover the chart area (accounting for title if present)
           const topOffset = pane.title ? '24px' : '0';
-          waitingOverlay.className = 'absolute flex items-center justify-center bg-card/80 backdrop-blur-sm z-30 pointer-events-none';
+          waitingOverlay.className = 'absolute flex items-center justify-center bg-card/50 backdrop-blur-sm z-30 pointer-events-none';
           waitingOverlay.style.display = 'none'; // Hidden by default, shown when waiting
           waitingOverlay.style.top = topOffset;
           waitingOverlay.style.left = '0';
           waitingOverlay.style.right = '0';
           waitingOverlay.style.bottom = '0';
-          // The content will be updated dynamically to show specific series_ids that are pending
+          // The content will be updated dynamically based on pending series count
           waitingOverlay.innerHTML = `
-            <div class="text-center max-w-md px-4">
-              <div class="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-              <p class="text-sm font-medium text-foreground mb-2">Waiting for Data</p>
-              <div id="${containerId}-waiting-series" class="flex flex-wrap gap-1.5 justify-center mb-2"></div>
-              <p class="text-xs text-muted-foreground" id="${containerId}-waiting-count"></p>
+            <div class="text-center">
+              <div class="w-12 h-12 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+              <p class="text-sm text-muted-foreground">Waiting for Data...</p>
+              <p class="text-xs text-muted-foreground mt-1" id="${containerId}-waiting-count"></p>
             </div>
           `;
           paneDiv.appendChild(waitingOverlay);

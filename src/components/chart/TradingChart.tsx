@@ -176,6 +176,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const [toolbarVisible, setToolbarVisible] = useState(true);
   const [zoomMode, setZoomMode] = useState<'box' | 'x-only' | 'y-only'>('box');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cursorEnabled, setCursorEnabled] = useState(false);
+  const [legendsEnabled, setLegendsEnabled] = useState(false);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
@@ -191,7 +193,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     { label: 'Last 4 hours', minutes: 240 },
   ]);
   
-  // Track current time window selection - initially null, will be set from layout JSON
+  // Track current time window selection
   const [currentTimeWindow, setCurrentTimeWindow] = useState<{ minutes: number; startTime: number; endTime: number } | null>(null);
   
   // Auto-hide configuration
@@ -346,26 +348,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     };
   }, [plotLayout]);
 
-  // Set initial time window from layout JSON when plotLayout changes
-  useEffect(() => {
-    if (!plotLayout) return;
-    
-    const defaultRange = plotLayout.xAxisDefaultRange;
-    if (defaultRange?.mode === 'lastMinutes' && defaultRange.value) {
-      const minutes = defaultRange.value;
-      const now = Date.now();
-      setCurrentTimeWindow({
-        minutes,
-        startTime: now - minutes * 60 * 1000,
-        endTime: now,
-      });
-      console.log(`[TradingChart] Set initial time window from layout JSON: ${minutes} minutes`);
-    } else if (defaultRange?.mode === 'session') {
-      // Entire session mode
-      setCurrentTimeWindow(null);
-      console.log('[TradingChart] Set initial time window from layout JSON: Entire Session');
-    }
-  }, [plotLayout]);
+  // Initialize multi-pane charts
   const {
     isReady,
     appendSamples,
@@ -401,6 +384,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
     plotLayout: plotLayout, // Pass parsed layout
     zoomMode: zoomMode, // Pass zoom mode
     theme: theme, // Pass theme for chart surfaces
+    cursorEnabled: cursorEnabled, // Pass cursor enabled state
+    legendsEnabled: legendsEnabled, // Pass legends enabled state
   });
 
   // Update tick count from registry (total count, not just new samples)
@@ -1035,9 +1020,14 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         timeWindowPresets={timeWindowPresets}
         onTimeWindowSelect={handleTimeWindowSelect}
         currentTimeWindow={currentTimeWindow}
+        defaultTimeWindow={plotLayout?.xAxisDefaultRange || null}
         layoutHistory={layoutHistory}
         onLoadHistoryLayout={handleLoadHistoryLayout}
         visible={toolbarVisible}
+        cursorEnabled={cursorEnabled}
+        onToggleCursor={() => setCursorEnabled(!cursorEnabled)}
+        legendsEnabled={legendsEnabled}
+        onToggleLegends={() => setLegendsEnabled(!legendsEnabled)}
         className={cn(
           "shrink-0 border-b border-border transition-opacity duration-300",
           !toolbarVisible && "opacity-0 pointer-events-none"
@@ -1151,8 +1141,8 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       <FloatingMinimap
         visible={minimapEnabled}
         onClose={() => setMinimapEnabled(false)}
-        defaultPosition={{ x: 10, y: window.innerHeight - 140 }}
-        defaultSize={{ width: window.innerWidth - 20, height: 100 }}
+        defaultPosition={{ x: 0, y: window.innerHeight - 140 }}
+        defaultSize={{ width: window.innerWidth - 60, height: 140 }}
       >
         <div id="overview-chart" className="w-full h-full" />
       </FloatingMinimap>

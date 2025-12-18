@@ -213,17 +213,26 @@ export class WsFeedClient {
     this._autoReconnectMaxDelayMs = opts.autoReconnectMaxDelayMs || 30000;
 
     // Dedup cursor
+    // CRITICAL: Always start from seq=1 on page refresh to request all data from the beginning
+    // This ensures we get a fresh dataset every time the page loads
     const saved = this.storage && typeof this.storage.getItem === 'function'
       ? this.storage.getItem(this.storageKey)
       : null;
     const savedLastSeq = saved ? Number(saved) : 0;
     
-    // For static data feeds (like ui-feed.exe), we need to always start from seq=1
-    // because the server sends all data once and doesn't persist state between connections.
-    // We can't know if it's static until we connect, but we can detect it after init_begin.
-    // For now, we'll use the saved lastSeq, but we'll reset it if we detect a watermark mismatch.
-    this.lastSeq = savedLastSeq;
-    this.resumeFromRequested = (this.lastSeq || 0) + 1;
+    // Always reset to start from beginning on page load
+    // This ensures we always request all data from seq=1 when the page refreshes
+    this.lastSeq = 0;
+    this.resumeFromRequested = 1;
+    
+    // Clear localStorage to ensure fresh start on next page load too
+    if (this.storage && typeof this.storage.removeItem === 'function') {
+      try {
+        this.storage.removeItem(this.storageKey);
+      } catch {
+        // ignore storage errors
+      }
+    }
   }
 
   getLastSeq(): number {
@@ -416,9 +425,10 @@ export class WsFeedClient {
     }
 
     const sendResume = () => {
-      // Calculate resume point based on current lastSeq
-      this.resumeFromRequested = (this.lastSeq || 0) + 1;
-      console.log(`[WsFeedClient] 📤 Sending resume request: from_seq=${this.resumeFromRequested} (lastSeq=${this.lastSeq})`);
+      // CRITICAL: Always start from seq=1 on page refresh to request all data from the beginning
+      // This ensures we get a fresh dataset every time the page loads
+      this.resumeFromRequested = 1;
+      console.log(`[WsFeedClient] 📤 Sending resume request: from_seq=${this.resumeFromRequested} (always starting from beginning)`);
       this.ws?.send(JSON.stringify({ type: 'resume', from_seq: this.resumeFromRequested }));
     };
 

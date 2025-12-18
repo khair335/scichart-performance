@@ -278,8 +278,8 @@ export class DynamicPaneManager {
           new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection }),
           new ZoomPanModifier({ 
             executeCondition: { button: EExecuteOn.MouseRightButton }
-          }),
-          new ZoomExtentsModifier()
+          })
+          // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
         );
         break;
       case 'y-only':
@@ -288,8 +288,8 @@ export class DynamicPaneManager {
           new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection }),
           new ZoomPanModifier({ 
             executeCondition: { button: EExecuteOn.MouseRightButton }
-          }),
-          new ZoomExtentsModifier()
+          })
+          // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
         );
         break;
       case 'box':
@@ -330,8 +330,9 @@ export class DynamicPaneManager {
           new ZoomPanModifier({ 
             executeCondition: { button: EExecuteOn.MouseRightButton }
           }),
-          wheelModifier,
-          new ZoomExtentsModifier()
+          wheelModifier
+          // NOTE: ZoomExtentsModifier is NOT added here - double-click is handled in MultiPaneChart
+          // to have full control over the behavior (especially for fitting both X and Y simultaneously)
         );
         break;
     }

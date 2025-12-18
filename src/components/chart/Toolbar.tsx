@@ -2,7 +2,6 @@ import { Button } from '@/components/ui/button';
 import { 
   Play, 
   Pause, 
-  ZoomIn, 
   Maximize2,
   Minimize2,
   Map, 
@@ -19,6 +18,8 @@ import {
   Clock,
   History,
   ChevronDown,
+  MousePointer2,
+  List,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -66,11 +67,17 @@ interface ToolbarProps {
   timeWindowPresets?: TimeWindowPreset[];
   onTimeWindowSelect?: (minutes: number) => void;
   currentTimeWindow?: { minutes: number; startTime: number; endTime: number } | null;
+  defaultTimeWindow?: { mode: 'session' | 'lastMinutes' | 'lastHours' | 'entireSession' | 'custom'; value?: number; customRange?: [number, number] } | null;
   // Layout history
   layoutHistory?: LayoutHistoryEntry[];
   onLoadHistoryLayout?: (entry: LayoutHistoryEntry) => void;
   // Auto-hide
   visible?: boolean;
+  // Cursor and legends
+  cursorEnabled?: boolean;
+  onToggleCursor?: () => void;
+  legendsEnabled?: boolean;
+  onToggleLegends?: () => void;
 }
 
 export function Toolbar({
@@ -97,9 +104,14 @@ export function Toolbar({
   timeWindowPresets = [],
   onTimeWindowSelect,
   currentTimeWindow = null,
+  defaultTimeWindow = null,
   layoutHistory = [],
   onLoadHistoryLayout,
   visible = true,
+  cursorEnabled = false,
+  onToggleCursor,
+  legendsEnabled = false,
+  onToggleLegends,
 }: ToolbarProps) {
   if (!visible) return null;
   return (
@@ -135,6 +147,44 @@ export function Toolbar({
         <Radio className="w-3.5 h-3.5" />
         <span className="hidden sm:inline">Jump to Live</span>
       </Button>
+
+      <div className="w-px h-6 bg-border/60 mx-1" />
+
+      {/* Cursor Toggle */}
+      {onToggleCursor && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleCursor}
+          className={cn(
+            'h-8 w-8 p-0 rounded-lg btn-modern transition-all',
+            cursorEnabled
+              ? 'text-primary bg-primary/10 border border-primary/30'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+          )}
+          title={cursorEnabled ? 'Hide cursor' : 'Show cursor'}
+        >
+          <MousePointer2 className="w-3.5 h-3.5" />
+        </Button>
+      )}
+
+      {/* Legends Toggle */}
+      {onToggleLegends && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleLegends}
+          className={cn(
+            'h-8 w-8 p-0 rounded-lg btn-modern transition-all',
+            legendsEnabled
+              ? 'text-primary bg-primary/10 border border-primary/30'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+          )}
+          title={legendsEnabled ? 'Hide legends' : 'Show legends'}
+        >
+          <List className="w-3.5 h-3.5" />
+        </Button>
+      )}
 
       <div className="w-px h-6 bg-border/60 mx-1" />
 
@@ -202,27 +252,58 @@ export function Toolbar({
               >
                 <Clock className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Window</span>
-                {currentTimeWindow && (
+                {(currentTimeWindow || defaultTimeWindow) && (
                   <span className="hidden md:inline text-xs font-semibold text-primary/80 ml-1">
                     {(() => {
-                      // Find the matching preset label first
-                      const preset = timeWindowPresets.find(p => p.minutes === currentTimeWindow.minutes);
-                      if (preset) return preset.label;
-                      
-                      // Format custom window from minimap - show duration nicely
-                      const mins = currentTimeWindow.minutes;
-                      if (mins >= 60) {
-                        const hours = Math.floor(mins / 60);
-                        const remainingMins = Math.round(mins % 60);
-                        return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
-                      } else if (mins >= 1) {
-                        const wholeMins = Math.floor(mins);
-                        const secs = Math.round((mins - wholeMins) * 60);
-                        return secs > 0 ? `${wholeMins}m ${secs}s` : `${wholeMins}m`;
-                      } else {
-                        // Less than 1 minute - show seconds
-                        return `${Math.round(mins * 60)}s`;
+                      // If we have a current time window, show that
+                      if (currentTimeWindow) {
+                        // Find the matching preset label first
+                        const preset = timeWindowPresets.find(p => p.minutes === currentTimeWindow.minutes);
+                        if (preset) return preset.label;
+                        
+                        // Format custom window from minimap - show duration nicely
+                        const mins = currentTimeWindow.minutes;
+                        if (mins >= 60) {
+                          const hours = Math.floor(mins / 60);
+                          const remainingMins = Math.round(mins % 60);
+                          return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+                        } else if (mins >= 1) {
+                          const wholeMins = Math.floor(mins);
+                          const secs = Math.round((mins - wholeMins) * 60);
+                          return secs > 0 ? `${wholeMins}m ${secs}s` : `${wholeMins}m`;
+                        } else {
+                          // Less than 1 minute - show seconds
+                          return `${Math.round(mins * 60)}s`;
+                        }
                       }
+                      
+                      // Otherwise, show the default from layout JSON
+                      if (defaultTimeWindow) {
+                        if (defaultTimeWindow.mode === 'session' || defaultTimeWindow.mode === 'entireSession') {
+                          return 'Entire Session';
+                        } else if (defaultTimeWindow.mode === 'lastMinutes' && defaultTimeWindow.value) {
+                          const mins = defaultTimeWindow.value;
+                          // Find matching preset label
+                          const preset = timeWindowPresets.find(p => p.minutes === mins);
+                          if (preset) return preset.label;
+                          
+                          // Format the minutes value
+                          if (mins >= 60) {
+                            const hours = Math.floor(mins / 60);
+                            const remainingMins = Math.round(mins % 60);
+                            return remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+                          } else {
+                            return `${mins}m`;
+                          }
+                        } else if (defaultTimeWindow.mode === 'lastHours' && defaultTimeWindow.value) {
+                          const hours = defaultTimeWindow.value;
+                          return `${hours}h`;
+                        } else if (defaultTimeWindow.mode === 'custom') {
+                          return 'Custom Range';
+                        }
+                      }
+                      
+                      return null;
                     })()}
                   </span>
                 )}
@@ -250,19 +331,6 @@ export function Toolbar({
           <div className="w-px h-6 bg-border/60 mx-1" />
         </>
       )}
-
-      {/* Zoom Extents */}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onZoomExtents}
-        className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 btn-modern transition-all"
-        title="Fit all data (Z)"
-      >
-        <ZoomIn className="w-3.5 h-3.5" />
-      </Button>
-
-      <div className="w-px h-6 bg-border/60 mx-1" />
 
       {/* Layout - Left Side */}
       <div className="flex items-center gap-2">

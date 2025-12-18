@@ -91,9 +91,10 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     // Reset session complete state on new connection
     setState(prev => ({ ...prev, sessionComplete: false }));
 
-    // Always use MemoryStorage so page refresh starts fresh from from_seq: 1
-    // This ensures predictable behavior where refresh = start over
-    const storage = new MemoryStorage();
+    // Use localStorage for data persistence across page refreshes
+    const storage = typeof window !== 'undefined' && window.localStorage
+      ? window.localStorage
+      : new MemoryStorage();
 
     const client = new WsFeedClient({
       url,
