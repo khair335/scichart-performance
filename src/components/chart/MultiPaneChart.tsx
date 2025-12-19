@@ -475,13 +475,22 @@ export function useMultiPaneChart({
 
   /**
    * Get the renderable series type from layout, or infer from series type
+   * Strategy series types (strategy_markers, strategy_pnl, strategy_signals) are handled separately
    */
   const getRenderableSeriesType = (seriesId: string): 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries' => {
     // Check layout for explicit type
     if (plotLayout) {
       const seriesAssignment = plotLayout.layout.series.find(s => s.series_id === seriesId);
       if (seriesAssignment) {
-        return seriesAssignment.type;
+        // Handle strategy series types - they get rendered as specific series types
+        if (seriesAssignment.type === 'strategy_pnl') {
+          return 'FastMountainRenderableSeries'; // PnL uses mountain series by default
+        }
+        if (seriesAssignment.type === 'strategy_markers' || seriesAssignment.type === 'strategy_signals') {
+          return 'FastLineRenderableSeries'; // Markers/signals use scatter series internally (handled separately)
+        }
+        // Return base series type directly
+        return seriesAssignment.type as 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries';
       }
     }
     
@@ -5190,15 +5199,13 @@ export function useMultiPaneChart({
     
     // Third pass: Strategy markers using scatter series with appendRange (efficient batch updates)
     // REQUIREMENT: Strategy markers must appear initially along with other series
+    // NEW: Per-strategy series assignment - only plot explicitly assigned strategy series
     if (plotLayout && refs.paneSurfaces.size > 0) {
       // Create empty batches for accumulating markers per pane
       const paneMarkerBatches = new Map<string, Map<MarkerSeriesType, { x: number[], y: number[] }>>();
       
-      // Initialize batches for eligible panes
-      const eligiblePanes = plotLayout.strategyMarkerPanes;
-      for (const paneId of eligiblePanes) {
-        paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
-      }
+      // Initialize batches for panes that will receive markers
+      // We'll add panes dynamically as we encounter assigned strategy series
       
       // Accumulate markers into batches
       for (let i = 0; i < samplesLength; i++) {
@@ -5208,6 +5215,31 @@ export function useMultiPaneChart({
         // Only process strategy markers/signals
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
+        
+        // NEW: Check if this strategy series is explicitly assigned in the layout
+        // If explicitly assigned, only render in the assigned pane
+        // If not assigned, fall back to legacy global config (strategyMarkerPanes)
+        const strategyAssignment = plotLayout.getStrategySeriesAssignment(series_id);
+        
+        let targetPanes: string[] = [];
+        
+        if (strategyAssignment) {
+          // Explicitly assigned - only render in the assigned pane
+          const assignedPane = strategyAssignment.pane;
+          if (refs.paneSurfaces.has(assignedPane)) {
+            targetPanes = [assignedPane];
+          } else {
+            // Assigned pane doesn't exist - skip this marker
+            continue;
+          }
+        } else {
+          // Not explicitly assigned - use legacy global config
+          // This maintains backward compatibility with layouts that use strategy_markers config
+          targetPanes = Array.from(plotLayout.strategyMarkerPanes);
+        }
+        
+        // Skip if no target panes
+        if (targetPanes.length === 0) continue;
         
         // Parse marker data
         const markerData = parseMarkerFromSample({
@@ -5226,8 +5258,13 @@ export function useMultiPaneChart({
         // Determine marker series type
         const markerType = getMarkerSeriesType(markerData);
         
-        // Add to batches for all eligible panes
-        for (const paneId of eligiblePanes) {
+        // Add to batches for target panes only
+        for (const paneId of targetPanes) {
+          // Initialize batch for this pane if not exists
+          if (!paneMarkerBatches.has(paneId)) {
+            paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
+          }
+          
           const typeBatches = paneMarkerBatches.get(paneId);
           if (typeBatches) {
             const batch = typeBatches.get(markerType);
@@ -5245,8 +5282,24 @@ export function useMultiPaneChart({
         if (!paneSurface || !paneSurface.surface) continue;
         
         // Get scatter series for this pane (already created during pane initialization)
-        const scatterSeriesMap = refs.markerScatterSeries.get(paneId);
-        if (!scatterSeriesMap) continue; // Pane not eligible for markers
+        let scatterSeriesMap = refs.markerScatterSeries.get(paneId);
+        
+        // If scatter series don't exist for this pane yet, create them on-demand
+        // This is needed when strategy series is explicitly assigned to a pane that
+        // doesn't have scatter series pre-created (only legacy global config panes get them)
+        if (!scatterSeriesMap && paneSurface.wasm) {
+          const capacity = getSeriesCapacity();
+          scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId);
+          refs.markerScatterSeries.set(paneId, scatterSeriesMap);
+          
+          // Add scatter series to surface
+          for (const [, group] of scatterSeriesMap) {
+            paneSurface.surface.renderableSeries.add(group.renderableSeries);
+          }
+          console.log(`[MultiPaneChart] Created scatter series on-demand for explicitly assigned markers on pane: ${paneId}`);
+        }
+        
+        if (!scatterSeriesMap) continue;
         
         // Append data to each scatter series type - simple fast update, no creation
         for (const [markerType, batch] of typeBatches) {

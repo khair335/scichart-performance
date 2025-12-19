@@ -1,0 +1,106 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [3, 1],
+  "xAxis": {
+    "defaultRange": {
+      "mode": "lastMinutes",
+      "value": 5
+    }
+  },
+  "minimap": {
+    "source": {
+      "series_id": "ES:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "main-chart",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "ES Price with Strategy 2 Markers Only"
+    },
+    {
+      "id": "strategy2-pnl-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy 2 PnL"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Candlesticks"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "ES:ticks",
+      "pane": "main-chart",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "ES:sma_10",
+      "pane": "main-chart",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#F48420",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "ES:strategy:strategy2:markers",
+      "pane": "main-chart",
+      "type": "strategy_markers",
+      "markerStyle": {
+        "entryLongColor": "#22c55e",
+        "entryShortColor": "#ef4444",
+        "exitLongColor": "#16a34a",
+        "exitShortColor": "#dc2626",
+        "markerSize": 12,
+        "showLabels": false
+      }
+    },
+    {
+      "series_id": "ES:strategy:strategy2:signals",
+      "pane": "main-chart",
+      "type": "strategy_signals",
+      "signalStyle": {
+        "color": "#3b82f6",
+        "size": 10,
+        "shape": "diamond"
+      }
+    },
+    {
+      "series_id": "ES:strategy:strategy2:pnl",
+      "pane": "strategy2-pnl-pane",
+      "type": "strategy_pnl",
+      "pnlStyle": {
+        "stroke": "#22c55e",
+        "fill": "rgba(34, 197, 94, 0.3)",
+        "strokeThickness": 2,
+        "positiveColor": "#22c55e",
+        "negativeColor": "#ef4444"
+      }
+    },
+    {
+      "series_id": "ES:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "meta": {
+    "version": "1.0",
+    "description": "Example layout showing per-strategy series assignment. Only ES:strategy:strategy2 is plotted - other strategies (strategy1, strategy3, etc.) are ignored. This demonstrates the new per-strategy control feature."
+  }
+}
