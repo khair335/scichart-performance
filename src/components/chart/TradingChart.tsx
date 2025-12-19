@@ -1142,7 +1142,7 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
         visible={minimapEnabled}
         onClose={() => setMinimapEnabled(false)}
         defaultPosition={{ x: 0, y: window.innerHeight - 140 }}
-        defaultSize={{ width: window.innerWidth - 60, height: 140 }}
+        defaultSize={{ width: window.innerWidth - 15, height: 140 }}
       >
         <div id="overview-chart" className="w-full h-full" />
       </FloatingMinimap>

@@ -59,6 +59,77 @@ import {
 } from '@/lib/strategy-marker-scatter';
 
 /**
+ * Formats a timestamp value to date string with time and milliseconds
+ * Handles both milliseconds and seconds (DateTimeNumericAxis uses milliseconds internally)
+ */
+function formatDateTimeWithMilliseconds(dataValue: number): string {
+  // DateTimeNumericAxis uses milliseconds internally, but check if we need to convert
+  // If value is very small (< year 2000 in ms), it might be in seconds
+  let timestamp = dataValue;
+  if (dataValue < 946684800000) { // Less than 2000-01-01 in milliseconds
+    timestamp = dataValue * 1000; // Convert seconds to milliseconds
+  }
+  
+  const date = new Date(timestamp);
+  
+  // Format as: YYYY-MM-DD HH:mm:ss.SSS
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
+/**
+ * Custom label provider wrapper that formats dates with time and milliseconds for cursor labels
+ * Preserves all original labelProvider methods while overriding formatLabel and formatCursorLabel
+ */
+function createCursorLabelProvider(originalLabelProvider: any) {
+  if (!originalLabelProvider) {
+    // If no original provider, return a minimal implementation
+    return {
+      formatLabel: formatDateTimeWithMilliseconds,
+      formatCursorLabel: formatDateTimeWithMilliseconds,
+    };
+  }
+  
+  // Store original methods if not already stored
+  if (!(originalLabelProvider as any)._originalFormatLabel) {
+    (originalLabelProvider as any)._originalFormatLabel = originalLabelProvider.formatLabel;
+    (originalLabelProvider as any)._originalFormatCursorLabel = originalLabelProvider.formatCursorLabel;
+  }
+  
+  // Directly override the methods on the original provider object
+  originalLabelProvider.formatLabel = formatDateTimeWithMilliseconds;
+  if (originalLabelProvider.formatCursorLabel !== undefined) {
+    originalLabelProvider.formatCursorLabel = formatDateTimeWithMilliseconds;
+  }
+  
+  return originalLabelProvider;
+}
+
+/**
+ * Restores the original label provider methods
+ */
+function restoreOriginalLabelProvider(labelProvider: any) {
+  if (!labelProvider) return;
+  
+  if ((labelProvider as any)._originalFormatLabel) {
+    labelProvider.formatLabel = (labelProvider as any)._originalFormatLabel;
+    delete (labelProvider as any)._originalFormatLabel;
+  }
+  
+  if ((labelProvider as any)._originalFormatCursorLabel) {
+    labelProvider.formatCursorLabel = (labelProvider as any)._originalFormatCursorLabel;
+    delete (labelProvider as any)._originalFormatCursorLabel;
+  }
+}
+
+/**
  * Update the "Waiting for Data" overlay for a pane based on assigned series data status
  * Shows spinner and count of pending series when some assigned series don't have data yet
  */
@@ -5818,7 +5889,35 @@ export function useMultiPaneChart({
         const modifiers = paneSurface.surface.chartModifiers.asArray();
         const existingCursor = modifiers.find((mod: any) => mod instanceof CursorModifier);
         
+        // Set custom label provider on X-axis for cursor formatting
+        const xAxis = paneSurface.xAxis;
+        if (xAxis) {
+          // Store original label provider if not already stored
+          if (!(xAxis as any)._originalLabelProvider) {
+            (xAxis as any)._originalLabelProvider = xAxis.labelProvider || null;
+          }
+          // Set custom label provider when cursor is enabled
+          if (cursorEnabled) {
+            const originalProvider = (xAxis as any)._originalLabelProvider;
+            xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+            // Invalidate surface to force label refresh
+            paneSurface.surface.invalidateElement();
+          } else if ((xAxis as any)._originalLabelProvider !== undefined) {
+            // Restore original label provider when cursor is disabled
+            const currentProvider = xAxis.labelProvider;
+            restoreOriginalLabelProvider(currentProvider);
+            xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+            // Invalidate surface to force label refresh
+            paneSurface.surface.invalidateElement();
+          }
+        }
+        
         if (cursorEnabled && !existingCursor) {
+          // Set label provider BEFORE creating CursorModifier so it uses the updated provider
+          if (xAxis) {
+            const originalProvider = (xAxis as any)._originalLabelProvider;
+            xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+          }
           // Add CursorModifier
           const cursorModifier = new CursorModifier({
             crosshairStroke: cursorColor,
@@ -5828,9 +5927,17 @@ export function useMultiPaneChart({
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
           });
           paneSurface.surface.chartModifiers.add(cursorModifier);
+          paneSurface.surface.invalidateElement();
         } else if (!cursorEnabled && existingCursor) {
           // Remove CursorModifier
           paneSurface.surface.chartModifiers.remove(existingCursor);
+          // Restore original label provider after removing cursor
+          if (xAxis && (xAxis as any)._originalLabelProvider !== undefined) {
+            const currentProvider = xAxis.labelProvider;
+            restoreOriginalLabelProvider(currentProvider);
+            xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+            paneSurface.surface.invalidateElement();
+          }
         }
       } catch (e) {
         console.warn(`[MultiPaneChart] Error toggling cursor on pane:`, e);
@@ -5843,7 +5950,36 @@ export function useMultiPaneChart({
         const modifiers = refs.tickSurface.chartModifiers.asArray();
         const existingCursor = modifiers.find((mod: any) => mod instanceof CursorModifier);
         
+        // Set custom label provider on X-axis
+        const xAxes = refs.tickSurface.xAxes.asArray();
+        for (const xAxis of xAxes) {
+          if (xAxis instanceof DateTimeNumericAxis) {
+            if (!(xAxis as any)._originalLabelProvider) {
+              (xAxis as any)._originalLabelProvider = xAxis.labelProvider || null;
+            }
+            if (cursorEnabled) {
+              const originalProvider = (xAxis as any)._originalLabelProvider;
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              // Invalidate surface to force label refresh
+              refs.tickSurface.invalidateElement();
+            } else if ((xAxis as any)._originalLabelProvider !== undefined) {
+              const currentProvider = xAxis.labelProvider;
+              restoreOriginalLabelProvider(currentProvider);
+              xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+              // Invalidate surface to force label refresh
+              refs.tickSurface.invalidateElement();
+            }
+          }
+        }
+        
         if (cursorEnabled && !existingCursor) {
+          // Set label provider BEFORE creating CursorModifier
+          for (const xAxis of xAxes) {
+            if (xAxis instanceof DateTimeNumericAxis) {
+              const originalProvider = (xAxis as any)._originalLabelProvider;
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+            }
+          }
           const cursorModifier = new CursorModifier({
             crosshairStroke: cursorColor,
             crosshairStrokeThickness: 1,
@@ -5852,8 +5988,18 @@ export function useMultiPaneChart({
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
           });
           refs.tickSurface.chartModifiers.add(cursorModifier);
+          refs.tickSurface.invalidateElement();
         } else if (!cursorEnabled && existingCursor) {
           refs.tickSurface.chartModifiers.remove(existingCursor);
+          // Restore original label provider after removing cursor
+          for (const xAxis of xAxes) {
+            if (xAxis instanceof DateTimeNumericAxis && (xAxis as any)._originalLabelProvider !== undefined) {
+              const currentProvider = xAxis.labelProvider;
+              restoreOriginalLabelProvider(currentProvider);
+              xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+            }
+          }
+          refs.tickSurface.invalidateElement();
         }
       }
       
@@ -5861,7 +6007,36 @@ export function useMultiPaneChart({
         const modifiers = refs.ohlcSurface.chartModifiers.asArray();
         const existingCursor = modifiers.find((mod: any) => mod instanceof CursorModifier);
         
+        // Set custom label provider on X-axis
+        const xAxes = refs.ohlcSurface.xAxes.asArray();
+        for (const xAxis of xAxes) {
+          if (xAxis instanceof DateTimeNumericAxis) {
+            if (!(xAxis as any)._originalLabelProvider) {
+              (xAxis as any)._originalLabelProvider = xAxis.labelProvider || null;
+            }
+            if (cursorEnabled) {
+              const originalProvider = (xAxis as any)._originalLabelProvider;
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              // Invalidate surface to force label refresh
+              refs.ohlcSurface.invalidateElement();
+            } else if ((xAxis as any)._originalLabelProvider !== undefined) {
+              const currentProvider = xAxis.labelProvider;
+              restoreOriginalLabelProvider(currentProvider);
+              xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+              // Invalidate surface to force label refresh
+              refs.ohlcSurface.invalidateElement();
+            }
+          }
+        }
+        
         if (cursorEnabled && !existingCursor) {
+          // Set label provider BEFORE creating CursorModifier
+          for (const xAxis of xAxes) {
+            if (xAxis instanceof DateTimeNumericAxis) {
+              const originalProvider = (xAxis as any)._originalLabelProvider;
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+            }
+          }
           const cursorModifier = new CursorModifier({
             crosshairStroke: cursorColor,
             crosshairStrokeThickness: 1,
@@ -5870,8 +6045,18 @@ export function useMultiPaneChart({
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
           });
           refs.ohlcSurface.chartModifiers.add(cursorModifier);
+          refs.ohlcSurface.invalidateElement();
         } else if (!cursorEnabled && existingCursor) {
           refs.ohlcSurface.chartModifiers.remove(existingCursor);
+          // Restore original label provider after removing cursor
+          for (const xAxis of xAxes) {
+            if (xAxis instanceof DateTimeNumericAxis && (xAxis as any)._originalLabelProvider !== undefined) {
+              const currentProvider = xAxis.labelProvider;
+              restoreOriginalLabelProvider(currentProvider);
+              xAxis.labelProvider = (xAxis as any)._originalLabelProvider;
+            }
+          }
+          refs.ohlcSurface.invalidateElement();
         }
       }
     } catch (e) {
@@ -5883,26 +6068,40 @@ export function useMultiPaneChart({
   useEffect(() => {
     const refs = chartRefs.current;
     
+    // Helper function to toggle legends for a series
+    const toggleSeriesLegend = (series: any, isEnabled: boolean) => {
+      if (!series.dataSeries) return;
+      
+      // Store original name before clearing (only if not already stored)
+      if (!(series.dataSeries as any)._originalDataSeriesName) {
+        (series.dataSeries as any)._originalDataSeriesName = series.dataSeries.dataSeriesName || '';
+      }
+      
+      if (isEnabled) {
+        // Restore original name if it exists, otherwise extract from ID
+        const originalName = (series.dataSeries as any)._originalDataSeriesName;
+        if (originalName && originalName !== '') {
+          series.dataSeries.dataSeriesName = originalName;
+        } else {
+          // Fallback: extract from series ID if no original name
+          const seriesId = (series as any).id || '';
+          const name = seriesId.split(':').pop() || 'Series';
+          series.dataSeries.dataSeriesName = name;
+          // Store this as the original name for future toggles
+          (series.dataSeries as any)._originalDataSeriesName = name;
+        }
+      } else {
+        // Hide series name (but keep original stored)
+        series.dataSeries.dataSeriesName = '';
+      }
+    };
+    
     // Update series names/titles on all dynamic panes
     for (const [, paneSurface] of refs.paneSurfaces) {
       try {
         const renderableSeries = paneSurface.surface.renderableSeries.asArray();
         for (const series of renderableSeries) {
-          if (series.dataSeries) {
-            // Toggle series name visibility (used for legends)
-            if (legendsEnabled) {
-              // Show series name if it exists, otherwise use a default
-              if (!series.dataSeries.dataSeriesName || series.dataSeries.dataSeriesName === '') {
-                // Try to extract series name from series ID if available
-                const seriesId = (series as any).id || '';
-                const name = seriesId.split(':').pop() || 'Series';
-                series.dataSeries.dataSeriesName = name;
-              }
-            } else {
-              // Hide series name
-              series.dataSeries.dataSeriesName = '';
-            }
-          }
+          toggleSeriesLegend(series, legendsEnabled);
         }
         paneSurface.surface.invalidateElement();
       } catch (e) {
@@ -5915,17 +6114,7 @@ export function useMultiPaneChart({
       if (refs.tickSurface) {
         const renderableSeries = refs.tickSurface.renderableSeries.asArray();
         for (const series of renderableSeries) {
-          if (series.dataSeries) {
-            if (legendsEnabled) {
-              if (!series.dataSeries.dataSeriesName || series.dataSeries.dataSeriesName === '') {
-                const seriesId = (series as any).id || '';
-                const name = seriesId.split(':').pop() || 'Series';
-                series.dataSeries.dataSeriesName = name;
-              }
-            } else {
-              series.dataSeries.dataSeriesName = '';
-            }
-          }
+          toggleSeriesLegend(series, legendsEnabled);
         }
         refs.tickSurface.invalidateElement();
       }
@@ -5933,17 +6122,7 @@ export function useMultiPaneChart({
       if (refs.ohlcSurface) {
         const renderableSeries = refs.ohlcSurface.renderableSeries.asArray();
         for (const series of renderableSeries) {
-          if (series.dataSeries) {
-            if (legendsEnabled) {
-              if (!series.dataSeries.dataSeriesName || series.dataSeries.dataSeriesName === '') {
-                const seriesId = (series as any).id || '';
-                const name = seriesId.split(':').pop() || 'Series';
-                series.dataSeries.dataSeriesName = name;
-              }
-            } else {
-              series.dataSeries.dataSeriesName = '';
-            }
-          }
+          toggleSeriesLegend(series, legendsEnabled);
         }
         refs.ohlcSurface.invalidateElement();
       }
