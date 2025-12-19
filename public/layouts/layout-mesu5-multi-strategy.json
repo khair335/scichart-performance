@@ -1,0 +1,110 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [4, 1],
+  "xAxis": {
+    "defaultRange": {
+      "mode": "lastMinutes",
+      "value": 5
+    }
+  },
+  "minimap": {
+    "source": {
+      "series_id": "MESU5:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "main-chart",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 Price with Multiple Strategy Markers"
+    },
+    {
+      "id": "strategy0-pnl-pane",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy 0 PnL"
+    },
+    {
+      "id": "strategy1-pnl-pane",
+      "row": 2,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Strategy 1 PnL"
+    },
+    {
+      "id": "ohlc-pane",
+      "row": 3,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "MESU5 OHLC Candlesticks"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESU5:ticks",
+      "pane": "main-chart",
+      "type": "FastLineRenderableSeries",
+      "style": {
+        "stroke": "#50C7E0",
+        "strokeThickness": 1
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:0:markers",
+      "pane": "main-chart",
+      "type": "strategy_markers",
+      "markerStyle": {
+        "entryLongColor": "#22c55e",
+        "entryShortColor": "#ef4444",
+        "markerSize": 12
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:1:markers",
+      "pane": "main-chart",
+      "type": "strategy_markers",
+      "markerStyle": {
+        "entryLongColor": "#3b82f6",
+        "entryShortColor": "#f59e0b",
+        "markerSize": 10
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:0:pnl",
+      "pane": "strategy0-pnl-pane",
+      "type": "strategy_pnl",
+      "pnlStyle": {
+        "stroke": "#22c55e",
+        "fill": "rgba(34, 197, 94, 0.3)",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:strategy:1:pnl",
+      "pane": "strategy1-pnl-pane",
+      "type": "strategy_pnl",
+      "pnlStyle": {
+        "stroke": "#3b82f6",
+        "fill": "rgba(59, 130, 246, 0.3)",
+        "strokeThickness": 2
+      }
+    },
+    {
+      "series_id": "MESU5:ohlc_time:10000",
+      "pane": "ohlc-pane",
+      "type": "FastCandlestickRenderableSeries"
+    }
+  ],
+  "meta": {
+    "version": "1.0",
+    "description": "MESU5 layout with strategies 0 and 1 on the same price chart (different colors), each with their own PnL pane."
+  }
+}
