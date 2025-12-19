@@ -63,18 +63,60 @@ export interface VLineConfig {
   };
 }
 
+// Base series types
+export type BaseSeriesType = 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries';
+
+// Strategy series types - allow explicit assignment of strategy components
+export type StrategySeriesType = 'strategy_markers' | 'strategy_pnl' | 'strategy_signals';
+
+// All supported series types
+export type SeriesAssignmentType = BaseSeriesType | StrategySeriesType;
+
+// Strategy marker styling
+export interface StrategyMarkerStyle {
+  entryLongColor?: string;   // Color for long entry markers (default: #4CAF50)
+  entryShortColor?: string;  // Color for short entry markers (default: #F44336)
+  exitLongColor?: string;    // Color for long exit markers (default: #4CAF50 outline)
+  exitShortColor?: string;   // Color for short exit markers (default: #F44336 outline)
+  signalColor?: string;      // Color for signal markers (default: #FF9800)
+  markerSize?: number;       // Marker size in pixels (default: 12)
+  showLabels?: boolean;      // Show marker labels (default: false)
+}
+
+// Strategy PnL styling
+export interface StrategyPnLStyle {
+  stroke?: string;           // Line/mountain stroke color
+  fill?: string;             // Fill color for mountain series
+  strokeThickness?: number;  // Line thickness
+  positiveColor?: string;    // Color when PnL is positive (for gradient)
+  negativeColor?: string;    // Color when PnL is negative (for gradient)
+}
+
+// Strategy signals styling
+export interface StrategySignalStyle {
+  color?: string;            // Signal marker color
+  size?: number;             // Signal marker size
+  shape?: 'circle' | 'diamond' | 'square'; // Signal marker shape
+}
+
 export interface SeriesAssignment {
   series_id: string;
   pane: string; // Pane ID
-  type: 'FastLineRenderableSeries' | 'FastCandlestickRenderableSeries' | 'FastMountainRenderableSeries';
+  type: SeriesAssignmentType;
   style?: {
+    // Base series styling
     stroke?: string; // Line color
     strokeThickness?: number; // Line width
     fill?: string; // Fill color (for mountain series)
     pointMarker?: boolean; // Show point markers
   };
+  // Strategy-specific styling (used when type is strategy_*)
+  markerStyle?: StrategyMarkerStyle;   // Used with strategy_markers
+  pnlStyle?: StrategyPnLStyle;         // Used with strategy_pnl
+  signalStyle?: StrategySignalStyle;   // Used with strategy_signals
 }
 
+// Legacy global strategy markers config (deprecated - use per-series assignment instead)
 export interface StrategyMarkersConfig {
   // Which panes should show strategy markers
   exclude_panes?: string[]; // e.g., ['pnl-pane', 'bar-pane']
@@ -90,9 +132,15 @@ export interface ParsedLayout {
   paneMap: Map<string, PaneConfig>; // pane.id -> PaneConfig
   seriesToPaneMap: Map<string, string>; // series_id -> pane.id
   paneToSeriesMap: Map<string, string[]>; // pane.id -> series_id[]
-  strategyMarkerPanes: Set<string>; // pane.id[] that should show strategy markers
+  strategyMarkerPanes: Set<string>; // pane.id[] that should show strategy markers (legacy global config)
   minimapSourceSeries?: string;
   xAxisDefaultRange?: PlotLayout['xAxis']['defaultRange']; // Default X-axis range from layout
+  // Strategy series explicit assignments (per-strategy control)
+  strategySeriesMap: Map<string, SeriesAssignment>; // series_id (e.g., "ES:strategy:alpha:markers") -> SeriesAssignment
+  // Helper to check if a strategy series is explicitly assigned
+  isStrategySeriesAssigned: (seriesId: string) => boolean;
+  // Helper to get strategy series assignment
+  getStrategySeriesAssignment: (seriesId: string) => SeriesAssignment | undefined;
 }
 
 /**
@@ -262,7 +310,17 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
       continue;
     }
     
-    if (!['FastLineRenderableSeries', 'FastCandlestickRenderableSeries', 'FastMountainRenderableSeries', 'FastOhlcRenderableSeries'].includes(seriesAssignment.type)) {
+    // Valid types include base series types and strategy series types
+    const validTypes = [
+      'FastLineRenderableSeries', 
+      'FastCandlestickRenderableSeries', 
+      'FastMountainRenderableSeries', 
+      'FastOhlcRenderableSeries',
+      'strategy_markers',
+      'strategy_pnl',
+      'strategy_signals'
+    ];
+    if (!validTypes.includes(seriesAssignment.type)) {
       validationErrors.errors.push(`Series "${seriesAssignment.series_id}": invalid type "${seriesAssignment.type}"`);
       continue;
     }
@@ -305,7 +363,20 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     paneToSeriesMap.set(seriesAssignment.pane, paneSeries);
   }
   
-  // Determine which panes should show strategy markers
+  // Build strategy series map for per-strategy control
+  // This maps strategy series IDs (e.g., "ES:strategy:alpha:markers") to their SeriesAssignment
+  const strategySeriesMap = new Map<string, SeriesAssignment>();
+  for (const seriesAssignment of layout.series) {
+    // Check if this is a strategy series type
+    if (seriesAssignment.type === 'strategy_markers' || 
+        seriesAssignment.type === 'strategy_pnl' || 
+        seriesAssignment.type === 'strategy_signals') {
+      strategySeriesMap.set(seriesAssignment.series_id, seriesAssignment);
+    }
+  }
+  
+  // Determine which panes should show strategy markers (legacy global config)
+  // This is only used when strategy markers are NOT explicitly assigned via series array
   if (layout.strategy_markers) {
     if (layout.strategy_markers.include_panes) {
       // Explicitly include these panes
@@ -336,6 +407,15 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     }
   }
   
+  // Helper functions for strategy series lookup
+  const isStrategySeriesAssigned = (seriesId: string): boolean => {
+    return strategySeriesMap.has(seriesId);
+  };
+  
+  const getStrategySeriesAssignment = (seriesId: string): SeriesAssignment | undefined => {
+    return strategySeriesMap.get(seriesId);
+  };
+  
   return {
     layout,
     paneMap,
@@ -344,6 +424,9 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     strategyMarkerPanes,
     minimapSourceSeries: layout.minimap?.source.series_id,
     xAxisDefaultRange: layout.xAxis?.defaultRange,
+    strategySeriesMap,
+    isStrategySeriesAssigned,
+    getStrategySeriesAssignment,
   };
 }
 
