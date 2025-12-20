@@ -4950,13 +4950,12 @@ export function useMultiPaneChart({
   const processChunk = useCallback((samples: Sample[]) => {
     const refs = chartRefs.current;
     
-    // Check if we have surfaces available
-    const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
-    const hasLegacySurfaces = refs.tickSurface || refs.ohlcSurface;
-    
-    if (!hasDynamicPanes && !hasLegacySurfaces) {
-      return;
-    }
+    // We ALWAYS append incoming samples to the sharedDataSeriesPool, even during layout transitions.
+    // Surfaces/panes may temporarily not exist while switching layouts; rendering updates are optional,
+    // but data collection must never pause.
+    const hasDynamicPanes = !!plotLayout && refs.paneSurfaces.size > 0;
+    const hasLegacySurfaces = !!refs.tickSurface || !!refs.ohlcSurface;
+    const hasAnySurfaces = hasDynamicPanes || hasLegacySurfaces;
     
     // Don't process if overview is being cleaned up
     if (isCleaningUpOverviewRef.current) {
