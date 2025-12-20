@@ -3759,16 +3759,17 @@ export function useMultiPaneChart({
       if (!refs.sharedWasm) {
         refs.sharedWasm = paneManager.getWasmContext();
         
-        // CRITICAL: Initialize the shared data series pool with WASM context
-        // This pool persists across layout changes, keeping data alive
-        if (refs.sharedWasm && !sharedDataSeriesPool.isInitialized()) {
+        // CRITICAL: ALWAYS call initialize with the new WASM context
+        // The pool's initialize() handles migration of existing data when context changes
+        // This is essential for preserving data across layout changes (when parent surface is recreated)
+        if (refs.sharedWasm) {
           const capacity = getSeriesCapacity();
           sharedDataSeriesPool.initialize(refs.sharedWasm, {
             xyCapacity: capacity,
             ohlcCapacity: Math.floor(capacity / 4), // OHLC typically needs less capacity
             fifoEnabled: config.performance?.fifoEnabled ?? true,
           });
-          console.log('[MultiPaneChart] 🗄️ Initialized SharedDataSeriesPool with WASM context');
+          console.log('[MultiPaneChart] 🗄️ Initialized/Migrated SharedDataSeriesPool with WASM context');
         }
       }
       
