@@ -4368,42 +4368,36 @@ export function useMultiPaneChart({
                       }
                     }
                   }
-                  // CRITICAL: After setting X-axis range, recalculate Y-axis to fit data in new X range
-                  // This ensures one double-click fits both X and Y properly
-                  console.log(`[MultiPaneChart] Recalculating Y-axis after X-axis change`);
-                  
-                  for (const [, otherPaneSurface] of chartRefs.current.paneSurfaces) {
-                    try {
-                      otherPaneSurface.surface.zoomExtentsY();
-                      otherPaneSurface.surface.invalidateElement();
-                    } catch (e) {}
-                  }
-                  try {
-                    chartRefs.current.tickSurface?.zoomExtentsY();
-                    chartRefs.current.tickSurface?.invalidateElement();
-                    chartRefs.current.ohlcSurface?.zoomExtentsY();
-                    chartRefs.current.ohlcSurface?.invalidateElement();
-                  } catch (e) {}
-                  
                 } finally {
                   // Resume updates immediately to ensure changes are applied
-                  // CRITICAL: Resume synchronously, then invalidate in next frame
-                  // This is especially important when session is complete
+                  // CRITICAL: Resume synchronously, then do post-fit operations in next frame
                   for (const surface of surfacesToResume) {
                     try {
                       surface.resumeUpdates();
                     } catch (e) {}
                   }
-                  
-                  // Then invalidate in next frame to ensure redraw
+
+                  // Next frame: with X-range applied + updates resumed, fit Y to the new visible X-range
                   requestAnimationFrame(() => {
-                    for (const surface of surfacesToResume) {
+                    try {
+                      console.log(`[MultiPaneChart] Post-double-click: fitting Y after X-range applied`);
+                      for (const [, otherPaneSurface] of chartRefs.current.paneSurfaces) {
+                        try {
+                          otherPaneSurface.surface.zoomExtentsY();
+                        } catch (e) {}
+                      }
                       try {
-                        // Force invalidation to ensure the chart redraws with new ranges
-                        surface.invalidateElement();
+                        chartRefs.current.tickSurface?.zoomExtentsY();
+                        chartRefs.current.ohlcSurface?.zoomExtentsY();
                       } catch (e) {}
+                    } finally {
+                      for (const surface of surfacesToResume) {
+                        try {
+                          surface.invalidateElement();
+                        } catch (e) {}
+                      }
+                      console.log(`[MultiPaneChart] Double-click operations completed, feedStage: ${feedStageRef.current}`);
                     }
-                    console.log(`[MultiPaneChart] Double-click operations completed, feedStage: ${feedStageRef.current}`);
                   });
                 }
                 
