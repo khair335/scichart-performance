@@ -3286,8 +3286,11 @@ export function useMultiPaneChart({
       // CRITICAL: If data was restored from layout change, force a delayed refresh
       // This ensures axes update to show the restored data (especially for static data feeds)
       // Also check if we have any preserved data that wasn't restored (shouldn't happen, but safety check)
+      // ALSO: When session is COMPLETE, we must force an axis refresh after layout change,
+      // because no new data will arrive to trigger auto-ranging.
       const hasPreservedData = preservedDataSeriesRef.current.size > 0;
-      const shouldRefresh = dataRestoredDuringPreallocation || hasPreservedData;
+      const isSessionComplete = feedStage === 'complete';
+      const shouldRefresh = dataRestoredDuringPreallocation || hasPreservedData || isSessionComplete;
       
       if (shouldRefresh) {
         // Use a longer delay to ensure data is fully processed and series are attached
