@@ -5892,7 +5892,9 @@ export function useMultiPaneChart({
             showAxisLabels: true,
             showTooltip: true,
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
+            hitTestRadius: 20, // Only show series values within 20px of cursor
           });
+
           paneSurface.surface.chartModifiers.add(cursorModifier);
           paneSurface.surface.invalidateElement();
         } else if (!cursorEnabled && existingCursor) {
