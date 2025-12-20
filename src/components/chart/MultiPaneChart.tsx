@@ -4368,6 +4368,23 @@ export function useMultiPaneChart({
                       }
                     }
                   }
+                  // CRITICAL: After setting X-axis range, recalculate Y-axis to fit data in new X range
+                  // This ensures one double-click fits both X and Y properly
+                  console.log(`[MultiPaneChart] Recalculating Y-axis after X-axis change`);
+                  
+                  for (const [, otherPaneSurface] of chartRefs.current.paneSurfaces) {
+                    try {
+                      otherPaneSurface.surface.zoomExtentsY();
+                      otherPaneSurface.surface.invalidateElement();
+                    } catch (e) {}
+                  }
+                  try {
+                    chartRefs.current.tickSurface?.zoomExtentsY();
+                    chartRefs.current.tickSurface?.invalidateElement();
+                    chartRefs.current.ohlcSurface?.zoomExtentsY();
+                    chartRefs.current.ohlcSurface?.invalidateElement();
+                  } catch (e) {}
+                  
                 } finally {
                   // Resume updates immediately to ensure changes are applied
                   // CRITICAL: Resume synchronously, then invalidate in next frame
