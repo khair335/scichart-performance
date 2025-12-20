@@ -883,24 +883,15 @@ export function useMultiPaneChart({
         dataSeries = pooledEntry.dataSeries;
         console.log(`[MultiPaneChart] ♻️ ensureSeriesExists: Reusing from pool: ${seriesId} (${dataSeries.count()} points)`);
       } else {
-        // Create new DataSeries on-demand
-        if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
-          dataSeries = new OhlcDataSeries(dataSeriesWasm, {
-            dataSeriesName: seriesId,
-            capacity: onDemandInitialCapacity,
-            containsNaN: false,
-            dataIsSortedInX: true,
-            dataEvenlySpacedInX: true,
-          });
-        } else {
-          dataSeries = new XyDataSeries(dataSeriesWasm, {
-            dataSeriesName: seriesId,
-            capacity: onDemandInitialCapacity,
-            containsNaN: false,
-            dataIsSortedInX: true,
-            dataEvenlySpacedInX: true,
-          });
+        // Create new DataSeries via the pool (ensures consistency)
+        const seriesPoolType = (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') ? 'ohlc' : 'xy';
+        const newPooledEntry = sharedDataSeriesPool.getOrCreate(seriesId, seriesPoolType);
+        if (!newPooledEntry) {
+          console.warn(`[MultiPaneChart] ❌ ensureSeriesExists: Failed to create dataSeries via pool: ${seriesId}`);
+          return null;
         }
+        dataSeries = newPooledEntry.dataSeries;
+        console.log(`[MultiPaneChart] 🆕 ensureSeriesExists: Created dataSeries via pool: ${seriesId}`);
       }
       
       // Create renderable series (always new - only renderableSeries are recreated on layout change)
@@ -2883,28 +2874,16 @@ export function useMultiPaneChart({
           dataSeries = existingEntry.dataSeries;
           console.log(`[MultiPaneChart] ♻️ Reusing dataSeries from store: ${seriesId}`);
         } else {
-          // Create new DataSeries and add to pool
-          if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
-            // OHLC bar series - must use OhlcDataSeries
-            dataSeries = new OhlcDataSeries(dataSeriesWasm, {
-            dataSeriesName: seriesId,
-            fifoCapacity: capacity,
-            capacity: capacity,
-            containsNaN: false,
-            dataIsSortedInX: true,
-            dataEvenlySpacedInX: false,
-          });
-          } else {
-            // All other series (tick, indicators, strategy) use XyDataSeries
-            dataSeries = new XyDataSeries(dataSeriesWasm, {
-            dataSeriesName: seriesId,
-            fifoCapacity: capacity,
-            capacity: capacity,
-            containsNaN: false,
-            dataIsSortedInX: true,
-            dataEvenlySpacedInX: false,
-          });
+          // Create new DataSeries via the pool (ensures consistency with processChunk)
+          const seriesPoolType = (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') ? 'ohlc' : 'xy';
+          const newPooledEntry = sharedDataSeriesPool.getOrCreate(seriesId, seriesPoolType);
+          if (!newPooledEntry) {
+            console.warn(`[MultiPaneChart] ❌ Failed to create dataSeries via pool: ${seriesId}`);
+            preallocatedSeriesRef.current.delete(seriesId);
+            return;
           }
+          dataSeries = newPooledEntry.dataSeries;
+          console.log(`[MultiPaneChart] 🆕 Created dataSeries via pool: ${seriesId}`);
           
           // CRITICAL: Restore preserved data from layout change (ONLY for static data feeds)
           // For live data feeds, don't restore - let the live stream populate the series
@@ -4655,31 +4634,33 @@ export function useMultiPaneChart({
                 let dataSeries: XyDataSeries | OhlcDataSeries;
                 let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
                 
-                // Reuse existing DataSeries if available (for orphaned series)
-                if (shouldReuseDataSeries && existingEntryForReuse.dataSeries) {
-                  dataSeries = existingEntryForReuse.dataSeries;
+                // CRITICAL: First check sharedDataSeriesPool - this is the single source of truth
+                // for DataSeries instances. Data from WebSocket goes to the pool, so we MUST
+                // use the same DataSeries from the pool for the renderableSeries
+                const pooledEntry = sharedDataSeriesPool.get(seriesId);
                 
+                // PRIORITY ORDER for reusing dataSeries:
+                // 1. sharedDataSeriesPool (persists across ALL layout changes - most reliable)
+                // 2. existing dataSeriesStore entry (legacy orphaned series)
+                // 3. Create new via pool's getOrCreate (ensures pool consistency)
+                if (pooledEntry && pooledEntry.dataSeries) {
+                  // BEST CASE: Reuse from shared pool - this preserves ALL data across layout changes
+                  dataSeries = pooledEntry.dataSeries;
+                  console.log(`[MultiPaneChart] ♻️ Initial prealloc: Reusing dataSeries from pool: ${seriesId} (${dataSeries.count()} points)`);
+                } else if (shouldReuseDataSeries && existingEntryForReuse.dataSeries) {
+                  // Fallback: Reuse from legacy store
+                  dataSeries = existingEntryForReuse.dataSeries;
+                  console.log(`[MultiPaneChart] ♻️ Initial prealloc: Reusing dataSeries from store: ${seriesId}`);
                 } else {
-                  // Create new DataSeries
-                  if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
-                    dataSeries = new OhlcDataSeries(dataSeriesWasm, {
-                      dataSeriesName: seriesId,
-                      fifoCapacity: capacity,
-                      capacity: capacity,
-                      containsNaN: false,
-                      dataIsSortedInX: true,
-                      dataEvenlySpacedInX: false,
-                    });
-                  } else {
-                    dataSeries = new XyDataSeries(dataSeriesWasm, {
-                      dataSeriesName: seriesId,
-                      fifoCapacity: capacity,
-                      capacity: capacity,
-                      containsNaN: false,
-                      dataIsSortedInX: true,
-                      dataEvenlySpacedInX: false,
-                    });
+                  // Create new DataSeries via the pool (ensures consistency)
+                  const seriesPoolType = (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') ? 'ohlc' : 'xy';
+                  const newPooledEntry = sharedDataSeriesPool.getOrCreate(seriesId, seriesPoolType);
+                  if (!newPooledEntry) {
+                    console.warn(`[MultiPaneChart] ❌ Failed to create dataSeries via pool: ${seriesId}`);
+                    return;
                   }
+                  dataSeries = newPooledEntry.dataSeries;
+                  console.log(`[MultiPaneChart] 🆕 Initial prealloc: Created dataSeries via pool: ${seriesId}`);
                 }
                 
                 // Create renderableSeries (always create new, even if reusing DataSeries)
