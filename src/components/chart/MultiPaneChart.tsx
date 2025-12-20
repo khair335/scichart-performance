@@ -28,6 +28,7 @@ import {
   EAxisAlignment,
   CursorModifier,
   RolloverModifier,
+  LegendModifier,
   EXyDirection,
   SciChartOverview,
   SciChartDefaults,
@@ -6064,67 +6065,119 @@ export function useMultiPaneChart({
     }
   }, [cursorEnabled, theme]); // Re-run when cursorEnabled or theme changes
   
-  // Toggle plot titles/legends based on legendsEnabled
+  // Toggle LegendModifier with visibility checkboxes based on legendsEnabled
   useEffect(() => {
     const refs = chartRefs.current;
     
-    // Helper function to toggle legends for a series
-    const toggleSeriesLegend = (series: any, isEnabled: boolean) => {
+    // Helper function to ensure series have proper names for legend display
+    const ensureSeriesName = (series: any) => {
       if (!series.dataSeries) return;
       
-      // Store original name before clearing (only if not already stored)
+      // Store original name if not already stored
       if (!(series.dataSeries as any)._originalDataSeriesName) {
         (series.dataSeries as any)._originalDataSeriesName = series.dataSeries.dataSeriesName || '';
       }
       
-      if (isEnabled) {
-        // Restore original name if it exists, otherwise extract from ID
-        const originalName = (series.dataSeries as any)._originalDataSeriesName;
-        if (originalName && originalName !== '') {
-          series.dataSeries.dataSeriesName = originalName;
-        } else {
-          // Fallback: extract from series ID if no original name
-          const seriesId = (series as any).id || '';
-          const name = seriesId.split(':').pop() || 'Series';
-          series.dataSeries.dataSeriesName = name;
-          // Store this as the original name for future toggles
-          (series.dataSeries as any)._originalDataSeriesName = name;
-        }
+      // Restore or set series name for legend display
+      const originalName = (series.dataSeries as any)._originalDataSeriesName;
+      if (originalName && originalName !== '') {
+        series.dataSeries.dataSeriesName = originalName;
       } else {
-        // Hide series name (but keep original stored)
-        series.dataSeries.dataSeriesName = '';
+        // Fallback: extract from series ID if no original name
+        const dataSeries = series.dataSeries;
+        const seriesName = dataSeries.dataSeriesName || 'Series';
+        series.dataSeries.dataSeriesName = seriesName;
+        (series.dataSeries as any)._originalDataSeriesName = seriesName;
       }
     };
     
-    // Update series names/titles on all dynamic panes
-    for (const [, paneSurface] of refs.paneSurfaces) {
+    // Update LegendModifier on all dynamic panes
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
       try {
-        const renderableSeries = paneSurface.surface.renderableSeries.asArray();
-        for (const series of renderableSeries) {
-          toggleSeriesLegend(series, legendsEnabled);
+        const modifiers = paneSurface.surface.chartModifiers.asArray();
+        const existingLegend = modifiers.find((mod: any) => mod instanceof LegendModifier);
+        
+        if (legendsEnabled && !existingLegend) {
+          // Ensure all series have proper names before adding legend
+          const renderableSeries = paneSurface.surface.renderableSeries.asArray();
+          for (const series of renderableSeries) {
+            ensureSeriesName(series);
+          }
+          
+          // Add LegendModifier with visibility checkboxes
+          const legendModifier = new LegendModifier({
+            showCheckboxes: true,
+            showSeriesMarkers: true,
+            isCheckedChangedCallback: (series, isChecked) => {
+              // Toggle series visibility when checkbox is clicked
+              series.isVisible = isChecked;
+              console.log(`[Legend] Series "${series.dataSeries?.dataSeriesName}" visibility: ${isChecked}`);
+            },
+          });
+          paneSurface.surface.chartModifiers.add(legendModifier);
+          paneSurface.surface.invalidateElement();
+          console.log(`[MultiPaneChart] Added LegendModifier with checkboxes to pane: ${paneId}`);
+        } else if (!legendsEnabled && existingLegend) {
+          // Remove LegendModifier
+          paneSurface.surface.chartModifiers.remove(existingLegend);
+          paneSurface.surface.invalidateElement();
+          console.log(`[MultiPaneChart] Removed LegendModifier from pane: ${paneId}`);
         }
-        paneSurface.surface.invalidateElement();
       } catch (e) {
-        console.warn(`[MultiPaneChart] Error toggling legends on pane:`, e);
+        console.warn(`[MultiPaneChart] Error toggling legend on pane ${paneId}:`, e);
       }
     }
     
-    // Update series names/titles on legacy surfaces
+    // Update LegendModifier on legacy surfaces
     try {
       if (refs.tickSurface) {
-        const renderableSeries = refs.tickSurface.renderableSeries.asArray();
-        for (const series of renderableSeries) {
-          toggleSeriesLegend(series, legendsEnabled);
+        const modifiers = refs.tickSurface.chartModifiers.asArray();
+        const existingLegend = modifiers.find((mod: any) => mod instanceof LegendModifier);
+        
+        if (legendsEnabled && !existingLegend) {
+          const renderableSeries = refs.tickSurface.renderableSeries.asArray();
+          for (const series of renderableSeries) {
+            ensureSeriesName(series);
+          }
+          
+          const legendModifier = new LegendModifier({
+            showCheckboxes: true,
+            showSeriesMarkers: true,
+            isCheckedChangedCallback: (series, isChecked) => {
+              series.isVisible = isChecked;
+            },
+          });
+          refs.tickSurface.chartModifiers.add(legendModifier);
+          refs.tickSurface.invalidateElement();
+        } else if (!legendsEnabled && existingLegend) {
+          refs.tickSurface.chartModifiers.remove(existingLegend);
+          refs.tickSurface.invalidateElement();
         }
-        refs.tickSurface.invalidateElement();
       }
       
       if (refs.ohlcSurface) {
-        const renderableSeries = refs.ohlcSurface.renderableSeries.asArray();
-        for (const series of renderableSeries) {
-          toggleSeriesLegend(series, legendsEnabled);
+        const modifiers = refs.ohlcSurface.chartModifiers.asArray();
+        const existingLegend = modifiers.find((mod: any) => mod instanceof LegendModifier);
+        
+        if (legendsEnabled && !existingLegend) {
+          const renderableSeries = refs.ohlcSurface.renderableSeries.asArray();
+          for (const series of renderableSeries) {
+            ensureSeriesName(series);
+          }
+          
+          const legendModifier = new LegendModifier({
+            showCheckboxes: true,
+            showSeriesMarkers: true,
+            isCheckedChangedCallback: (series, isChecked) => {
+              series.isVisible = isChecked;
+            },
+          });
+          refs.ohlcSurface.chartModifiers.add(legendModifier);
+          refs.ohlcSurface.invalidateElement();
+        } else if (!legendsEnabled && existingLegend) {
+          refs.ohlcSurface.chartModifiers.remove(existingLegend);
+          refs.ohlcSurface.invalidateElement();
         }
-        refs.ohlcSurface.invalidateElement();
       }
     } catch (e) {
       console.warn(`[MultiPaneChart] Error toggling legends on legacy surfaces:`, e);
