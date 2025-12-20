@@ -58,6 +58,7 @@ import {
   type MarkerSeriesType,
   type MarkerScatterGroup 
 } from '@/lib/strategy-marker-scatter';
+import { sharedDataSeriesPool, type PooledDataSeries } from '@/lib/shared-data-series-pool';
 
 /**
  * Formats a timestamp value to date string with time and milliseconds
@@ -3768,6 +3769,18 @@ export function useMultiPaneChart({
       // Now get the WASM context AFTER parent surface is initialized
       if (!refs.sharedWasm) {
         refs.sharedWasm = paneManager.getWasmContext();
+        
+        // CRITICAL: Initialize the shared data series pool with WASM context
+        // This pool persists across layout changes, keeping data alive
+        if (refs.sharedWasm && !sharedDataSeriesPool.isInitialized()) {
+          const capacity = getSeriesCapacity();
+          sharedDataSeriesPool.initialize(refs.sharedWasm, {
+            xyCapacity: capacity,
+            ohlcCapacity: Math.floor(capacity / 4), // OHLC typically needs less capacity
+            fifoEnabled: config.performance?.fifoEnabled ?? true,
+          });
+          console.log('[MultiPaneChart] 🗄️ Initialized SharedDataSeriesPool with WASM context');
+        }
       }
       
       parentSurfaceReadyRef.current = true;
@@ -3803,6 +3816,7 @@ export function useMultiPaneChart({
 
         // CRITICAL: Detach dataSeries from all renderableSeries BEFORE cleanup
         // This prevents "dataSeries has been deleted" errors during cleanup
+        // NOTE: We do NOT delete dataSeries - they persist in sharedDataSeriesPool
         for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
           if (entry.renderableSeries) {
             try {
@@ -3816,19 +3830,20 @@ export function useMultiPaneChart({
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
         oldManager.cleanup().then(() => {
-          console.log('[MultiPaneChart] No layout cleanup complete');
+          console.log('[MultiPaneChart] No layout cleanup complete - dataSeries preserved in pool');
 
           // NOW clear our local references after cleanup is done
           refs.paneSurfaces.clear();
 
-          // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
+          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          // DataSeries persist in sharedDataSeriesPool across layout changes
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-            if (entry.renderableSeries) {
-              refs.dataSeriesStore.delete(seriesId);
-            }
+            // Just mark as needing new renderableSeries, keep dataSeries reference
+            entry.renderableSeries = null as any;
+            entry.paneId = undefined;
           }
 
-          // Clear preallocated series tracking
+          // Clear preallocated series tracking so series can be re-attached to new panes
           preallocatedSeriesRef.current.clear();
 
           // Wait additional time before allowing new surface creation
@@ -3841,43 +3856,13 @@ export function useMultiPaneChart({
           }, 600);
         }).catch((e) => {
           // Silently handle cleanup errors (expected during layout transitions)
+          console.log('[MultiPaneChart] No layout cleanup error (expected) - dataSeries preserved in pool');
 
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
           
-          // Preserve DataSeries data before clearing (same as success path)
-          // We preserve for ALL feeds, but only restore for non-live feeds
-          preservedDataSeriesRef.current.clear();
-          
-          // Always preserve data if it exists, regardless of feedStage
-          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-            if (entry.renderableSeries && entry.dataSeries) {
-              try {
-                // CRITICAL: Check if DataSeries is still valid before accessing
-                if (!entry.dataSeries || (entry.dataSeries as any).isDeleted) {
-                  continue; // Skip deleted DataSeries
-                }
-                
-                const dataCount = entry.dataSeries.count();
-                if (dataCount > 0 && dataCount < 1000000) { // Sanity check: reasonable data size
-                  // Get WASM from renderableSeries surface or from sharedWasm
-                  const wasm = (entry.renderableSeries as any).sciChartSurface?.webAssemblyContext2D || refs.sharedWasm;
-                  if (wasm) {
-                    preservedDataSeriesRef.current.set(seriesId, {
-                      dataSeries: entry.dataSeries,
-                      wasm: wasm
-                    });
-                    const isLiveFeed = feedStage === 'live' || feedStage === 'delta';
-                    console.log(`[MultiPaneChart] 💾 Preserving data for ${seriesId}: ${dataCount} points (error path, feedStage: ${feedStage}, will${isLiveFeed ? ' NOT' : ''} restore)`);
-                  }
-                }
-              } catch (preserveError) {
-                // Silently skip if DataSeries is invalid or deleted
-                // This is expected during cleanup
-              }
-            }
-          }
-          
+          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          // DataSeries persist in sharedDataSeriesPool across layout changes
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
             if (entry.renderableSeries) {
               try {
@@ -3885,7 +3870,9 @@ export function useMultiPaneChart({
               } catch (e) {
                 // Ignore
               }
-              refs.dataSeriesStore.delete(seriesId);
+              // Just mark as needing new renderableSeries, keep entry with dataSeries
+              entry.renderableSeries = null as any;
+              entry.paneId = undefined;
             }
           }
           preallocatedSeriesRef.current.clear();
@@ -3932,70 +3919,23 @@ export function useMultiPaneChart({
 
         // CRITICAL: Cleanup FIRST, then clear references
         // This ensures cleanup completes before we clear our tracking maps
+        // NOTE: DataSeries persist in sharedDataSeriesPool - we only clear renderableSeries
         oldManager.cleanup().then(() => {
-          console.log('[MultiPaneChart] Layout change cleanup complete');
+          console.log('[MultiPaneChart] Layout change cleanup complete - dataSeries preserved in pool');
 
           // NOW clear our local references after cleanup is done
           refs.paneSurfaces.clear();
 
-          // CRITICAL: Preserve DataSeries data before clearing entries
-          // We preserve for ALL feeds, but only restore for non-live feeds
-          // This ensures static feeds (like ui-feed.exe) work even if feedStage is 'live'
-          // For live feeds, we preserve but won't restore (new data will arrive)
-          preservedDataSeriesRef.current.clear();
-          
-          // Always preserve data if it exists, regardless of feedStage
-          // The restoration logic will decide whether to actually restore based on feedStage
+          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          // DataSeries persist in sharedDataSeriesPool across layout changes
+          // This ensures all historical data is preserved when layout changes
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-            if (entry.renderableSeries && entry.dataSeries) {
-              // Preserve the DataSeries and WASM context so we can copy data to new series
-              // This is critical for static data feeds where data won't be resent
-              try {
-                // CRITICAL: Check if DataSeries is still valid before accessing
-                // This prevents WASM memory errors from accessing deleted DataSeries
-                if (!entry.dataSeries || (entry.dataSeries as any).isDeleted) {
-                  continue; // Skip deleted DataSeries
-                }
-                
-                const dataCount = entry.dataSeries.count();
-                if (dataCount > 0 && dataCount < 1000000) { // Sanity check: reasonable data size
-                  // Get WASM from renderableSeries surface or from sharedWasm
-                  const wasm = (entry.renderableSeries as any).sciChartSurface?.webAssemblyContext2D || refs.sharedWasm;
-                  if (wasm) {
-                    // Store reference to DataSeries and WASM for later restoration
-                    preservedDataSeriesRef.current.set(seriesId, {
-                      dataSeries: entry.dataSeries,
-                      wasm: wasm
-                    });
-                    const isLiveFeed = feedStage === 'live' || feedStage === 'delta';
-                    console.log(`[MultiPaneChart] 💾 Preserving data for ${seriesId}: ${dataCount} points (feedStage: ${feedStage}, will${isLiveFeed ? ' NOT' : ''} restore)`);
-                  }
-                }
-              } catch (e) {
-                // Silently skip if DataSeries is invalid or deleted
-                // This is expected during cleanup
-              }
-            }
+            // Just mark as needing new renderableSeries, keep dataSeries reference
+            entry.renderableSeries = null as any;
+            entry.paneId = undefined;
           }
 
-          // CRITICAL: Clear dataSeriesStore entries that have renderableSeries
-          // The renderableSeries will be destroyed when panes are destroyed
-          // but we need to clear the store so series can be recreated
-          // DataSeries data is preserved above and will be restored when new series are created
-          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
-            if (entry.renderableSeries) {
-              // Detach dataSeries from renderableSeries before deleting entry
-              // The DataSeries itself is preserved in preservedDataSeriesRef
-              try {
-                (entry.renderableSeries as any).dataSeries = null;
-              } catch (e) {
-                // Ignore
-              }
-              refs.dataSeriesStore.delete(seriesId);
-            }
-          }
-
-          // Clear preallocated series tracking
+          // Clear preallocated series tracking so series can be re-attached to new panes
           preallocatedSeriesRef.current.clear();
 
           // Wait additional time before allowing new surface creation
@@ -4008,12 +3948,21 @@ export function useMultiPaneChart({
           }, 600);
         }).catch((e) => {
           // Silently handle cleanup errors (expected during layout transitions)
+          console.log('[MultiPaneChart] Layout change cleanup error (expected) - dataSeries preserved in pool');
 
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
+          
+          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
             if (entry.renderableSeries) {
-              refs.dataSeriesStore.delete(seriesId);
+              try {
+                (entry.renderableSeries as any).dataSeries = null;
+              } catch (e) {
+                // Ignore
+              }
+              entry.renderableSeries = null as any;
+              entry.paneId = undefined;
             }
           }
           preallocatedSeriesRef.current.clear();
