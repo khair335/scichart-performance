@@ -197,7 +197,7 @@ export function DynamicPlotGrid({
           // Position overlay to cover the chart area (accounting for title if present)
           const topOffset = pane.title ? '24px' : '0';
           waitingOverlay.className = 'absolute flex items-center justify-center bg-card/50 backdrop-blur-sm z-30 pointer-events-none';
-          waitingOverlay.style.display = 'none'; // Hidden by default, shown when waiting
+          waitingOverlay.style.display = 'flex'; // CRITICAL: Show waiting by default - hidden when data arrives
           waitingOverlay.style.top = topOffset;
           waitingOverlay.style.left = '0';
           waitingOverlay.style.right = '0';

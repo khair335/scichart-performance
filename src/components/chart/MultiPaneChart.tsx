@@ -1104,6 +1104,7 @@ export function useMultiPaneChart({
   const triggerYAxisScalingOnNextBatchRef = useRef(false); // Flag to trigger Y-axis scaling after data is processed
   const yAxisManuallyStretchedRef = useRef(false); // When true, skip auto Y-axis scaling to preserve user's manual stretch
   const prevAutoScrollStateRef = useRef<boolean | null>(null); // Track previous auto-scroll state to detect changes
+  const anyPaneHasDataRef = useRef(false); // CRITICAL: Gate auto-scroll until first data arrives
   
   // Track X-axis range state before tab is hidden to restore it when visible again
   const savedXAxisRangeRef = useRef<{
@@ -3790,6 +3791,7 @@ export function useMultiPaneChart({
       currentLayoutIdRef.current = null;
       parentSurfaceReadyRef.current = false;
       pendingPaneCreationRef.current = false;
+      anyPaneHasDataRef.current = false; // CRITICAL: Reset data flag when no layout
       setParentSurfaceReady(false);
 
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
@@ -4031,6 +4033,7 @@ export function useMultiPaneChart({
       parentSurfaceReadyRef.current = false;
       pendingPaneCreationRef.current = false;
       currentLayoutIdRef.current = null;
+      anyPaneHasDataRef.current = false; // CRITICAL: Reset data flag on layout change
       setParentSurfaceReady(false);
       setPanesReadyCount(0); // CRITICAL: Reset panesReadyCount so preallocation effect re-runs when new panes are created
 
@@ -5400,6 +5403,8 @@ export function useMultiPaneChart({
             // Check if this is the first time data is received for this pane
             if (!paneSurface.hasData) {
               firstDataReceived = true;
+              // CRITICAL: Mark that at least one pane has data - enables auto-scroll
+              anyPaneHasDataRef.current = true;
             }
             paneSurface.hasData = true;
             paneSurface.waitingForData = false;
@@ -5410,7 +5415,7 @@ export function useMultiPaneChart({
         // CRITICAL: If this is the first time data appears, force a full refresh
         // This ensures data appears on full reload (not just hot reload)
         if (firstDataReceived) {
-          console.log(`[MultiPaneChart] 🎯 First data received, forcing full chart refresh`);
+          console.log(`[MultiPaneChart] 🎯 First data received, enabling auto-scroll and forcing chart refresh`);
           setTimeout(() => {
             const refs = chartRefs.current;
             // Invalidate all surfaces to force a visual refresh
@@ -5446,6 +5451,12 @@ export function useMultiPaneChart({
           }, 50); // Small delay to ensure data is fully processed
         }
       });
+    }
+
+    // CRITICAL: Skip ALL plot updates (auto-scroll, Y-axis scaling) until first data arrives
+    // This ensures "Waiting for Data..." state is not decoupled from plot updates
+    if (!anyPaneHasDataRef.current) {
+      return; // No data yet - don't auto-scroll or update anything
     }
 
     // Skip auto-scroll during range restoration
