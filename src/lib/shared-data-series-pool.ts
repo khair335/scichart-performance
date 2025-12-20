@@ -63,6 +63,9 @@ class SharedDataSeriesPool {
   /**
    * Initialize the pool with a WASM context
    * Must be called once when SciChart initializes
+   * 
+   * CRITICAL: If called with a DIFFERENT wasm context (e.g., after layout change),
+   * we need to migrate existing data to new DataSeries created with the new context.
    */
   initialize(wasm: TSciChart, config?: Partial<PoolConfig>): void {
     if (this.initialized && this.wasmContext === wasm) {
@@ -73,12 +76,111 @@ class SharedDataSeriesPool {
       return;
     }
     
+    // CRITICAL: Check if we have a DIFFERENT wasm context (layout change scenario)
+    // In this case, existing DataSeries are invalid and we need to migrate data
+    const hadPreviousContext = this.wasmContext !== null && this.wasmContext !== wasm;
+    const previousPool = hadPreviousContext ? new Map(this.pool) : null;
+    
+    if (hadPreviousContext) {
+      console.log(`[SharedDataSeriesPool] WASM context changed - migrating ${this.pool.size} series to new context`);
+      // Clear the old pool (don't delete DataSeries as they're tied to deleted WASM)
+      this.pool.clear();
+    }
+    
     this.wasmContext = wasm;
     if (config) {
       this.config = { ...this.config, ...config };
     }
     this.initialized = true;
     console.log('[SharedDataSeriesPool] Initialized with config:', this.config);
+    
+    // Migrate data from old series to new series
+    if (previousPool && previousPool.size > 0) {
+      for (const [seriesId, oldEntry] of previousPool) {
+        try {
+          // Check if old series is still valid and has data
+          let hasData = false;
+          let dataCount = 0;
+          try {
+            dataCount = oldEntry.dataSeries.count();
+            hasData = dataCount > 0 && oldEntry.hasReceivedData;
+          } catch (e) {
+            // Old series is invalid (expected - old WASM context was deleted)
+            hasData = false;
+          }
+          
+          if (hasData) {
+            // Create new series with same type
+            const newEntry = this.getOrCreate(seriesId, oldEntry.seriesType);
+            if (newEntry) {
+              try {
+                // Copy data from old series to new series
+                if (oldEntry.seriesType === 'ohlc' && oldEntry.dataSeries instanceof OhlcDataSeries) {
+                  const oldOhlc = oldEntry.dataSeries as OhlcDataSeries;
+                  const newOhlc = newEntry.dataSeries as OhlcDataSeries;
+                  
+                  const xValues = oldOhlc.getNativeXValues();
+                  const oValues = oldOhlc.getNativeOpenValues();
+                  const hValues = oldOhlc.getNativeHighValues();
+                  const lValues = oldOhlc.getNativeLowValues();
+                  const cValues = oldOhlc.getNativeCloseValues();
+                  
+                  if (xValues && oValues && hValues && lValues && cValues && xValues.size() > 0) {
+                    const len = xValues.size();
+                    const xArr = new Float64Array(len);
+                    const oArr = new Float64Array(len);
+                    const hArr = new Float64Array(len);
+                    const lArr = new Float64Array(len);
+                    const cArr = new Float64Array(len);
+                    
+                    for (let i = 0; i < len; i++) {
+                      xArr[i] = xValues.get(i);
+                      oArr[i] = oValues.get(i);
+                      hArr[i] = hValues.get(i);
+                      lArr[i] = lValues.get(i);
+                      cArr[i] = cValues.get(i);
+                    }
+                    
+                    newOhlc.appendRange(xArr, oArr, hArr, lArr, cArr);
+                    newEntry.hasReceivedData = true;
+                    console.log(`[SharedDataSeriesPool] ✅ Migrated OHLC series: ${seriesId} (${len} points)`);
+                  }
+                } else if (oldEntry.dataSeries instanceof XyDataSeries) {
+                  const oldXy = oldEntry.dataSeries as XyDataSeries;
+                  const newXy = newEntry.dataSeries as XyDataSeries;
+                  
+                  const xValues = oldXy.getNativeXValues();
+                  const yValues = oldXy.getNativeYValues();
+                  
+                  if (xValues && yValues && xValues.size() > 0) {
+                    const len = xValues.size();
+                    const xArr = new Float64Array(len);
+                    const yArr = new Float64Array(len);
+                    
+                    for (let i = 0; i < len; i++) {
+                      xArr[i] = xValues.get(i);
+                      yArr[i] = yValues.get(i);
+                    }
+                    
+                    newXy.appendRange(xArr, yArr);
+                    newEntry.hasReceivedData = true;
+                    console.log(`[SharedDataSeriesPool] ✅ Migrated XY series: ${seriesId} (${len} points)`);
+                  }
+                }
+              } catch (copyError) {
+                // Old series data is no longer accessible (expected if WASM was deleted)
+                console.warn(`[SharedDataSeriesPool] Could not migrate data for ${seriesId}:`, copyError);
+              }
+            }
+          } else {
+            // No data to migrate, just create empty entry for future use
+            console.log(`[SharedDataSeriesPool] Skipping empty series: ${seriesId}`);
+          }
+        } catch (e) {
+          console.warn(`[SharedDataSeriesPool] Error migrating series ${seriesId}:`, e);
+        }
+      }
+    }
   }
   
   /**
