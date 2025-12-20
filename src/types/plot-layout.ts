@@ -395,16 +395,12 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
       }
     }
   } else {
-    // Default: all panes except PnL and bar plots
-    for (const pane of layout.panes) {
-      const paneSeries = paneToSeriesMap.get(pane.id) || [];
-      const hasPnL = paneSeries.some(sid => sid.includes(':strategy:') && sid.includes(':pnl'));
-      const hasBar = paneSeries.some(sid => sid.includes(':ohlc_'));
-      
-      if (!hasPnL && !hasBar) {
-        strategyMarkerPanes.add(pane.id);
-      }
-    }
+    // Default: NO strategy markers unless explicitly configured
+    // Strategy markers only appear when:
+    // 1. strategy_markers.include_panes is set, OR
+    // 2. strategy_markers.exclude_panes is set, OR
+    // 3. A strategy series (type: strategy_markers) is explicitly assigned in the series array
+    // This prevents unexpected markers from appearing on charts
   }
   
   // Helper functions for strategy series lookup
