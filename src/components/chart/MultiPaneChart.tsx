@@ -871,23 +871,40 @@ export function useMultiPaneChart({
         return null;
       }
       
+      // CRITICAL: First check sharedDataSeriesPool - persists across layout changes
+      const pooledEntry = sharedDataSeriesPool.get(seriesId);
+      
       // Create DataSeries with preallocated circular buffer
       let dataSeries: XyDataSeries | OhlcDataSeries;
       let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
       
-      if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
-          // OHLC bar series - must use OhlcDataSeries
-          // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
-          // NOTE: no fifoCapacity here (on-demand). This prevents WASM abort on large preallocation.
+      // Reuse dataSeries from pool if it exists (preserves data across layout changes)
+      if (pooledEntry && pooledEntry.dataSeries) {
+        dataSeries = pooledEntry.dataSeries;
+        console.log(`[MultiPaneChart] ♻️ ensureSeriesExists: Reusing from pool: ${seriesId} (${dataSeries.count()} points)`);
+      } else {
+        // Create new DataSeries on-demand
+        if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
           dataSeries = new OhlcDataSeries(dataSeriesWasm, {
-          dataSeriesName: seriesId,
-          capacity: onDemandInitialCapacity,  // 👈 Was using fifoCapacity with huge values
-          containsNaN: false,
-          dataIsSortedInX: true,
-          dataEvenlySpacedInX: true,
-        });
-        
-        // PERF: Use Auto resampling for 10M+ point performance
+            dataSeriesName: seriesId,
+            capacity: onDemandInitialCapacity,
+            containsNaN: false,
+            dataIsSortedInX: true,
+            dataEvenlySpacedInX: true,
+          });
+        } else {
+          dataSeries = new XyDataSeries(dataSeriesWasm, {
+            dataSeriesName: seriesId,
+            capacity: onDemandInitialCapacity,
+            containsNaN: false,
+            dataIsSortedInX: true,
+            dataEvenlySpacedInX: true,
+          });
+        }
+      }
+      
+      // Create renderable series (always new - only renderableSeries are recreated on layout change)
+      if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
         renderableSeries = new FastCandlestickRenderableSeries(wasm, {
           dataSeries: dataSeries as OhlcDataSeries,
           strokeUp: '#26a69a',
@@ -898,24 +915,12 @@ export function useMultiPaneChart({
           resamplingMode: EResamplingMode.Auto,
         });
       } else {
-        // All other series (tick, indicators, strategy) use XyDataSeries
-        // PERF: dataIsSortedInX + dataEvenlySpacedInX = major perf gain for time-series
-        // NOTE: no fifoCapacity here (on-demand). This prevents WASM abort on large preallocation.
-        dataSeries = new XyDataSeries(dataSeriesWasm, {
-          dataSeriesName: seriesId,
-          capacity: onDemandInitialCapacity,  // 👈 Was using fifoCapacity with huge values
-          containsNaN: false,
-          dataIsSortedInX: true,
-          dataEvenlySpacedInX: true,
-        });
-        
         // Get series assignment from layout for styling
         const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
         
         // Determine stroke color based on type or layout style
-        let stroke = seriesAssignment?.style?.stroke; // Use layout style if provided
+        let stroke = seriesAssignment?.style?.stroke;
         if (!stroke) {
-          // Fallback to default colors based on type
           stroke = '#50C7E0'; // Default tick color
           if (seriesInfo.isIndicator) {
             stroke = '#F48420'; // Orange for indicators
@@ -926,16 +931,10 @@ export function useMultiPaneChart({
           }
         }
         
-        // Get stroke thickness from layout or use default
         const strokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
+        const fill = seriesAssignment?.style?.fill ?? (stroke + '44');
+        const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined;
         
-        // Get fill color for mountain series from layout or use default
-        const fill = seriesAssignment?.style?.fill ?? (stroke + '44'); // Add transparency for fill
-        
-        // Get point marker setting from layout
-        const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined; // TODO: Implement point markers if needed
-        
-        // Create renderable series based on layout type
         if (renderableSeriesType === 'FastMountainRenderableSeries') {
           renderableSeries = new FastMountainRenderableSeries(wasm, {
             dataSeries: dataSeries as XyDataSeries,
@@ -943,16 +942,15 @@ export function useMultiPaneChart({
             fill: fill,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto, // Use Auto for better performance
+            resamplingMode: EResamplingMode.Auto,
           });
         } else {
-          // Default to FastLineRenderableSeries
           renderableSeries = new FastLineRenderableSeries(wasm, {
             dataSeries: dataSeries as XyDataSeries,
             stroke: stroke,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto, // Use Auto for better performance
+            resamplingMode: EResamplingMode.Auto,
           });
         }
       }
@@ -2860,7 +2858,11 @@ export function useMultiPaneChart({
         // CRITICAL: Use sharedWasm for DataSeries to prevent sharing issues
         const dataSeriesWasm = refs.sharedWasm || wasm;
         
-        // Check if we should reuse existing DataSeries (for orphaned series)
+        // CRITICAL: First check sharedDataSeriesPool - this persists across layout changes
+        // and ensures we NEVER lose data during transitions
+        const pooledEntry = sharedDataSeriesPool.get(seriesId);
+        
+        // Also check refs.dataSeriesStore for legacy orphaned series
         const existingEntry = refs.dataSeriesStore.get(seriesId);
         const shouldReuseDataSeries = existingEntry && existingEntry.dataSeries && (!existingEntry.renderableSeries || !existingEntry.paneId);
         
@@ -2868,12 +2870,20 @@ export function useMultiPaneChart({
         let dataSeries: XyDataSeries | OhlcDataSeries;
         let renderableSeries: FastLineRenderableSeries | FastCandlestickRenderableSeries | FastMountainRenderableSeries;
         
-        // Reuse existing DataSeries if available (for orphaned series)
-        if (shouldReuseDataSeries && existingEntry.dataSeries) {
+        // PRIORITY ORDER for reusing dataSeries:
+        // 1. sharedDataSeriesPool (persists across ALL layout changes - most reliable)
+        // 2. existing dataSeriesStore entry (legacy orphaned series)
+        // 3. Create new if neither exists
+        if (pooledEntry && pooledEntry.dataSeries) {
+          // BEST CASE: Reuse from shared pool - this preserves ALL data across layout changes
+          dataSeries = pooledEntry.dataSeries;
+          console.log(`[MultiPaneChart] ♻️ Reusing dataSeries from pool: ${seriesId} (${dataSeries.count()} points preserved)`);
+        } else if (shouldReuseDataSeries && existingEntry.dataSeries) {
+          // Fallback: Reuse from legacy store
           dataSeries = existingEntry.dataSeries;
-       
+          console.log(`[MultiPaneChart] ♻️ Reusing dataSeries from store: ${seriesId}`);
         } else {
-          // Create new DataSeries
+          // Create new DataSeries and add to pool
           if (renderableSeriesType === 'FastCandlestickRenderableSeries' || seriesInfo.type === 'ohlc-bar') {
             // OHLC bar series - must use OhlcDataSeries
             dataSeries = new OhlcDataSeries(dataSeriesWasm, {
@@ -4964,8 +4974,9 @@ export function useMultiPaneChart({
     // OPTIMIZATION: Group samples by series_id first, then use appendRange()
     // This reduces WASM boundary crossing from N calls to M calls (M = unique series)
     // Much more efficient than individual append() calls
-    const xyBatches = new Map<string, { x: number[], y: number[], entry: any }>();
-    const ohlcBatches = new Map<string, { x: number[], o: number[], h: number[], l: number[], c: number[], entry: any }>();
+    // CRITICAL: Store dataSeries directly, not entry reference - ensures data persists during layout transitions
+    const xyBatches = new Map<string, { x: number[], y: number[], dataSeries: XyDataSeries }>();
+    const ohlcBatches = new Map<string, { x: number[], o: number[], h: number[], l: number[], c: number[], dataSeries: OhlcDataSeries }>();
     
     // First pass: group samples by series
     for (let i = 0; i < samplesLength; i++) {
@@ -4980,61 +4991,54 @@ export function useMultiPaneChart({
         latestTime = t_ms; // Keep latestTime in ms for internal tracking
       }
 
-      // Get series entry from store (direct O(1) lookup)
-      let seriesEntry = refs.dataSeriesStore.get(series_id);
-      if (!seriesEntry) {
-        // Series not preallocated yet - this can happen if data arrives before preallocation
-        // Try to create it on-demand if panes are ready (fallback for timing issues)
-        if (plotLayout && refs.paneSurfaces.size > 0 && isReady) {
-          // Check if series is in layout - only create if it should be plotted
-          const paneId = layoutManager?.getPaneForSeries(series_id);
-          if (paneId) {
-            const paneSurface = refs.paneSurfaces.get(paneId);
-            if (paneSurface) {
-              // Series is in layout and pane exists - create it on-demand
-              console.log(`[MultiPaneChart] 🔧 Creating series on-demand: ${series_id} (data arrived before preallocation)`);
-              const onDemandEntry = ensureSeriesExists(series_id);
-              if (onDemandEntry) {
-                seriesEntry = onDemandEntry;
-              }
-            }
+      // CRITICAL: Always try to get dataSeries from sharedDataSeriesPool FIRST
+      // This ensures data is NEVER lost during layout transitions, even if refs.dataSeriesStore
+      // is being rebuilt. The pool persists across all layout changes.
+      
+      // Determine series type for pool lookup
+      const isOhlcSeries = series_id.includes(':ohlc_');
+      const seriesType: 'xy' | 'ohlc' = isOhlcSeries ? 'ohlc' : 'xy';
+      
+      // Get or create from the persistent pool - this NEVER loses data
+      let pooledEntry = sharedDataSeriesPool.get(series_id);
+      if (!pooledEntry && sharedDataSeriesPool.isInitialized()) {
+        // Create in pool if it doesn't exist (pool persists across layout changes)
+        pooledEntry = sharedDataSeriesPool.getOrCreate(series_id, seriesType);
+      }
+      
+      // Also check refs.dataSeriesStore for paneId tracking (but don't require it for data append)
+      const storeEntry = refs.dataSeriesStore.get(series_id);
+      
+      // If we have neither pool nor store entry, buffer the sample
+      if (!pooledEntry) {
+        // Only buffer if series is in layout (don't buffer samples for series we'll never create)
+        if (plotLayout && isSeriesInLayout(series_id)) {
+          if (skippedSamplesBufferRef.current.length < MAX_SKIPPED_BUFFER) {
+            skippedSamplesBufferRef.current.push(sample);
+          } else {
+            skippedSamplesBufferRef.current.shift();
+            skippedSamplesBufferRef.current.push(sample);
           }
         }
         
-        if (!seriesEntry) {
-          // Still not found - buffer this sample for later reprocessing
-          // Only buffer if series is in layout (don't buffer samples for series we'll never create)
-          if (plotLayout && isSeriesInLayout(series_id)) {
-            // Buffer sample for reprocessing after series is created
-            if (skippedSamplesBufferRef.current.length < MAX_SKIPPED_BUFFER) {
-              skippedSamplesBufferRef.current.push(sample);
-            } else {
-              // Buffer full - keep only most recent samples
-              skippedSamplesBufferRef.current.shift(); // Remove oldest
-              skippedSamplesBufferRef.current.push(sample);
-            }
-          }
-          
-          // DEBUG: Log missing series with detailed info (throttled - only first sample per batch)
-          if (i === 0) {
-            const bufferedCount = skippedSamplesBufferRef.current.length;
-            console.warn(`[MultiPaneChart] ⚠️ Series not in store, buffering for later: ${series_id} (${bufferedCount} samples buffered)`);
-            console.warn(`[MultiPaneChart] Available series in store (${refs.dataSeriesStore.size}):`, Array.from(refs.dataSeriesStore.keys()).slice(0, 10));
-            console.warn(`[MultiPaneChart] Registry has ${registry.length} series:`, registry.map(r => r.id).slice(0, 10));
-          }
-          continue;
+        // DEBUG: Log missing series (throttled)
+        if (i === 0) {
+          const bufferedCount = skippedSamplesBufferRef.current.length;
+          console.warn(`[MultiPaneChart] ⚠️ Series not in pool, buffering: ${series_id} (${bufferedCount} buffered)`);
         }
+        continue;
       }
       
-      // Track pane for overlay update
-      if (seriesEntry.paneId) {
-        panesWithData.add(seriesEntry.paneId);
+      // Use the dataSeries from the pool (guaranteed to persist across layout changes)
+      const dataSeries = pooledEntry.dataSeries;
+      
+      // Track pane for overlay update (use storeEntry if available, but don't require it)
+      if (storeEntry?.paneId) {
+        panesWithData.add(storeEntry.paneId);
       }
 
-      // FAST TYPE DETECTION using string includes
-      const isOhlc = series_id.includes(':ohlc_');
-      
-      if (isOhlc) {
+      // FAST TYPE DETECTION using string includes (already computed above)
+      if (isOhlcSeries) {
         const o = payload.o as number;
         const h = payload.h as number;
         const l = payload.l as number;
@@ -5043,7 +5047,8 @@ export function useMultiPaneChart({
             typeof l === 'number' && typeof c === 'number') {
           let batch = ohlcBatches.get(series_id);
           if (!batch) {
-            batch = { x: [], o: [], h: [], l: [], c: [], entry: seriesEntry };
+            // Store dataSeries directly from pool, not entry reference
+            batch = { x: [], o: [], h: [], l: [], c: [], dataSeries: dataSeries as OhlcDataSeries };
             ohlcBatches.set(series_id, batch);
           }
           batch.x.push(t_sec); // Use seconds for SciChart
@@ -5069,7 +5074,8 @@ export function useMultiPaneChart({
         if (typeof value === 'number' && !isNaN(value)) {
           let batch = xyBatches.get(series_id);
           if (!batch) {
-            batch = { x: [], y: [], entry: seriesEntry };
+            // Store dataSeries directly from pool, not entry reference
+            batch = { x: [], y: [], dataSeries: dataSeries as XyDataSeries };
             xyBatches.set(series_id, batch);
           }
           batch.x.push(t_sec); // Use seconds for SciChart
@@ -5097,22 +5103,27 @@ export function useMultiPaneChart({
     
     try {
       // Second pass: appendRange for each series (much fewer WASM calls)
+      // CRITICAL: Use dataSeries directly from pool - this persists across layout changes
       for (const [seriesId, batch] of xyBatches) {
         try {
-          (batch.entry.dataSeries as XyDataSeries).appendRange(batch.x, batch.y);
+          batch.dataSeries.appendRange(batch.x, batch.y);
           // Mark series as having data
           if (batch.x.length > 0) {
             refs.seriesHasData.set(seriesId, true);
+            // Also mark in pool
+            sharedDataSeriesPool.markDataReceived(seriesId);
           }
         } catch (e) {}
       }
       
       for (const [seriesId, batch] of ohlcBatches) {
         try {
-          (batch.entry.dataSeries as OhlcDataSeries).appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
+          batch.dataSeries.appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
           // Mark series as having data
           if (batch.x.length > 0) {
             refs.seriesHasData.set(seriesId, true);
+            // Also mark in pool
+            sharedDataSeriesPool.markDataReceived(seriesId);
           }
         } catch (e) {}
       }
