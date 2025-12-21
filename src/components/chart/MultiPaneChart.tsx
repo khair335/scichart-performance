@@ -4525,14 +4525,17 @@ export function useMultiPaneChart({
             // This is just a placeholder - actual duplication happens in preallocation useEffect
 
             // Add overlays (hlines/vlines) if specified
+            console.log(`[MultiPaneChart] Checking overlays for pane ${paneConfig.id}:`, paneConfig.overlays);
             if (paneConfig.overlays) {
               // Render horizontal lines
               if (paneConfig.overlays.hline && paneConfig.overlays.hline.length > 0) {
+                console.log(`[MultiPaneChart] Rendering ${paneConfig.overlays.hline.length} hlines for pane ${paneConfig.id}`);
                 renderHorizontalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.hline, paneConfig.id);
               }
               
               // Render vertical lines
               if (paneConfig.overlays.vline && paneConfig.overlays.vline.length > 0) {
+                console.log(`[MultiPaneChart] Rendering ${paneConfig.overlays.vline.length} vlines for pane ${paneConfig.id}`);
                 renderVerticalLines(paneSurface.surface, paneSurface.wasm, paneConfig.overlays.vline, paneConfig.id);
               }
             }
