@@ -1,186 +1,142 @@
 /**
  * Overlay Renderer
  * Handles rendering of horizontal and vertical line overlays on chart panes
- * Uses XyDataSeries with fixed Y/X values to create overlay lines
+ * Uses SciChart Annotations for proper fixed-position overlay lines
  */
 
 import {
   SciChartSurface,
-  TSciChart,
-  XyDataSeries,
-  FastLineRenderableSeries,
-  EResamplingMode,
+  HorizontalLineAnnotation,
+  VerticalLineAnnotation,
+  ELabelPlacement,
 } from 'scichart';
 import type { HLineConfig, VLineConfig } from '@/types/plot-layout';
 
-// Store overlay series references for cleanup
-const overlaySeriesMap = new Map<string, FastLineRenderableSeries[]>();
+// Store overlay annotation references for cleanup
+const overlayAnnotationsMap = new Map<string, (HorizontalLineAnnotation | VerticalLineAnnotation)[]>();
 
 /**
- * Render horizontal line overlays on a chart surface
- * Uses XyDataSeries with fixed Y value across X range
+ * Render horizontal line overlays on a chart surface using HorizontalLineAnnotation
+ * These annotations stay fixed at their Y value regardless of zoom/pan
  */
 export function renderHorizontalLines(
   surface: SciChartSurface,
-  wasm: TSciChart,
+  _wasm: unknown, // kept for API compatibility but not used
   hlines: HLineConfig[],
   paneId: string
 ): void {
   // Remove existing horizontal lines for this pane
   const existingKey = `${paneId}-hline`;
-  const existing = overlaySeriesMap.get(existingKey);
+  const existing = overlayAnnotationsMap.get(existingKey);
   if (existing) {
-    existing.forEach(series => {
+    existing.forEach(annotation => {
       try {
-        surface.renderableSeries.remove(series);
-        series.delete();
+        surface.annotations.remove(annotation);
+        annotation.delete();
       } catch (e) {
-        // Ignore errors
+        // Ignore errors during cleanup
       }
     });
-    overlaySeriesMap.delete(existingKey);
+    overlayAnnotationsMap.delete(existingKey);
   }
 
-  const newSeries: FastLineRenderableSeries[] = [];
+  const newAnnotations: HorizontalLineAnnotation[] = [];
 
   for (const hline of hlines) {
     try {
-      // Get current X-axis range to create line across visible area
-      const xAxis = surface.xAxes.get(0);
-      if (!xAxis) continue;
-
-      // Create a data series with two points spanning a wide X range
-      // The line will auto-extend as the chart zooms/pans
-      const xMin = Date.now() - 365 * 24 * 60 * 60 * 1000; // 1 year ago
-      const xMax = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 year ahead
-      
-      const dataSeries = new XyDataSeries(wasm, {
-        dataSeriesName: `overlay-hline-${hline.id}`,
-        containsNaN: false,
-        dataIsSortedInX: true,
-        dataEvenlySpacedInX: false,
-      });
-
-      // Add two points to create a horizontal line
-      dataSeries.append(xMin, hline.y);
-      dataSeries.append(xMax, hline.y);
-
-      // Create renderable series
       const stroke = hline.style?.stroke || '#666666';
       const strokeThickness = hline.style?.strokeThickness || 1;
       const strokeDashArray = hline.style?.strokeDashArray;
 
-      const renderableSeries = new FastLineRenderableSeries(wasm, {
-        dataSeries,
+      const annotation = new HorizontalLineAnnotation({
+        id: `overlay-hline-${hline.id}`,
+        y1: hline.y,
         stroke,
         strokeThickness,
-        resamplingMode: EResamplingMode.None, // No resampling for overlay lines
-        isVisible: true,
+        strokeDashArray,
+        showLabel: !!hline.label,
+        labelPlacement: ELabelPlacement.TopRight,
+        labelValue: hline.label || '',
+        axisLabelFill: stroke,
+        axisFontSize: 11,
+        isEditable: false,
       });
 
-      // Apply dash array if specified
-      if (strokeDashArray && strokeDashArray.length > 0) {
-        // Note: SciChart may not support strokeDashArray directly on FastLineRenderableSeries
-        // This would need to be implemented using a custom renderable series or annotation
-        // For now, we'll log it
-      
-      }
+      surface.annotations.add(annotation);
+      newAnnotations.push(annotation);
 
-      surface.renderableSeries.add(renderableSeries);
-      newSeries.push(renderableSeries);
-
-    
+      console.log(`[OverlayRenderer] Rendered HLine ${hline.id} at y=${hline.y}`);
     } catch (error) {
       console.error(`[OverlayRenderer] Failed to render HLine ${hline.id}:`, error);
     }
   }
 
-  if (newSeries.length > 0) {
-    overlaySeriesMap.set(existingKey, newSeries);
+  if (newAnnotations.length > 0) {
+    overlayAnnotationsMap.set(existingKey, newAnnotations);
   }
 }
 
 /**
- * Render vertical line overlays on a chart surface
- * Uses XyDataSeries with fixed X value across Y range
+ * Render vertical line overlays on a chart surface using VerticalLineAnnotation
+ * These annotations stay fixed at their X value regardless of zoom/pan
  */
 export function renderVerticalLines(
   surface: SciChartSurface,
-  wasm: TSciChart,
+  _wasm: unknown, // kept for API compatibility but not used
   vlines: VLineConfig[],
   paneId: string
 ): void {
   // Remove existing vertical lines for this pane
   const existingKey = `${paneId}-vline`;
-  const existing = overlaySeriesMap.get(existingKey);
+  const existing = overlayAnnotationsMap.get(existingKey);
   if (existing) {
-    existing.forEach(series => {
+    existing.forEach(annotation => {
       try {
-        surface.renderableSeries.remove(series);
-        series.delete();
+        surface.annotations.remove(annotation);
+        annotation.delete();
       } catch (e) {
-        // Ignore errors
+        // Ignore errors during cleanup
       }
     });
-    overlaySeriesMap.delete(existingKey);
+    overlayAnnotationsMap.delete(existingKey);
   }
 
-  const newSeries: FastLineRenderableSeries[] = [];
+  const newAnnotations: VerticalLineAnnotation[] = [];
 
   for (const vline of vlines) {
     try {
-      // Get current Y-axis range to create line across visible area
-      const yAxis = surface.yAxes.get(0);
-      if (!yAxis) continue;
-
-      // Create a data series with two points spanning a wide Y range
-      // Use a large Y range that will cover most use cases
-      const yMin = -1e10;
-      const yMax = 1e10;
-      
-      const dataSeries = new XyDataSeries(wasm, {
-        dataSeriesName: `overlay-vline-${vline.id}`,
-        containsNaN: false,
-        dataIsSortedInX: true,
-        dataEvenlySpacedInX: false,
-      });
-
-      // Add two points to create a vertical line
-      // Note: vline.x might be a timestamp or a relative value
-      // For now, treat it as a timestamp
-      const xValue = typeof vline.x === 'number' ? vline.x : Date.now();
-      dataSeries.append(xValue, yMin);
-      dataSeries.append(xValue, yMax);
-
-      // Create renderable series
       const stroke = vline.style?.stroke || '#FF9800';
       const strokeThickness = vline.style?.strokeThickness || 1;
       const strokeDashArray = vline.style?.strokeDashArray;
 
-      const renderableSeries = new FastLineRenderableSeries(wasm, {
-        dataSeries,
+      // vline.x should be a timestamp in milliseconds
+      const xValue = typeof vline.x === 'number' ? vline.x : Date.now();
+
+      const annotation = new VerticalLineAnnotation({
+        id: `overlay-vline-${vline.id}`,
+        x1: xValue,
         stroke,
         strokeThickness,
-        resamplingMode: EResamplingMode.None,
-        isVisible: true,
+        strokeDashArray,
+        showLabel: !!vline.label,
+        labelPlacement: ELabelPlacement.Top,
+        labelValue: vline.label || '',
+        axisLabelFill: stroke,
+        axisFontSize: 11,
+        isEditable: false,
       });
 
-      // Apply dash array if specified
-      if (strokeDashArray && strokeDashArray.length > 0) {
-       
-      }
+      surface.annotations.add(annotation);
+      newAnnotations.push(annotation);
 
-      surface.renderableSeries.add(renderableSeries);
-      newSeries.push(renderableSeries);
-
-   
+      console.log(`[OverlayRenderer] Rendered VLine ${vline.id} at x=${xValue}`);
     } catch (error) {
       console.error(`[OverlayRenderer] Failed to render VLine ${vline.id}:`, error);
     }
   }
 
-  if (newSeries.length > 0) {
-    overlaySeriesMap.set(existingKey, newSeries);
+  if (newAnnotations.length > 0) {
+    overlayAnnotationsMap.set(existingKey, newAnnotations);
   }
 }
 
@@ -192,20 +148,20 @@ export function removeOverlays(surface: SciChartSurface, paneId: string): void {
   const vlineKey = `${paneId}-vline`;
   
   [hlineKey, vlineKey].forEach(key => {
-    const series = overlaySeriesMap.get(key);
-    if (series) {
-      series.forEach(s => {
+    const annotations = overlayAnnotationsMap.get(key);
+    if (annotations) {
+      annotations.forEach(annotation => {
         try {
-          surface.renderableSeries.remove(s);
-          s.delete();
+          surface.annotations.remove(annotation);
+          annotation.delete();
         } catch (e) {
-          // Ignore errors
+          // Ignore errors during cleanup
         }
       });
-      overlaySeriesMap.delete(key);
+      overlayAnnotationsMap.delete(key);
     }
   });
   
- 
+  console.log(`[OverlayRenderer] Removed all overlays for pane ${paneId}`);
 }
 
