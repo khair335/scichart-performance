@@ -48,7 +48,7 @@ import { parseSeriesType, isTickChartSeries, isOhlcChartSeries } from '@/lib/ser
 import { PlotLayoutManager } from '@/lib/plot-layout-manager';
 import type { ParsedLayout, PlotLayout } from '@/types/plot-layout';
 import { DynamicPaneManager, type PaneSurface as DynamicPaneSurface } from '@/lib/dynamic-pane-manager';
-import { renderHorizontalLines, renderVerticalLines } from '@/lib/overlay-renderer';
+import { renderHorizontalLines, renderVerticalLines, calculateYRangeWithHLines, getHLineYValues } from '@/lib/overlay-renderer';
 import { groupStrategyMarkers, getConsolidatedSeriesId, type MarkerGroup } from '@/lib/strategy-marker-consolidator';
 import { parseMarkerFromSample, type MarkerData } from '@/lib/strategy-marker-renderer';
 import { 
@@ -128,6 +128,57 @@ function restoreOriginalLabelProvider(labelProvider: any) {
   if ((labelProvider as any)._originalFormatCursorLabel) {
     labelProvider.formatCursorLabel = (labelProvider as any)._originalFormatCursorLabel;
     delete (labelProvider as any)._originalFormatCursorLabel;
+  }
+}
+
+/**
+ * Zoom Y-axis to fit data AND hlines for a pane
+ * This extends the standard zoomExtentsY behavior to include hline Y values
+ */
+function zoomExtentsYWithHLines(surface: SciChartSurface, paneId: string): void {
+  try {
+    // First, get the current data range by calling zoomExtentsY
+    surface.zoomExtentsY();
+    
+    // Get hline Y values for this pane
+    const hlineYs = getHLineYValues(paneId);
+    if (hlineYs.length === 0) {
+      // No hlines, standard zoom is sufficient
+      return;
+    }
+    
+    // Get the current Y-axis range after zoomExtentsY
+    const yAxis = surface.yAxes.get(0);
+    if (!yAxis) return;
+    
+    const currentRange = yAxis.visibleRange;
+    if (!currentRange || !isFinite(currentRange.min) || !isFinite(currentRange.max)) return;
+    
+    // Calculate new range that includes hlines
+    let newMin = currentRange.min;
+    let newMax = currentRange.max;
+    
+    for (const y of hlineYs) {
+      if (y < newMin) newMin = y;
+      if (y > newMax) newMax = y;
+    }
+    
+    // Only update if range changed (hlines are outside data range)
+    if (newMin < currentRange.min || newMax > currentRange.max) {
+      // Apply padding (10%)
+      const range = newMax - newMin;
+      const padding = range * 0.1;
+      yAxis.visibleRange = new NumberRange(newMin - padding, newMax + padding);
+      console.log(`[MultiPaneChart] Extended Y-axis for ${paneId} to include hlines: ${newMin - padding} to ${newMax + padding}`);
+    }
+  } catch (e) {
+    console.warn(`[MultiPaneChart] zoomExtentsYWithHLines failed for ${paneId}:`, e);
+    // Fallback to standard zoom
+    try {
+      surface.zoomExtentsY();
+    } catch (e2) {
+      // Ignore
+    }
   }
 }
 
@@ -3356,9 +3407,9 @@ export function useMultiPaneChart({
                 paneSurface.surface.suspendUpdates();
                 try {
                   paneSurface.xAxis.visibleRange = newXRange;
-                  // Auto-scale Y-axis based on data (skip if user manually stretched)
+                  // Auto-scale Y-axis based on data AND hlines (skip if user manually stretched)
                   if (!yAxisManuallyStretchedRef.current) {
-                    paneSurface.surface.zoomExtentsY();
+                    zoomExtentsYWithHLines(paneSurface.surface, paneId);
                   }
                 } finally {
                   paneSurface.surface.resumeUpdates();
@@ -4217,13 +4268,12 @@ export function useMultiPaneChart({
                   // Force recalculation by calling zoomExtentsY which works even when zoomed in
                   console.log(`[MultiPaneChart] Fitting Y-axis for all panes, feedStage: ${feedStageRef.current}`);
                   
-                  for (const [, otherPaneSurface] of chartRefs.current.paneSurfaces) {
+                  for (const [paneId, otherPaneSurface] of chartRefs.current.paneSurfaces) {
                     try {
-                      // Force Y-axis to recalculate by calling zoomExtentsY
+                      // Force Y-axis to recalculate including hlines
                       // This works even when the chart is zoomed in too much or session is complete
-                      // CRITICAL: Always use zoomExtentsY to only affect Y-axis
-                      // Don't use zoomExtents() as it would reset X-axis too
-                      otherPaneSurface.surface.zoomExtentsY();
+                      // CRITICAL: Use zoomExtentsYWithHLines to include hline Y values
+                      zoomExtentsYWithHLines(otherPaneSurface.surface, paneId);
                       // Force immediate update
                       otherPaneSurface.surface.invalidateElement();
                     } catch (e) {
@@ -4381,9 +4431,9 @@ export function useMultiPaneChart({
                   requestAnimationFrame(() => {
                     try {
                       console.log(`[MultiPaneChart] Post-double-click: fitting Y after X-range applied`);
-                      for (const [, otherPaneSurface] of chartRefs.current.paneSurfaces) {
+                      for (const [paneId, otherPaneSurface] of chartRefs.current.paneSurfaces) {
                         try {
-                          otherPaneSurface.surface.zoomExtentsY();
+                          zoomExtentsYWithHLines(otherPaneSurface.surface, paneId);
                         } catch (e) {}
                       }
                       try {
