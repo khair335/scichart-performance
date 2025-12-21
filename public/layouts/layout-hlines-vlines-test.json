@@ -57,7 +57,7 @@
         "vline": [
           {
             "id": "session_marker",
-            "x": "auto",
+            "x": 1734775200000,
             "label": "Session Start",
             "style": {
               "stroke": "#00BFFF",
