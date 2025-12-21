@@ -166,15 +166,26 @@ export function renderVerticalLines(
       const strokeThickness = vline.style?.strokeThickness || 1;
       const strokeDashArray = vline.style?.strokeDashArray;
 
-      // vline.x should be a timestamp in milliseconds from the JSON
-      // CRITICAL: SciChart DateTimeNumericAxis uses SECONDS internally
-      // So we must convert milliseconds to seconds
+      // vline.x comes from JSON as a Unix timestamp in milliseconds (t_ms)
+      // BUT this project may run SciChart in either ms or sec on the X-axis depending on pipeline.
+      // We'll detect the axis scale from the current visibleRange to avoid invisible vlines.
       const xValueMs = typeof vline.x === 'number' ? vline.x : Date.now();
-      const xValueSec = xValueMs / 1000;
+
+      const xAxis: any = surface.xAxes?.get?.(0);
+      const vr = xAxis?.visibleRange;
+      const axisLooksLikeMs = !!vr && (Math.abs(vr.min) > 1e11 || Math.abs(vr.max) > 1e11);
+
+      // If axis is in seconds, convert ms -> sec. If axis is already ms, keep ms.
+      const x1 = axisLooksLikeMs ? xValueMs : xValueMs / 1000;
+
+      const yAxis: any = surface.yAxes?.get?.(0);
+      const yVr = yAxis?.visibleRange;
+      const y1Anchor = yVr ? yVr.min + (yVr.max - yVr.min) * 0.9 : 0;
 
       const annotation = new VerticalLineAnnotation({
         id: `overlay-vline-${vline.id}`,
-        x1: xValueSec,
+        x1,
+        y1: y1Anchor,
         stroke,
         strokeThickness,
         strokeDashArray,
@@ -191,7 +202,7 @@ export function renderVerticalLines(
 
       // Enhanced logging with human-readable date
       const dateStr = new Date(xValueMs).toISOString();
-      console.log(`[OverlayRenderer] Rendered VLine ${vline.id} at x=${xValueSec} sec (${dateStr})`);
+      console.log(`[OverlayRenderer] Rendered VLine ${vline.id} at x=${x1} (${axisLooksLikeMs ? 'ms' : 'sec'}) (${dateStr})`);
 
     } catch (error) {
       console.error(`[OverlayRenderer] Failed to render VLine ${vline.id}:`, error);
