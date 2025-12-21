@@ -25,8 +25,8 @@
         "hline": [
           {
             "id": "support_1",
-            "y": 5850,
-            "label": "Support Level 1",
+            "y": 2999,
+            "label": "Support Level",
             "style": {
               "stroke": "#00FF00",
               "strokeThickness": 2,
@@ -35,8 +35,8 @@
           },
           {
             "id": "resistance_1",
-            "y": 5950,
-            "label": "Resistance Level 1",
+            "y": 3001,
+            "label": "Resistance Level",
             "style": {
               "stroke": "#FF0000",
               "strokeThickness": 2,
@@ -45,7 +45,7 @@
           },
           {
             "id": "pivot",
-            "y": 5900,
+            "y": 3000,
             "label": "Pivot Point",
             "style": {
               "stroke": "#FFFF00",
@@ -57,8 +57,8 @@
         "vline": [
           {
             "id": "session_start",
-            "x": 1734739200000,
-            "label": "Session Start",
+            "x": 1766217600000,
+            "label": "08:00 AM Marker",
             "style": {
               "stroke": "#00BFFF",
               "strokeThickness": 2,
@@ -79,7 +79,7 @@
         "hline": [
           {
             "id": "daily_high",
-            "y": 5950,
+            "y": 3001.5,
             "label": "Daily High",
             "style": {
               "stroke": "#FF6600",
@@ -88,7 +88,7 @@
           },
           {
             "id": "daily_low",
-            "y": 5850,
+            "y": 2998.5,
             "label": "Daily Low",
             "style": {
               "stroke": "#6600FF",
