@@ -25,7 +25,7 @@
         "hline": [
           {
             "id": "support_1",
-            "y": 5850,
+            "y": -0.5,
             "label": "Support Level 1",
             "style": {
               "stroke": "#00FF00",
@@ -35,7 +35,7 @@
           },
           {
             "id": "resistance_1",
-            "y": 5950,
+            "y": 0.5,
             "label": "Resistance Level 1",
             "style": {
               "stroke": "#FF0000",
@@ -45,24 +45,12 @@
           },
           {
             "id": "pivot",
-            "y": 5900,
+            "y": 0,
             "label": "Pivot Point",
             "style": {
               "stroke": "#FFFF00",
               "strokeThickness": 1,
               "strokeDashArray": [2, 2]
-            }
-          }
-        ],
-        "vline": [
-          {
-            "id": "session_start",
-            "x": 1734739200000,
-            "label": "Session Start",
-            "style": {
-              "stroke": "#00BFFF",
-              "strokeThickness": 2,
-              "strokeDashArray": [10, 5]
             }
           }
         ]
