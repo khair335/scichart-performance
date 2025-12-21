@@ -33,17 +33,17 @@
   ],
   "series": [
     {
-      "series_id": "MESU5:ticks",
+      "series_id": "MESU5s:ticks",
       "pane": "top",
       "type": "FastLineRenderableSeries"
     },
     {
-      "series_id": "MESU5:sma_10",
+      "series_id": "MESU5s:sma_10",
       "pane": "top",
       "type": "FastLineRenderableSeries"
     },
     {
-      "series_id": "MESU5:ohlc_time:10000",
+      "series_id": "MESU5s:ohlc_time:10000",
       "pane": "bottom",
       "type": "FastCandlestickRenderableSeries"
     }
