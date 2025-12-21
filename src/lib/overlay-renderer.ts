@@ -10,6 +10,8 @@ import {
   VerticalLineAnnotation,
   ELabelPlacement,
   NumberRange,
+  ECoordinateMode,
+  EAnnotationLayer,
 } from 'scichart';
 import type { HLineConfig, VLineConfig } from '@/types/plot-layout';
 
@@ -185,7 +187,11 @@ export function renderVerticalLines(
       const annotation = new VerticalLineAnnotation({
         id: `overlay-vline-${vline.id}`,
         x1,
-        y1: y1Anchor,
+        // Force coordinate modes to avoid defaults that can hide the line
+        xCoordinateMode: ECoordinateMode.DataValue,
+        yCoordinateMode: ECoordinateMode.Relative,
+        y1: 0.5,
+        annotationLayer: EAnnotationLayer.AboveChart,
         stroke,
         strokeThickness,
         strokeDashArray,
