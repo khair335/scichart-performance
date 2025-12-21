@@ -69,12 +69,9 @@
       "type": "FastLineRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "include_panes": ["tick-pane", "indicator-pane"]
-  },
+
   "meta": {
     "version": "1.0",
     "description": "Layout testing strategy markers - should appear only on tick-pane and indicator-pane (explicitly included)"
   }
 }
-

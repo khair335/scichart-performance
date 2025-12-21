@@ -210,12 +210,8 @@
       "type": "FastLineRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["pane-2-0", "pane-2-1", "pane-2-2", "pane-2-3", "pane-3-0"]
-  },
   "meta": {
     "version": "1.0",
     "description": "4x4 grid layout - 16 panes for maximum grid testing"
   }
 }
-

@@ -49,12 +49,9 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["bottom"]
-  },
+
   "meta": {
     "version": "1.0",
     "description": "1x2 vertical layout - stacked panes"
   }
 }
-

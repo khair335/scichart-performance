@@ -25,7 +25,7 @@
         "hline": [
           {
             "id": "support_1",
-            "y": 500,
+            "y": 5850,
             "label": "Support Level 1",
             "style": {
               "stroke": "#00FF00",
@@ -35,7 +35,7 @@
           },
           {
             "id": "resistance_1",
-            "y": 1500,
+            "y": 5950,
             "label": "Resistance Level 1",
             "style": {
               "stroke": "#FF0000",
@@ -45,7 +45,7 @@
           },
           {
             "id": "pivot",
-            "y": 1000,
+            "y": 5900,
             "label": "Pivot Point",
             "style": {
               "stroke": "#FFFF00",
@@ -56,8 +56,8 @@
         ],
         "vline": [
           {
-            "id": "session_marker",
-            "x": 1734775200000,
+            "id": "session_start",
+            "x": 1734739200000,
             "label": "Session Start",
             "style": {
               "stroke": "#00BFFF",
@@ -130,9 +130,6 @@
       }
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": []
-  },
   "meta": {
     "version": "1.0",
     "description": "Test layout for hlines and vlines overlays"

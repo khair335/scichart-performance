@@ -53,14 +53,7 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["ohlc-pane"]
-  },
   "meta": {
     "version": "1.0"
   }
 }
-
-
-
-

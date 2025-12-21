@@ -501,9 +501,7 @@
       }
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["ohlc-1s-pane", "ohlc-5s-pane", "ohlc-15s-pane", "pnl-pane"]
-  },
+
   "meta": {
     "version": "1.0",
     "description": "Comprehensive layout including all series sent by the server: ticks, all SMAs (5, 10, 20, 40, 80, 160, 320, 640), OHLC bars (1s, 5s, 15s), bar indicators, and strategy PnL"

@@ -109,12 +109,8 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["esu5-ohlc-pane", "mesu5-ohlc-pane"]
-  },
   "meta": {
     "version": "1.0",
     "name": "ESU5 & MESU5 Side-by-Side"
   }
 }
-

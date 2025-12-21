@@ -53,12 +53,8 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["right"]
-  },
   "meta": {
     "version": "1.0",
     "description": "2x1 horizontal layout - side by side panes"
   }
 }
-

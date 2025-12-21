@@ -134,12 +134,8 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["pane-2-0", "pane-2-1", "pane-2-2"]
-  },
   "meta": {
     "version": "1.0",
     "description": "3x3 grid layout - 9 panes showing various indicators and OHLC bars"
   }
 }
-

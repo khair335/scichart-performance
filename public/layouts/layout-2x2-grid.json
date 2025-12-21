@@ -74,14 +74,7 @@
       "type": "FastCandlestickRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["bottomLeft", "bottomRight"]
-  },
   "meta": {
     "version": "1.0"
   }
 }
-
-
-
-

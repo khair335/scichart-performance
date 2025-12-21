@@ -168,12 +168,8 @@
       }
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["ohlc-pane", "pnl-pane"]
-  },
   "meta": {
     "version": "1.0",
     "description": "Complex layout with all features: wide panes, overlays, PnL pane, mountain series, custom styling"
   }
 }
-

@@ -61,15 +61,9 @@
       "type": "FastLineRenderableSeries"
     }
   ],
-  "strategy_markers": {
-    "exclude_panes": ["ohlc-pane", "pnl-pane"]
-  },
+
   "meta": {
     "version": "1.0",
     "description": "Strategy markers should appear on tick-pane only (excluded from ohlc-pane and pnl-pane)"
   }
 }
-
-
-
-
