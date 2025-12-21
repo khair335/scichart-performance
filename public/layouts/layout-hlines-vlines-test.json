@@ -57,7 +57,7 @@
         "vline": [
           {
             "id": "session_start",
-            "x": 1766217600000,
+            "x": 1766419200000,
             "label": "08:00 AM Marker",
             "style": {
               "stroke": "#00BFFF",
