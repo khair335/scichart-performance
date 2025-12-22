@@ -65,6 +65,8 @@ export interface SeriesRegistryRow {
   lastSeq: number;
   firstMs: number;
   lastMs: number;
+  firstSeriesSeq?: number | null;
+  lastSeriesSeq?: number | null;
   gaps?: number;
   missed?: number;
 }
@@ -141,6 +143,9 @@ export interface WsFeedClientOptions {
 
   /** Registry snapshot when it changes. */
   onRegistry?: (rows: SeriesRegistryRow[]) => void;
+
+  /** Generic event callback for control messages (alternative to onControl). */
+  onEvent?: (evt: { type: string; [key: string]: unknown }) => void;
 }
 
 type AnyWs = any;
@@ -255,6 +260,7 @@ export class WsFeedClient {
   private _onControl?: (msg: any) => void;
   private _onStatus?: (s: WsFeedStatus) => void;
   private _onRegistry?: (rows: SeriesRegistryRow[]) => void;
+  private _onEvent?: (evt: { type: string; [key: string]: unknown }) => void;
 
   constructor(opts: WsFeedClientOptions) {
     if (!opts || !opts.url) throw new Error("WsFeedClient: url is required");
@@ -281,6 +287,7 @@ export class WsFeedClient {
     this._onControl = opts.onControl;
     this._onStatus = opts.onStatus;
     this._onRegistry = opts.onRegistry;
+    this._onEvent = opts.onEvent;
 
     // Load persisted cursor
     this._cursorSeq = this._loadCursor();
@@ -674,6 +681,7 @@ export class WsFeedClient {
 
           this._emitStatus(true);
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'init_begin', min_seq: this._minSeq, wm_seq: this._wmSeq, ring_capacity: this._ringCapacity });
           return;
         }
 
@@ -698,6 +706,7 @@ export class WsFeedClient {
           }
 
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'init_complete', resume_from: this._serverResumeFromSeq, resume_truncated: this._resumeTruncated });
           return;
         }
 
@@ -706,12 +715,14 @@ export class WsFeedClient {
           if (ts > 0) this.lastHeartbeatLagMs = _nowMs() - ts;
           this._emitStatus();
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'heartbeat', ts_ms: _safeNumber(msg.ts_ms, 0) });
           return;
         }
 
         if (t === "test_done") {
           this._notice("state", "info", "SERVER_TEST_DONE", "Server reports playback/test completed.", msg);
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'test_done' });
           this._emitStatus(true);
           return;
         }
@@ -719,6 +730,7 @@ export class WsFeedClient {
         if (t === "error") {
           this._notice("event", "error", "SERVER_ERROR", `Server error: ${String(msg.reason || "unknown")}`, msg);
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'error', reason: msg.reason });
           this._emitStatus(true);
           return;
         }
@@ -726,11 +738,13 @@ export class WsFeedClient {
         if (t === "echo") {
           this._notice("event", "debug", "SERVER_ECHO", "Server echoed a client command.", msg);
           this._onControl?.(msg);
+          this._onEvent?.({ type: 'echo', ...msg });
           return;
         }
 
         // Unknown control frame
         this._onControl?.(msg);
+        this._onEvent?.({ type: t || 'unknown', ...msg });
         return;
       }
 
@@ -1137,3 +1151,15 @@ export class WsFeedClient {
     }
   }
 }
+
+// ============= Type Aliases for backward compatibility =============
+// These aliases allow imports like: import { Sample, RegistryRow, FeedStatus } from '@/lib/wsfeed-client'
+
+/** Alias for FeedSample - represents a single data sample from the feed */
+export type Sample = FeedSample;
+
+/** Alias for SeriesRegistryRow - represents metadata for a time series */
+export type RegistryRow = SeriesRegistryRow;
+
+/** Alias for WsFeedStatus - comprehensive status snapshot */
+export type FeedStatus = WsFeedStatus;
