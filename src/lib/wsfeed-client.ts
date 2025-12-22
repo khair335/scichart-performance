@@ -1,66 +1,105 @@
-// wsfeed-client.ts
-//
-// Universal WebSocket feed client (browser & Node).
-// - JSON control frames (init/heartbeat/test_done/...).
-// - Samples can arrive as:
-//     * JSON (text frames), or
-//     * compact binary frames (when server uses --ws-format=binary).
-// - No-drop handoff (watermark → history ≤ wm → delta → init_complete → live).
-// - Dedupes by seq; persists last_seq via provided storage (or localStorage).
-// - Emits high-level STATUS snapshots for UI: stage, progress, rate, heartbeat lag,
-//   wireFormat, gap stats (global + per-series summary).
-// - Maintains a discovered-series registry (works for ticks/bars/indicators/strategy/pnl).
-//
-// Binary sample frame layout (big-endian):
-//
-//   u8   frame_type        (1=history, 2=delta, 3=live)
-//   u32  sample_count
-//   repeated sample_count times:
-//       f64  seq
-//       f64  series_seq
-//       f64  t_ms
-//       u8   series_id_len (L)
-//       Lb   series_id UTF-8
-//       u8   payload_type  (1=tick,2=scalar(value),3=ohlc,4=signal,5=marker,6=pnl)
-//       ...  payload bytes (see server.py for exact layout)
-//
-// The client decodes this back into:
-//   { seq, series_seq, series_id, t_ms, payload: {...} }
+/**
+ * wsfeed-client.ts
+ *
+ * A small, production‑minded WebSocket client for the wsfeed protocol.
+ *
+ * Goals:
+ * - Works in browsers and Node (via wsFactory)
+ * - Supports text and binary sample frames
+ * - Implements a resume cursor with configurable cursor policy:
+ *     - resume:      always resume from lastSeq+1
+ *     - from_start:  always start at seq=1 (overrides stored cursor)
+ *     - auto:        resume, but auto‑reset if the stored cursor is ahead of server wm_seq
+ * - Emits human‑friendly “notices” with stable codes & severity
+ * - Provides status + registry snapshots for UI dashboards (status bar/toast/log panel)
+ */
 
-export interface Sample {
+// This demo client is intended to compile without pulling in Node typings.
+// When used in Node, callers should typically supply `wsFactory`.
+//
+// We keep a tiny best-effort Node fallback that uses CommonJS `require('ws')`.
+// To avoid `@types/node`, we declare these globals as `any`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const require: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const Buffer: any;
+
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+export class MemoryStorage implements StorageLike {
+  private _m = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this._m.has(key) ? (this._m.get(key) as string) : null;
+  }
+  setItem(key: string, value: string): void {
+    this._m.set(key, String(value));
+  }
+  removeItem(key: string): void {
+    this._m.delete(key);
+  }
+}
+
+export type WsFeedWireFormat = "text" | "binary" | null;
+
+export type WsFeedStage = "idle" | "connecting" | "history" | "delta" | "live" | "closed" | "error";
+
+export type CursorPolicy = "resume" | "from_start" | "auto";
+
+export interface FeedSample {
   seq: number;
   series_id: string;
   t_ms: number;
-  payload: Record<string, unknown>;
+  payload: any;
   series_seq?: number;
 }
 
-export interface RegistryRow {
+export interface SeriesRegistryRow {
   id: string;
   count: number;
   firstSeq: number;
   lastSeq: number;
   firstMs: number;
   lastMs: number;
-  firstSeriesSeq?: number | null;  // Optional to match wsfeed-client.js (not exposed in snapshot)
-  lastSeriesSeq?: number | null;    // Optional to match wsfeed-client.js (not exposed in snapshot)
-  gaps: number;
-  missed: number;
+  gaps?: number;
+  missed?: number;
 }
 
-export interface FeedStatus {
-  type: 'status';
-  stage: string;
+export type NoticeLevel = "debug" | "info" | "warn" | "error";
+export type NoticeKind = "state" | "event";
+
+export interface FeedNotice {
+  kind: NoticeKind;
+  level: NoticeLevel;
+  code: string;
+  text: string;
+  ts: number;
+  details?: Record<string, any>;
+}
+
+export interface WsFeedStatus {
+  type: "status";
+  stage: WsFeedStage;
+  url: string;
+  cursorPolicy: CursorPolicy;
   lastSeq: number;
-  bounds: { minSeq: number; wmSeq: number };
-  resume: { requested: number; server: number | null; truncated: boolean };
+  bounds: { minSeq: number; wmSeq: number; ringCapacity: number | null };
+  resume: {
+    requestedFromSeq: number;
+    serverResumeFromSeq: number | null;
+    truncated: boolean;
+  };
   history: { expected: number; received: number; pct: number };
   delta: { received: number };
   live: { received: number };
   rate: { perSec: number; windowMs: number };
   heartbeatLagMs: number | null;
   registry: { total: number };
-  wireFormat: 'text' | 'binary' | null;
+  wireFormat: WsFeedWireFormat;
   gaps: {
     global: { gaps: number; missed: number };
     series: { totalSeries: number; totalGaps: number; totalMissed: number };
@@ -77,207 +116,224 @@ export interface FeedStatus {
   ts: number;
 }
 
-export interface FeedEvent {
-  type: string;
-  [key: string]: unknown;
-}
-
-interface Storage {
-  getItem(k: string): string | null;
-  setItem(k: string, v: string): void;
-  removeItem(k: string): void;
-}
-
-export class MemoryStorage implements Storage {
-  private data = new Map<string, string>();
-  getItem(k: string): string | null {
-    return this.data.has(k) ? this.data.get(k)! : null;
-  }
-  setItem(k: string, v: string): void {
-    this.data.set(k, String(v));
-  }
-  removeItem(k: string): void {
-    this.data.delete(k);
-  }
-}
-
-interface WsFeedClientOptions {
+export interface WsFeedClientOptions {
   url: string;
-  wsFactory?: (url: string) => WebSocket;
-  storage?: Storage;
-  onSamples: (samples: Sample[]) => void;
-  onEvent?: (evt: FeedEvent) => void;
-  onStatus?: (status: FeedStatus) => void;
-  onRegistry?: (rows: RegistryRow[]) => void;
+  wsFactory?: (url: string) => any; // Browser WebSocket or Node 'ws'
+  storage?: StorageLike;
   storageKey?: string;
+  cursorPolicy?: CursorPolicy;
   statusThrottleMs?: number;
   autoReconnect?: boolean;
   autoReconnectInitialDelayMs?: number;
   autoReconnectMaxDelayMs?: number;
+
+  /** Called with deduplicated samples (global seq). */
+  onSamples: (samples: FeedSample[]) => void;
+
+  /** Human‑friendly notices suitable for status bars/toasts/log panels. */
+  onNotice?: (notice: FeedNotice) => void;
+
+  /** Raw control messages from server (init_begin/init_complete/heartbeat/test_done/error/echo...). */
+  onControl?: (msg: any) => void;
+
+  /** Periodic status snapshot for dashboards. */
+  onStatus?: (status: WsFeedStatus) => void;
+
+  /** Registry snapshot when it changes. */
+  onRegistry?: (rows: SeriesRegistryRow[]) => void;
+}
+
+type AnyWs = any;
+
+function _nowMs(): number {
+  return Date.now();
+}
+
+function _safeNumber(x: any, fallback: number): number {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function _instrumentFromSeriesId(seriesId: string): string {
+  const s = String(seriesId || "");
+  const idx = s.indexOf(":");
+  return idx >= 0 ? s.slice(0, idx) : "";
+}
+
+function _parseStrategyIdFromSeriesId(seriesId: string): string | null {
+  // Expected: <sym>:strategy:<strategy_id>:<kind>
+  const parts = String(seriesId || "").split(":");
+  if (parts.length >= 4 && parts[1] === "strategy") return parts[2] || null;
+  return null;
+}
+
+function _defaultWsFactory(url: string): any {
+  // Browser
+  if (typeof WebSocket !== "undefined") {
+    return new WebSocket(url);
+  }
+  // Node (CommonJS only) – users should usually pass wsFactory explicitly.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const req: any = typeof require !== "undefined" ? require : null;
+    if (req) {
+      const WS = req("ws");
+      return new WS(url);
+    }
+  } catch {
+    // ignore
+  }
+  throw new Error("No WebSocket implementation available. Provide wsFactory.");
 }
 
 export class WsFeedClient {
-  private url: string;
-  private wsFactory: (url: string) => WebSocket;
-  private storage: Storage;
-  private storageKey: string;
-  private onSamples: (samples: Sample[]) => void;
-  private onEvent: (evt: FeedEvent) => void;
-  private onStatus: (status: FeedStatus) => void;
-  private onRegistry: (rows: RegistryRow[]) => void;
+  public readonly url: string;
+  public ws: AnyWs | null = null;
 
-  private lastSeq: number;
-  private ws: WebSocket | null = null;
-  private _closing = false;
-  public stage = 'idle';
+  public stage: WsFeedStage = "idle";
+  public wireFormat: WsFeedWireFormat = null;
 
-  private minSeq = 0;
-  private wmSeq = 0;
-  private resumeFromRequested = 0;
-  private resumeFromServer: number | null = null;
-  private resumeTruncated = false;
+  // Cursor
+  private _cursorPolicy: CursorPolicy;
+  private _cursorSeq: number = 0; // persisted cursor (last accepted seq)
+  private _acceptAfterSeq: number = 0; // per-connection dedup floor
 
-  private expectedHistory = 0;
-  private historyReceived = 0;
-  private deltaReceived = 0;
-  private liveReceived = 0;
-  private lastDeltaFrameTime = 0; // Track when we last received a delta frame
-  private deltaCompleteCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  // Handshake info
+  private _requestedFromSeq: number = 1;
+  private _serverResumeFromSeq: number | null = null;
+  private _resumeTruncated: boolean = false;
+  private _minSeq: number = 0;
+  private _wmSeq: number = 0;
+  private _ringCapacity: number | null = null;
 
-  private _statusThrottleMs: number;
-  private _sinceLastStatus = 0;
-  private _lastStatusTs = 0;
+  // History accounting
+  private _expectedHistory: number = 0;
+  private _historyReceived: number = 0;
+  private _deltaReceived: number = 0;
+  private _liveReceived: number = 0;
+
+  // Heartbeat lag
   public lastHeartbeatLagMs: number | null = null;
 
-  private _reg = new Map<string, RegistryRow>();
-  private _regDirty = false;
-
-  // Wire format tracking
-  public wireFormat: 'text' | 'binary' | null = null;
-
-  // Text decoder for binary frames
+  // Decode stats
+  private _decodeErrorsText: number = 0;
+  private _decodeErrorsBinary: number = 0;
   private _textDecoder: TextDecoder | null = null;
 
-  // Global gap detection
-  private gapGlobalGaps = 0;     // number of global gap events (seq jump >1)
-  private gapGlobalMissing = 0;  // total missing samples across all gaps
+  // Gap detection
+  private _gapGlobalGaps: number = 0;
+  private _gapGlobalMissing: number = 0;
 
-  // Decode error counters
-  private _decodeErrorsText = 0;
-  private _decodeErrorsBinary = 0;
+  // Registry
+  private _reg = new Map<string, any>();
+  private _regDirty: boolean = false;
 
-  // Auto-reconnect state
-  private _autoReconnect = false;
-  private _autoReconnectInitialDelayMs = 1000;
-  private _autoReconnectMaxDelayMs = 30000;
-  private _reconnectAttempts = 0;
-  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Status throttling
+  private _statusThrottleMs: number;
+  private _lastStatusTs: number = 0;
+  private _sinceLastStatus: number = 0;
+
+  // Reconnect
+  private _autoReconnect: boolean;
+  private _autoReconnectInitialDelayMs: number;
+  private _autoReconnectMaxDelayMs: number;
+  private _reconnectAttempts: number = 0;
+  private _reconnectTimer: any = null;
   private _autoReconnectNextDelayMs: number | null = null;
-  private _explicitClose = false;
+
+  // Close semantics
+  private _closing: boolean = false;
+  private _explicitClose: boolean = false;
+  private _suppressAutoReconnectOnce: boolean = false;
+
+  // Options/callbacks
+  private _wsFactory: (url: string) => any;
+  public readonly storage: StorageLike | null;
+  public readonly storageKey: string;
+  private _onSamples: (samples: FeedSample[]) => void;
+  private _onNotice?: (n: FeedNotice) => void;
+  private _onControl?: (msg: any) => void;
+  private _onStatus?: (s: WsFeedStatus) => void;
+  private _onRegistry?: (rows: SeriesRegistryRow[]) => void;
 
   constructor(opts: WsFeedClientOptions) {
-    if (!opts.url) throw new Error("WsFeedClient: url required");
-    if (typeof opts.onSamples !== 'function') throw new Error("WsFeedClient: onSamples callback required");
+    if (!opts || !opts.url) throw new Error("WsFeedClient: url is required");
+    if (!opts.onSamples) throw new Error("WsFeedClient: onSamples is required");
 
-    this.url = opts.url;
-    this.wsFactory = opts.wsFactory || ((u: string) => {
-      if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
-        throw new Error("WsFeedClient: no global WebSocket; pass wsFactory in Node");
-      }
-      return new WebSocket(u);
-    });
+    this.url = String(opts.url);
+    this._wsFactory = opts.wsFactory || _defaultWsFactory;
 
-    // Simple storage selection:
-    // - if user supplied storage → use it
-    // - else if browser with localStorage → use it
-    // - else fall back to in-memory (Node, tests)
-    let defaultStorage: Storage | null = null;
-    try {
-      // This is fine in Node 18+ and browsers
-      defaultStorage = (typeof globalThis !== 'undefined' && globalThis.localStorage) ? globalThis.localStorage as any : null;
-    } catch {
-      defaultStorage = null;
-    }
-    this.storage = opts.storage || defaultStorage || new MemoryStorage();
+    this.storage = opts.storage || null;
+    // Default storage key includes URL so different feeds don't fight.
+    this.storageKey = String(opts.storageKey || `wsfeed:last_seq:${this.url}`);
 
-    this.storageKey = opts.storageKey || 'feed:last_seq';
-    this.onSamples = opts.onSamples;
-    this.onEvent = opts.onEvent || (() => {});
-    this.onStatus = opts.onStatus || (() => {});
-    this.onRegistry = opts.onRegistry || (() => {});
-    this._statusThrottleMs = opts.statusThrottleMs || 250;
+    this._cursorPolicy = opts.cursorPolicy || "auto";
 
-    // Auto-reconnect options
+    this._statusThrottleMs = typeof opts.statusThrottleMs === "number" ? opts.statusThrottleMs : 250;
     this._autoReconnect = !!opts.autoReconnect;
-    this._autoReconnectInitialDelayMs = opts.autoReconnectInitialDelayMs || 1000;
-    this._autoReconnectMaxDelayMs = opts.autoReconnectMaxDelayMs || 30000;
+    this._autoReconnectInitialDelayMs =
+      typeof opts.autoReconnectInitialDelayMs === "number" ? opts.autoReconnectInitialDelayMs : 1000;
+    this._autoReconnectMaxDelayMs =
+      typeof opts.autoReconnectMaxDelayMs === "number" ? opts.autoReconnectMaxDelayMs : 15000;
 
-    // Dedup cursor
-    // CRITICAL: Always start from seq=1 on page refresh to request all data from the beginning
-    // This ensures we get a fresh dataset every time the page loads
-    const saved = this.storage && typeof this.storage.getItem === 'function'
-      ? this.storage.getItem(this.storageKey)
-      : null;
-    const savedLastSeq = saved ? Number(saved) : 0;
-    
-    // Always reset to start from beginning on page load
-    // This ensures we always request all data from seq=1 when the page refreshes
-    this.lastSeq = 0;
-    this.resumeFromRequested = 1;
-    
-    // Clear localStorage to ensure fresh start on next page load too
-    if (this.storage && typeof this.storage.removeItem === 'function') {
-      try {
-        this.storage.removeItem(this.storageKey);
-      } catch {
-        // ignore storage errors
-      }
-    }
+    this._onSamples = opts.onSamples;
+    this._onNotice = opts.onNotice;
+    this._onControl = opts.onControl;
+    this._onStatus = opts.onStatus;
+    this._onRegistry = opts.onRegistry;
+
+    // Load persisted cursor
+    this._cursorSeq = this._loadCursor();
+    this._acceptAfterSeq = this._cursorSeq;
   }
+
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
 
   getLastSeq(): number {
-    return this.lastSeq;
+    return this._cursorSeq;
   }
 
+  /** Set the persisted resume cursor (last accepted seq). */
   setLastSeq(v: number): void {
-    this.lastSeq = v;
-    if (this.storage && typeof this.storage.setItem === 'function') {
-      try {
-        this.storage.setItem(this.storageKey, String(v));
-      } catch {
-        // ignore storage errors
-      }
-    }
-  }
-
-  /**
-   * Reset resume cursor back to 0 so the next connect() will ask from seq=1.
-   */
-  resetCursor(options: { persist?: boolean } = {}): void {
-    const { persist = true } = options;
-    this.lastSeq = 0;
-    this.resumeFromRequested = 1;
-    this.resumeFromServer = null;
-    this.resumeTruncated = false;
-    if (persist && this.storage) {
-      if (typeof this.storage.removeItem === 'function') {
-        try {
-          this.storage.removeItem(this.storageKey);
-        } catch {
-          // ignore
-        }
-      } else if (typeof this.storage.setItem === 'function') {
-        try {
-          this.storage.setItem(this.storageKey, '0');
-        } catch {
-          // ignore
-        }
-      }
-    }
+    const n = Math.max(0, Math.floor(Number(v) || 0));
+    this._cursorSeq = n;
+    this._acceptAfterSeq = Math.max(this._acceptAfterSeq, n);
+    this._persistCursor(n);
     this._emitStatus(true);
   }
 
-  /** Enable or disable auto-reconnect behaviour. */
+  getCursorPolicy(): CursorPolicy {
+    return this._cursorPolicy;
+  }
+
+  setCursorPolicy(policy: CursorPolicy): void {
+    const p = (policy || "auto") as CursorPolicy;
+    this._cursorPolicy = p;
+    this._notice("state", "info", "CLIENT_CURSOR_POLICY", `Cursor policy set to '${p}'.`, { policy: p });
+    this._emitStatus(true);
+  }
+
+  /**
+   * Reset resume cursor back to 0 so the next connect() can start from seq=1.
+   *
+   * If you want the reset to be ephemeral, pass {persist:false}.
+   */
+  resetCursor(options: { persist?: boolean } = {}): void {
+    const persist = options.persist !== false;
+    this._cursorSeq = 0;
+    this._acceptAfterSeq = 0;
+    this._requestedFromSeq = 1;
+    this._serverResumeFromSeq = null;
+    this._resumeTruncated = false;
+    if (persist) this._persistCursor(0, true);
+    this._notice("event", "info", "CLIENT_CURSOR_RESET", "Resume cursor reset to 0 (next connect starts from seq=1).", {
+      persist,
+    });
+    this._emitStatus(true);
+  }
+
   setAutoReconnect(enabled: boolean): void {
     this._autoReconnect = !!enabled;
     if (!this._autoReconnect) {
@@ -285,7 +341,195 @@ export class WsFeedClient {
       this._reconnectAttempts = 0;
       this._autoReconnectNextDelayMs = null;
     }
+    this._notice(
+      "state",
+      "info",
+      "CLIENT_AUTORECONNECT",
+      `Auto-reconnect ${this._autoReconnect ? "enabled" : "disabled"}.`,
+      {
+        enabled: this._autoReconnect,
+      },
+    );
     this._emitStatus(true);
+  }
+
+  /** Connect (or reconnect) to the WebSocket feed. */
+  connect(): void {
+    this._closing = false;
+    this._explicitClose = false;
+    this._suppressAutoReconnectOnce = false;
+    this._clearReconnectTimer();
+
+    this.stage = "connecting";
+    this._emitStatus(true);
+    this._notice("state", "info", "CLIENT_CONNECTING", "Connecting to feed…", { url: this.url });
+
+    // Close any previous socket defensively
+    if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) {
+      try {
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // For from_start, we intentionally start dedup from 0 for this session.
+    // For resume/auto, dedup starts from the persisted cursor.
+    this._acceptAfterSeq = this._cursorPolicy === "from_start" ? 0 : this._cursorSeq;
+
+    // Reset per-connection counters
+    this._expectedHistory = 0;
+    this._historyReceived = 0;
+    this._deltaReceived = 0;
+    this._liveReceived = 0;
+    this._gapGlobalGaps = 0;
+    this._gapGlobalMissing = 0;
+    this._minSeq = 0;
+    this._wmSeq = 0;
+    this._ringCapacity = null;
+    this._resumeTruncated = false;
+    this._serverResumeFromSeq = null;
+    this.lastHeartbeatLagMs = null;
+    this.wireFormat = null;
+
+    this.ws = this._wsFactory(this.url);
+
+    // In browser, prefer ArrayBuffer for binary frames
+    try {
+      if (typeof WebSocket !== "undefined" && this.ws instanceof WebSocket) {
+        this.ws.binaryType = "arraybuffer";
+      }
+    } catch {
+      // ignore
+    }
+
+    const sendResume = () => {
+      let fromSeq = 1;
+      if (this._cursorPolicy === "resume" || this._cursorPolicy === "auto") {
+        fromSeq = Math.max(1, this._cursorSeq + 1);
+      } else {
+        fromSeq = 1;
+      }
+      this._requestedFromSeq = fromSeq;
+      try {
+        this.ws?.send(JSON.stringify({ type: "resume", from_seq: fromSeq }));
+      } catch (err) {
+        this._notice("event", "error", "CLIENT_SEND_RESUME_FAILED", "Failed to send resume frame to server.", {
+          error: String(err),
+        });
+      }
+    };
+
+    // Node 'ws' branch: .on('open'|'message'|'close'|'error')
+    if (this.ws && typeof this.ws.on === "function") {
+      this.ws.on("open", () => {
+        this._notice("state", "info", "CLIENT_CONNECTED", "WebSocket connected.", {});
+        sendResume();
+      });
+
+      this.ws.on("message", (data: any, isBinary: boolean) => {
+        let raw: any = data;
+        if (!isBinary) {
+          if (typeof data !== "string") {
+            // Buffer → string
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const B: any = typeof Buffer !== "undefined" ? Buffer : null;
+            if (B && B.isBuffer && B.isBuffer(data)) {
+              raw = data.toString("utf8");
+            } else if (ArrayBuffer.isView(data)) {
+              raw = new TextDecoder("utf-8").decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+            }
+          }
+        }
+        void this._handleMessage(raw);
+      });
+
+      this.ws.on("close", (code: number, reason: any) => {
+        this._handleClose(code, typeof reason === "string" ? reason : "");
+      });
+
+      this.ws.on("error", (err: any) => {
+        this.stage = "error";
+        this._emitStatus(true);
+        this._notice("event", "error", "CLIENT_SOCKET_ERROR", "WebSocket error.", { error: String(err) });
+      });
+
+      return;
+    }
+
+    // Browser branch
+    this.ws.addEventListener("open", () => {
+      this._notice("state", "info", "CLIENT_CONNECTED", "WebSocket connected.", {});
+      sendResume();
+    });
+    this.ws.addEventListener("message", (evt: any) => {
+      void this._handleMessage(evt.data);
+    });
+    this.ws.addEventListener("close", (evt: any) => {
+      this._handleClose(Number(evt.code || 0), String(evt.reason || ""));
+    });
+    this.ws.addEventListener("error", (evt: any) => {
+      this.stage = "error";
+      this._emitStatus(true);
+      this._notice("event", "error", "CLIENT_SOCKET_ERROR", "WebSocket error.", { error: String(evt) });
+    });
+  }
+
+  /** Close the socket. Auto-reconnect is disabled for this close. */
+  close(): void {
+    this._closing = true;
+    this._explicitClose = true;
+    this._clearReconnectTimer();
+    const ws = this.ws;
+    if (!ws) return;
+    try {
+      if (ws.readyState === 0 || ws.readyState === 1) ws.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Returns a snapshot of the discovered series registry. */
+  getRegistrySnapshot(): SeriesRegistryRow[] {
+    return Array.from(this._reg.values()).map((r: any) => ({
+      id: r.id,
+      count: r.count,
+      firstSeq: r.firstSeq,
+      lastSeq: r.lastSeq,
+      firstMs: r.firstMs,
+      lastMs: r.lastMs,
+      gaps: r.gaps || 0,
+      missed: r.missed || 0,
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------------
+
+  private _loadCursor(): number {
+    if (!this.storage) return 0;
+    try {
+      const raw = this.storage.getItem(this.storageKey);
+      if (!raw) return 0;
+      const n = Math.floor(Number(raw));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private _persistCursor(v: number, removeIfZero: boolean = false): void {
+    if (!this.storage) return;
+    try {
+      if (removeIfZero && v <= 0 && typeof this.storage.removeItem === "function") {
+        this.storage.removeItem(this.storageKey);
+      } else {
+        this.storage.setItem(this.storageKey, String(v));
+      }
+    } catch {
+      // ignore storage errors
+    }
   }
 
   private _clearReconnectTimer(): void {
@@ -296,400 +540,224 @@ export class WsFeedClient {
     this._autoReconnectNextDelayMs = null;
   }
 
-  private _clearDeltaCompleteTimer(): void {
-    if (this.deltaCompleteCheckTimer) {
-      clearTimeout(this.deltaCompleteCheckTimer);
-      this.deltaCompleteCheckTimer = null;
-    }
-    this.lastDeltaFrameTime = 0;
-  }
-
-  /**
-   * Clear localStorage on session complete to ensure fresh start on page refresh.
-   * This prevents showing "SESSION COMPLETE" with no data on first refresh,
-   * and prevents mixing old data with new data when server restarts.
-   */
-  private _clearStorageOnSessionComplete(): void {
-    console.log(`[WsFeedClient] 🧹 Clearing stored lastSeq on session complete to ensure fresh start`);
-    this.lastSeq = 0;
-    this.resumeFromRequested = 1;
-    if (this.storage) {
-      if (typeof this.storage.removeItem === 'function') {
-        try {
-          this.storage.removeItem(this.storageKey);
-        } catch {
-          // ignore
-        }
-      } else if (typeof this.storage.setItem === 'function') {
-        try {
-          this.storage.setItem(this.storageKey, '0');
-        } catch {
-          // ignore
-        }
-      }
-    }
-  }
-
-  private _scheduleReconnect(reason: { code?: number; reason?: string }): void {
+  private _scheduleReconnect(reason: any): void {
     if (!this._autoReconnect || this._explicitClose) return;
-
-    // CRITICAL: Don't schedule reconnect if we're already connecting
-    // This prevents multiple simultaneous connection attempts that can cause handshake failures
-    if (this.stage === 'connecting' && this.ws && ((this.ws as any).readyState === 0 || (this.ws as any).readyState === 1)) {
-      console.log(`[WsFeedClient] ⏸️ Already connecting, skipping reconnect scheduling`);
+    if (this._suppressAutoReconnectOnce) {
+      this._suppressAutoReconnectOnce = false;
       return;
     }
 
     this._reconnectAttempts = (this._reconnectAttempts || 0) + 1;
-    // CRITICAL: Use faster, more aggressive reconnection for better UX
-    // Start with 500ms instead of 1000ms, and cap at 5 seconds instead of 30 seconds
-    const base = this._autoReconnectInitialDelayMs || 500; // Faster initial retry
-    let delay = base * Math.pow(2, Math.min(this._reconnectAttempts - 1, 3)); // Cap exponential backoff at 3 attempts
-    const max = this._autoReconnectMaxDelayMs || 5000; // Cap at 5 seconds instead of 30
-    if (typeof max === 'number' && max > 0 && delay > max) {
-      delay = max;
-    }
+    const base = this._autoReconnectInitialDelayMs || 1000;
+    let delay = base * Math.pow(2, this._reconnectAttempts - 1);
+    const max = this._autoReconnectMaxDelayMs;
+    if (typeof max === "number" && max > 0 && delay > max) delay = max;
     this._autoReconnectNextDelayMs = delay;
-    this._clearReconnectTimer();
 
-    console.log(`[WsFeedClient] 🔄 Scheduling reconnect attempt ${this._reconnectAttempts} in ${delay}ms`);
+    this._clearReconnectTimer();
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
-      // CRITICAL: Double-check we're not already connecting before attempting reconnect
-      // This prevents multiple simultaneous connection attempts that can cause handshake failures
-      if (this.stage !== 'connecting' || !this.ws || ((this.ws as any).readyState !== 0 && (this.ws as any).readyState !== 1)) {
-        this.connect();
-      } else {
-        console.log(`[WsFeedClient] ⏸️ Skipping reconnect - already connecting`);
-      }
+      this.connect();
     }, delay);
 
-    try {
-      this.onEvent({
-        type: 'reconnect_scheduled',
-        attempts: this._reconnectAttempts,
-        delayMs: delay,
-        reason,
-      });
-    } catch {
-      // ignore
-    }
+    this._notice("event", "warn", "CLIENT_RECONNECT_SCHEDULED", `Reconnect scheduled in ${delay}ms.`, {
+      attempts: this._reconnectAttempts,
+      delayMs: delay,
+      reason,
+    });
     this._emitStatus(true);
   }
 
-  connect(): void {
-    // CRITICAL: Prevent multiple simultaneous connection attempts
-    // If we're already connecting, don't start another connection
-    if (this.stage === 'connecting' && this.ws && ((this.ws as any).readyState === 0 || (this.ws as any).readyState === 1)) {
-      console.log(`[WsFeedClient] ⏸️ Already connecting (stage=${this.stage}, readyState=${(this.ws as any).readyState}), skipping duplicate connect()`);
-      return;
-    }
-
-    this._closing = false;
-    this._explicitClose = false;
-    this._clearReconnectTimer();
-    this.stage = 'connecting';
-    this._emitStatus();
-
-    // If there is an existing socket, close it defensively
-    // CRITICAL: Only close if socket is OPEN (readyState === 1), not if CONNECTING (readyState === 0)
-    // Closing a CONNECTING socket can cause handshake failures on the server
-    if (this.ws) {
-      const readyState = (this.ws as any).readyState;
-      if (readyState === 1) { // OPEN - safe to close
-        try {
-          console.log(`[WsFeedClient] 🔌 Closing existing OPEN socket before reconnecting`);
-          this.ws.close();
-        } catch {
-          // ignore
-        }
-      } else if (readyState === 0) { // CONNECTING - wait a bit for it to complete or fail
-        console.log(`[WsFeedClient] ⏳ Existing socket is CONNECTING, waiting for it to complete or fail`);
-        // Don't close a connecting socket - let it complete or fail naturally
-        // The close handler will schedule reconnect if needed
-        return;
-      }
-      // Clear the reference after closing
-      this.ws = null;
-    }
-
-    this.ws = this.wsFactory(this.url);
-
-    // In browser, prefer ArrayBuffer for binary frames
+  private _forceReconnectFromStart(reasonCode: string, details: Record<string, any>): void {
+    // Reset cursor and reconnect quickly. Suppress the normal auto-reconnect scheduling for this close.
+    this.resetCursor({ persist: true });
+    this._suppressAutoReconnectOnce = true;
     try {
-      if (typeof WebSocket !== 'undefined' && this.ws instanceof WebSocket) {
-        (this.ws as WebSocket).binaryType = 'arraybuffer';
-      }
+      this.ws?.close();
     } catch {
       // ignore
     }
-
-    const sendResume = () => {
-      // CRITICAL: Always start from seq=1 on page refresh to request all data from the beginning
-      // This ensures we get a fresh dataset every time the page loads
-      this.resumeFromRequested = 1;
-      console.log(`[WsFeedClient] 📤 Sending resume request: from_seq=${this.resumeFromRequested} (always starting from beginning)`);
-      this.ws?.send(JSON.stringify({ type: 'resume', from_seq: this.resumeFromRequested }));
-    };
-
-    // --- Node 'ws' branch ---------------------------------------------
-    const wsAny = this.ws as any;
-    if (wsAny && typeof wsAny.on === 'function') {
-      wsAny.on('open', sendResume);
-
-      // NOTE: node 'ws' calls handler as (data, isBinary)
-      wsAny.on('message', (data: any, isBinary?: boolean) => {
-        let raw = data;
-
-        if (!isBinary) {
-          // Text frame → make sure we hand a string to _handleMessage
-          if (typeof data !== 'string') {
-            if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(data)) {
-              raw = data.toString('utf8');
-            } else if (ArrayBuffer.isView && ArrayBuffer.isView(data)) {
-              raw = new TextDecoder('utf-8').decode(
-                new Uint8Array((data as ArrayBufferView).buffer, (data as ArrayBufferView).byteOffset, (data as ArrayBufferView).byteLength)
-              );
-            }
-          }
-        }
-
-        void this._handleMessage(raw);
-      });
-
-      wsAny.on('close', (code: number, reason: string) => {
-        // Don't change stage if already complete - keep it as 'complete'
-        if (this.stage !== 'complete') {
-          this.stage = 'closed';
-        }
-        this._emitStatus(true);
-        try {
-          this.onEvent({ type: 'closed', code, reason });
-        } catch {
-          // ignore
-        }
-        // CRITICAL: Don't reconnect if session is complete
-        if (this.stage !== 'complete') {
-          this._scheduleReconnect({ code, reason });
-        } else {
-          console.log(`[WsFeedClient] ⏸️ Connection closed but session is complete, not reconnecting`);
-        }
-      });
-
-      wsAny.on('error', (err: any) => {
-        this.stage = 'error';
-        this._emitStatus(true);
-        this.onEvent({ type: 'error', error: err });
-      });
-
-      return; // important: don't fall through to browser branch
-    }
-
-    // --- Browser / WebSocket-like branch ------------------------------
-    this.ws.addEventListener('open', sendResume);
-    this.ws.addEventListener('message', (evt) => {
-      void this._handleMessage(evt.data);
-    });
-    this.ws.addEventListener('close', (evt) => {
-      // Don't change stage if already complete - keep it as 'complete'
-      if (this.stage !== 'complete') {
-        this.stage = 'closed';
-      }
-      this._emitStatus(true);
-      try {
-        this.onEvent({ type: 'closed', code: evt.code, reason: evt.reason });
-      } catch {
-        // ignore
-      }
-      // CRITICAL: Don't reconnect if session is complete
-      if (this.stage !== 'complete') {
-        this._scheduleReconnect({ code: evt.code, reason: evt.reason });
-      } else {
-        console.log(`[WsFeedClient] ⏸️ Connection closed but session is complete, not reconnecting`);
-      }
-    });
-    this.ws.addEventListener('error', (evt) => {
-      this.stage = 'error';
-      this._emitStatus(true);
-      this.onEvent({ type: 'error', error: evt });
-    });
+    setTimeout(() => {
+      this._notice("event", "info", reasonCode, "Reconnecting from start…", details);
+      this.connect();
+    }, 50);
   }
 
-  close(): void {
-    this._closing = true;
-    this._explicitClose = true;
-    this._clearReconnectTimer();
-    const ws = this.ws;
-    if (!ws) return;
-    try {
-      if ((ws as any).readyState === 0 || (ws as any).readyState === 1) {
-        ws.close();
-      }
-    } catch {
-      // ignore
+  private _handleClose(code: number, reason: string): void {
+    this.stage = "closed";
+    this._emitStatus(true);
+
+    const c = Number(code || 0);
+    if (c === 1000 || c === 1001) {
+      this._notice("state", "info", "CLIENT_CLOSED_NORMAL", "Connection closed normally.", { code: c, reason });
+    } else if (c === 1006) {
+      this._notice("state", "warn", "CLIENT_CLOSED_ABRUPT", "Client disconnected abruptly (no close handshake).", {
+        code: c,
+        reason,
+      });
+    } else {
+      const lvl: NoticeLevel = c ? "warn" : "warn";
+      this._notice("state", lvl, "CLIENT_CLOSED", `Connection closed (code=${c || "n/a"}).`, { code: c, reason });
     }
+
+    this._scheduleReconnect({ code: c, reason });
   }
 
-  private async _handleMessage(raw: string | ArrayBuffer | Blob | Buffer): Promise<void> {
+  private async _handleMessage(raw: any): Promise<void> {
     if (this._closing) return;
 
     try {
-      // TEXT FRAME → JSON control or JSON samples
-      if (typeof raw === 'string') {
-        if (this.wireFormat === null) this.wireFormat = 'text';
+      // TEXT FRAME
+      if (typeof raw === "string") {
+        if (this.wireFormat === null) this.wireFormat = "text";
 
-        let msg: Record<string, unknown>;
+        let msg: any;
         try {
           msg = JSON.parse(raw);
         } catch (err) {
           this._decodeErrorsText++;
-          try {
-            this.onEvent({
-              type: 'decode_error',
-              wireFormat: 'text',
-              phase: 'json-parse',
-              error: String(err),
-            });
-          } catch {
-            // ignore
-          }
+          this._notice("event", "warn", "CLIENT_DECODE_ERROR", "Failed to parse JSON control frame.", {
+            wireFormat: "text",
+            phase: "json-parse",
+            error: String(err),
+          });
           this._emitStatus();
           return;
         }
-        const t = msg.type as string;
 
-        if (t === 'history' || t === 'delta' || t === 'live') {
-          const samples = Array.isArray(msg.samples) ? (msg.samples as Sample[]) : [];
+        const t = String(msg?.type || "");
+
+        if (t === "history" || t === "delta" || t === "live") {
+          const samples = Array.isArray(msg.samples) ? msg.samples : [];
           this._handleSamplesFrame(t, samples);
           return;
         }
 
-        if (t === 'init_begin') {
-          this.minSeq = Number(msg.min_seq || 0);
-          this.wmSeq = Number(msg.wm_seq || 0);
-          
-          // SIMPLIFIED: Match old version's behavior - just reset cursor, don't reconnect
-          // This is faster because it doesn't close/reconnect, just continues with reset cursor
-          // Detect server restart: if server's minSeq is lower than our stored lastSeq,
-          // OR if server's wmSeq is lower than our stored lastSeq,
-          // it means the server has restarted and sequence numbers have reset.
-          // Reset lastSeq to 0 to allow accepting new samples.
-          if (this.minSeq < this.lastSeq || this.wmSeq < this.lastSeq) {
-            console.log(`[WsFeedClient] 🔄 Server restart detected: minSeq=${this.minSeq}, wmSeq=${this.wmSeq}, lastSeq=${this.lastSeq}, resetting lastSeq to 0`);
-            this.lastSeq = 0;
-            if (this.storage && typeof this.storage.removeItem === 'function') {
-              try {
-                this.storage.removeItem(this.storageKey);
-              } catch {
-                // ignore
-              }
-            }
-            // Update resumeFromRequested to match the reset
-            this.resumeFromRequested = 1;
+        if (t === "init_begin") {
+          this._minSeq = _safeNumber(msg.min_seq, 0);
+          this._wmSeq = _safeNumber(msg.wm_seq, 0);
+          this._ringCapacity = Number.isFinite(Number(msg.ring_capacity)) ? Number(msg.ring_capacity) : null;
+
+          // AUTO POLICY: detect when our stored cursor is ahead of the server.
+          if (this._cursorPolicy === "auto" && this._cursorSeq > 0 && this._wmSeq < this._cursorSeq) {
+            this._notice(
+              "event",
+              "warn",
+              "SERVER_CURSOR_AHEAD",
+              `Saved cursor (${this._cursorSeq}) is ahead of server wm_seq (${this._wmSeq}). ` +
+                `The server likely restarted or you connected to a different feed. Resetting cursor and reconnecting from start.`,
+              { cursorSeq: this._cursorSeq, wmSeq: this._wmSeq, minSeq: this._minSeq },
+            );
+            this._forceReconnectFromStart("CLIENT_AUTO_RESET", { cursorSeq: this._cursorSeq, wmSeq: this._wmSeq });
+            return;
           }
-          
-          const start = Math.max(this.resumeFromRequested, this.minSeq);
-          this.expectedHistory = (this.wmSeq >= start) ? (this.wmSeq - start + 1) : 0;
-          this.historyReceived = 0;
-          this.deltaReceived = 0;
-          this.liveReceived = 0;
-          this._clearDeltaCompleteTimer(); // Reset delta tracking on new connection
-          
-          // SIMPLIFIED: Always start in 'history' stage like old version
-          // The transitions will happen naturally when delta/live frames arrive
-          // This matches the old version's behavior which was faster
-          this.stage = 'history';
-          
+
+          const start = Math.max(this._requestedFromSeq, this._minSeq);
+          this._expectedHistory = this._wmSeq >= start ? this._wmSeq - start + 1 : 0;
+          this._historyReceived = 0;
+          this._deltaReceived = 0;
+          this._liveReceived = 0;
+          this.stage = "history";
+
+          this._notice(
+            "state",
+            "info",
+            "SERVER_INIT_BEGIN",
+            `Handshake: server has seq [${this._minSeq}..${this._wmSeq}] (ring_capacity=${this._ringCapacity ?? "n/a"}).`,
+            {
+              minSeq: this._minSeq,
+              wmSeq: this._wmSeq,
+              ringCapacity: this._ringCapacity,
+              requestedFromSeq: this._requestedFromSeq,
+            },
+          );
+
           this._emitStatus(true);
-          this.onEvent(msg as FeedEvent);
+          this._onControl?.(msg);
           return;
         }
 
-        if (t === 'init_complete') {
-          this.resumeFromServer = Number(msg.resume_from || this.wmSeq);
-          this.resumeTruncated = !!msg.resume_truncated;
-          this.stage = 'live';
-          // Clear delta complete check timer since we're now in live
-          this._clearDeltaCompleteTimer();
+        if (t === "init_complete") {
+          this._serverResumeFromSeq = _safeNumber(msg.resume_from, this._wmSeq);
+          this._resumeTruncated = !!msg.resume_truncated;
+          this.stage = "live";
           this._emitStatus(true);
-          this.onEvent(msg as FeedEvent);
+
+          if (this._resumeTruncated) {
+            this._notice(
+              "event",
+              "warn",
+              "SERVER_HISTORY_TRUNCATED",
+              "History truncated: you connected after the ring buffer advanced. You will only receive the tail that is still in memory.",
+              { minSeq: this._minSeq, requestedFromSeq: this._requestedFromSeq, ringCapacity: this._ringCapacity },
+            );
+          } else {
+            this._notice("state", "info", "SERVER_INIT_COMPLETE", "Initialization complete. Live streaming started.", {
+              resumeFrom: this._serverResumeFromSeq,
+            });
+          }
+
+          this._onControl?.(msg);
           return;
         }
 
-        if (t === 'heartbeat') {
-          if (typeof msg.ts_ms === 'number') {
-            this.lastHeartbeatLagMs = Date.now() - (msg.ts_ms as number);
-          }
+        if (t === "heartbeat") {
+          const ts = _safeNumber(msg.ts_ms, 0);
+          if (ts > 0) this.lastHeartbeatLagMs = _nowMs() - ts;
           this._emitStatus();
-          this.onEvent(msg as FeedEvent);
+          this._onControl?.(msg);
           return;
         }
 
-        if (t === 'test_done') {
-          // CRITICAL: When session completes, disable auto-reconnect and close gracefully
-          // This prevents reloading history after the session is done
-          console.log(`[WsFeedClient] ✅ Session complete (test_done), disabling auto-reconnect and closing connection`);
-          this.stage = 'complete';
-          this.setAutoReconnect(false); // Disable auto-reconnect to prevent reloading
-          this._explicitClose = true; // Mark as explicit close to prevent reconnection
-          this._clearReconnectTimer(); // Clear any pending reconnect timers
-          
-          // CRITICAL: Clear localStorage on session complete to ensure fresh start on refresh
-          // This prevents showing "SESSION COMPLETE" with no data on first refresh
-          this._clearStorageOnSessionComplete();
-          
+        if (t === "test_done") {
+          this._notice("state", "info", "SERVER_TEST_DONE", "Server reports playback/test completed.", msg);
+          this._onControl?.(msg);
           this._emitStatus(true);
-          this.onEvent(msg as FeedEvent);
-          
-          // Close the connection gracefully after a short delay to ensure the event is processed
-          setTimeout(() => {
-            if (this.ws && (this.ws as any).readyState === WebSocket.OPEN || (this.ws as any).readyState === 1) {
-              try {
-                this.ws.close(1000, 'Session complete');
-              } catch {
-                // ignore
-              }
-            }
-          }, 100);
           return;
         }
 
-        if (t === 'error' || t === 'closed') {
+        if (t === "error") {
+          this._notice("event", "error", "SERVER_ERROR", `Server error: ${String(msg.reason || "unknown")}`, msg);
+          this._onControl?.(msg);
           this._emitStatus(true);
-          this.onEvent(msg as FeedEvent);
           return;
         }
 
-        // Unknown JSON type → ignore
+        if (t === "echo") {
+          this._notice("event", "debug", "SERVER_ECHO", "Server echoed a client command.", msg);
+          this._onControl?.(msg);
+          return;
+        }
+
+        // Unknown control frame
+        this._onControl?.(msg);
         return;
       }
 
-      // BINARY FRAME → compact samples (history/delta/live)
-      this.wireFormat = 'binary';
+      // BINARY FRAME → samples
+      this.wireFormat = "binary";
 
-      let u8: Uint8Array;
-      if (typeof ArrayBuffer !== 'undefined' && raw instanceof ArrayBuffer) {
+      let u8: Uint8Array | null = null;
+      if (typeof ArrayBuffer !== "undefined" && raw instanceof ArrayBuffer) {
         u8 = new Uint8Array(raw);
-      } else if (typeof Blob !== 'undefined' && raw instanceof Blob) {
+      } else if (typeof Blob !== "undefined" && raw instanceof Blob) {
         const buf = await raw.arrayBuffer();
         u8 = new Uint8Array(buf);
-      } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(raw)) {
-        u8 = new Uint8Array((raw as any).buffer, (raw as any).byteOffset, (raw as any).byteLength);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } else if (typeof Buffer !== "undefined" && (Buffer as any).isBuffer && (Buffer as any).isBuffer(raw)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const B: any = Buffer;
+        u8 = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
       } else if (ArrayBuffer.isView && ArrayBuffer.isView(raw)) {
-        u8 = new Uint8Array((raw as ArrayBufferView).buffer, (raw as ArrayBufferView).byteOffset, (raw as ArrayBufferView).byteLength);
-      } else {
-        // Unknown binary container
+        u8 = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+      }
+
+      if (!u8) {
         this._decodeErrorsBinary++;
-        try {
-          this.onEvent({
-            type: 'decode_error',
-            wireFormat: 'binary',
-            phase: 'container',
-            note: 'unrecognised binary container',
-          });
-        } catch {
-          // ignore
-        }
+        this._notice("event", "warn", "CLIENT_DECODE_ERROR", "Unrecognised binary container.", {
+          wireFormat: "binary",
+          phase: "container",
+        });
         this._emitStatus();
         return;
       }
@@ -697,163 +765,153 @@ export class WsFeedClient {
       const frame = this._decodeBinaryFrame(u8);
       if (!frame) {
         this._decodeErrorsBinary++;
-        try {
-          this.onEvent({
-            type: 'decode_error',
-            wireFormat: 'binary',
-            phase: 'frame',
-            note: 'decode returned null',
-          });
-        } catch {
-          // ignore
-        }
+        this._notice("event", "warn", "CLIENT_DECODE_ERROR", "Failed to decode binary frame.", {
+          wireFormat: "binary",
+          phase: "frame",
+        });
         this._emitStatus();
         return;
       }
+
       this._handleSamplesFrame(frame.type, frame.samples);
     } catch (err) {
-      const wire = this.wireFormat || (typeof raw === 'string' ? 'text' : 'binary');
-      if (wire === 'text') this._decodeErrorsText++;
+      const wire = this.wireFormat || (typeof raw === "string" ? "text" : "binary");
+      if (wire === "text") this._decodeErrorsText++;
       else this._decodeErrorsBinary++;
-      try {
-        this.onEvent({
-          type: 'decode_error',
-          wireFormat: wire,
-          phase: 'handler-exception',
-          error: String(err),
-        });
-      } catch {
-        // ignore
-      }
+      this._notice("event", "warn", "CLIENT_DECODE_ERROR", "Decode handler exception.", {
+        wireFormat: wire,
+        phase: "handler-exception",
+        error: String(err),
+      });
       this._emitStatus();
-      return;
     }
   }
 
-  private _decodeBinaryFrame(u8: Uint8Array): { type: string; samples: Sample[] } | null {
-    if (!u8 || !u8.length) return null;
+  private _decodeBinaryFrame(u8: Uint8Array): { type: "history" | "delta" | "live"; samples: FeedSample[] } | null {
+    if (!u8 || u8.length < 5) return null;
     const view = new DataView(u8.buffer, u8.byteOffset || 0, u8.byteLength || u8.length);
     let off = 0;
-    if (view.byteLength < 5) return null;
 
-    const frameCode = view.getUint8(off); off += 1;
-    let type: string;
-    if (frameCode === 1) type = 'history';
-    else if (frameCode === 2) type = 'delta';
-    else if (frameCode === 3) type = 'live';
+    const frameCode = view.getUint8(off);
+    off += 1;
+    let type: "history" | "delta" | "live" | null = null;
+    if (frameCode === 1) type = "history";
+    else if (frameCode === 2) type = "delta";
+    else if (frameCode === 3) type = "live";
     else return null;
 
-    const count = view.getUint32(off); off += 4;
-    const samples: Sample[] = [];
-    const td = this._textDecoder || (this._textDecoder = new TextDecoder('utf-8'));
+    const count = view.getUint32(off);
+    off += 4;
+    const samples: FeedSample[] = [];
+    const td = this._textDecoder || (this._textDecoder = new TextDecoder("utf-8"));
 
     outer: for (let i = 0; i < count; i++) {
-      if (off + 8 * 3 + 1 > view.byteLength) break; // not enough bytes
+      if (off + 8 * 3 + 1 > view.byteLength) break;
+      const seq = view.getFloat64(off);
+      off += 8;
+      const seriesSeq = view.getFloat64(off);
+      off += 8;
+      const t_ms = view.getFloat64(off);
+      off += 8;
 
-      const seq = view.getFloat64(off); off += 8;
-      const seriesSeq = view.getFloat64(off); off += 8;
-      const t_ms = view.getFloat64(off); off += 8;
-
-      const sidLen = view.getUint8(off); off += 1;
+      const sidLen = view.getUint8(off);
+      off += 1;
       if (off + sidLen > view.byteLength) break;
-      let sid = '';
+      let sid = "";
       if (sidLen > 0) {
-        const sidBytes = u8.subarray(off, off + sidLen);
-        sid = td.decode(sidBytes);
+        sid = td.decode(u8.subarray(off, off + sidLen));
       }
       off += sidLen;
 
       if (off + 1 > view.byteLength) break;
-      const payloadType = view.getUint8(off); off += 1;
+      const payloadType = view.getUint8(off);
+      off += 1;
 
-      let payload: Record<string, unknown> = {};
+      let payload: any = {};
       switch (payloadType) {
         case 1: // tick
           if (off + 16 > view.byteLength) break outer;
-          {
-            const price = view.getFloat64(off); off += 8;
-            const volume = view.getFloat64(off); off += 8;
-            payload = { price, volume };
-          }
+          payload = { price: view.getFloat64(off), volume: view.getFloat64(off + 8) };
+          off += 16;
           break;
-        case 2: // scalar value
+        case 2: // scalar
           if (off + 8 > view.byteLength) break outer;
-          {
-            const v = view.getFloat64(off); off += 8;
-            payload = { value: v };
-          }
+          payload = { value: view.getFloat64(off) };
+          off += 8;
           break;
         case 3: // ohlc
           if (off + 32 > view.byteLength) break outer;
-          {
-            const o = view.getFloat64(off); off += 8;
-            const h = view.getFloat64(off); off += 8;
-            const l = view.getFloat64(off); off += 8;
-            const c = view.getFloat64(off); off += 8;
-            payload = { o, h, l, c };
-          }
+          payload = {
+            o: view.getFloat64(off),
+            h: view.getFloat64(off + 8),
+            l: view.getFloat64(off + 16),
+            c: view.getFloat64(off + 24),
+          };
+          off += 32;
           break;
-        case 4: // strategy signal
+        case 4: {
+          // signal
           if (off + 1 > view.byteLength) break outer;
-          {
-            const stratLen = view.getUint8(off); off += 1;
-            if (off + stratLen + 1 + 4 + 8 + 1 > view.byteLength) break outer;
-            let strategy = '';
-            if (stratLen > 0) {
-              const sb = u8.subarray(off, off + stratLen);
-              strategy = td.decode(sb);
-            }
-            off += stratLen;
-            const sideChar = String.fromCharCode(view.getUint8(off)); off += 1;
-            const desired_qty = view.getInt32(off); off += 4;
-            const price = view.getFloat64(off); off += 8;
-            const reasonLen = view.getUint8(off); off += 1;
-            if (off + reasonLen > view.byteLength) break outer;
-            let reason = '';
-            if (reasonLen > 0) {
-              const rb = u8.subarray(off, off + reasonLen);
-              reason = td.decode(rb);
-            }
-            off += reasonLen;
-            const side = sideChar === 'L' ? 'long' : 'short';
-            payload = { strategy, side, desired_qty, price, reason };
-          }
+          const stratLen = view.getUint8(off);
+          off += 1;
+          if (off + stratLen + 1 + 4 + 8 + 1 > view.byteLength) break outer;
+          const strategy = stratLen ? td.decode(u8.subarray(off, off + stratLen)) : "";
+          off += stratLen;
+          const sideChar = String.fromCharCode(view.getUint8(off));
+          off += 1;
+          const desired_qty = view.getInt32(off);
+          off += 4;
+          const price = view.getFloat64(off);
+          off += 8;
+          const reasonLen = view.getUint8(off);
+          off += 1;
+          if (off + reasonLen > view.byteLength) break outer;
+          const reason = reasonLen ? td.decode(u8.subarray(off, off + reasonLen)) : "";
+          off += reasonLen;
+          payload = {
+            strategy,
+            side: sideChar === "L" ? "long" : "short",
+            desired_qty,
+            price,
+            reason,
+          };
           break;
-        case 5: // strategy marker
+        }
+        case 5: {
+          // marker
           if (off + 1 > view.byteLength) break outer;
-          {
-            const stratLen = view.getUint8(off); off += 1;
-            if (off + stratLen + 1 + 1 > view.byteLength) break outer;
-            let strategy = '';
-            if (stratLen > 0) {
-              const sb = u8.subarray(off, off + stratLen);
-              strategy = td.decode(sb);
-            }
-            off += stratLen;
-            const sideChar = String.fromCharCode(view.getUint8(off)); off += 1;
-            const tagLen = view.getUint8(off); off += 1;
-            if (off + tagLen + 8 + 4 > view.byteLength) break outer;
-            let tag = '';
-            if (tagLen > 0) {
-              const tb = u8.subarray(off, off + tagLen);
-              tag = td.decode(tb);
-            }
-            off += tagLen;
-            const price = view.getFloat64(off); off += 8;
-            const qty = view.getInt32(off); off += 4;
-            const side = sideChar === 'L' ? 'long' : 'short';
-            payload = { strategy, side, tag, price, qty };
-          }
+          const stratLen = view.getUint8(off);
+          off += 1;
+          if (off + stratLen + 1 + 1 > view.byteLength) break outer;
+          const strategy = stratLen ? td.decode(u8.subarray(off, off + stratLen)) : "";
+          off += stratLen;
+          const sideChar = String.fromCharCode(view.getUint8(off));
+          off += 1;
+          const tagLen = view.getUint8(off);
+          off += 1;
+          if (off + tagLen + 8 + 4 > view.byteLength) break outer;
+          const tag = tagLen ? td.decode(u8.subarray(off, off + tagLen)) : "";
+          off += tagLen;
+          const price = view.getFloat64(off);
+          off += 8;
+          const qty = view.getInt32(off);
+          off += 4;
+          payload = {
+            strategy,
+            side: sideChar === "L" ? "long" : "short",
+            tag,
+            price,
+            qty,
+          };
           break;
+        }
         case 6: // pnl
           if (off + 8 > view.byteLength) break outer;
-          {
-            const value = view.getFloat64(off); off += 8;
-            payload = { value };
-          }
+          payload = { value: view.getFloat64(off) };
+          off += 8;
           break;
         default:
-          // Unknown payload type; nothing more encoded
+          // unknown payload type
           break;
       }
 
@@ -862,95 +920,87 @@ export class WsFeedClient {
         series_seq: seriesSeq,
         series_id: sid,
         t_ms,
-        payload
+        payload,
       });
     }
 
-    return { type, samples };
+    return { type: type as any, samples };
   }
 
-  private _handleSamplesFrame(kind: string, samples: Sample[]): void {
+  private _handleSamplesFrame(kind: "history" | "delta" | "live", samples: any[]): void {
     if (this._closing) return;
-    
-    // CRITICAL: Don't process samples after session is complete
-    // This prevents loading new data after test_done
-    if (this.stage === 'complete') {
-      console.log(`[WsFeedClient] ⏸️ Ignoring ${samples.length} samples - session already complete`);
-      return;
-    }
-    
-    const t = kind;
     const list = Array.isArray(samples) ? samples : [];
     let accepted = 0;
-    let rejected = 0;
-    const out: Sample[] = [];
+    const out: FeedSample[] = [];
 
     for (const s of list) {
-      const seq = Number(s.seq);
+      const seq = Number(s?.seq);
       if (!Number.isFinite(seq)) continue;
 
-      // GLOBAL GAP DETECTION (for this client)
-      if (this.lastSeq > 0 && seq > this.lastSeq + 1) {
-        const missing = seq - this.lastSeq - 1;
-        this.gapGlobalGaps += 1;
-        this.gapGlobalMissing += missing;
+      // Global gap detection (for this client)
+      if (this._acceptAfterSeq > 0 && seq > this._acceptAfterSeq + 1) {
+        const missing = seq - this._acceptAfterSeq - 1;
+        this._gapGlobalGaps += 1;
+        this._gapGlobalMissing += missing;
       }
 
-      // Dedup by global seq (silently skip duplicates - normal during reconnect)
-      if (seq <= this.lastSeq) {
-        rejected++;
-        continue;
-      }
+      // Dedup
+      if (seq <= this._acceptAfterSeq) continue;
 
-      out.push(s);
-      this.lastSeq = seq;
+      // Normalize payload strategy fallback (future-proof)
+      const sid = String(s?.series_id || "");
+      const payload = s?.payload && typeof s.payload === "object" ? s.payload : {};
+      if (sid.includes(":strategy:") && payload && !payload.strategy) {
+        const strat = _parseStrategyIdFromSeriesId(sid);
+        if (strat) payload.strategy = strat;
+      }
+      const t_ms = Number(s?.t_ms);
+      const series_seq = Number(s?.series_seq);
+
+      const sample: FeedSample = {
+        seq,
+        series_id: sid,
+        t_ms: Number.isFinite(t_ms) ? t_ms : 0,
+        series_seq: Number.isFinite(series_seq) ? series_seq : undefined,
+        payload,
+      };
+
+      out.push(sample);
+      this._acceptAfterSeq = seq;
       accepted++;
-      this._updateRegistry(s);
-    }
-    
-    // Debug logging for sample rejection issues
-    if (rejected > 0 && accepted === 0 && list.length > 0) {
-      const firstSeq = Number(list[0]?.seq);
-      const lastSeqInBatch = Number(list[list.length - 1]?.seq);
-      console.warn(`[WsFeedClient] ⚠️ All ${rejected} samples rejected in ${t} frame. lastSeq=${this.lastSeq}, batch range=[${firstSeq}..${lastSeqInBatch}]. This usually means server restarted but client has old lastSeq. Consider calling resetCursor().`);
+      this._updateRegistry(sample);
     }
 
     if (accepted) {
-      if (t === 'history') this.historyReceived += accepted;
-      else if (t === 'delta') this.deltaReceived += accepted;
-      else this.liveReceived += accepted;
+      if (kind === "history") this._historyReceived += accepted;
+      else if (kind === "delta") this._deltaReceived += accepted;
+      else this._liveReceived += accepted;
 
       this._sinceLastStatus += accepted;
 
       try {
-        this.onSamples(out);
+        this._onSamples(out);
       } catch {
-        // ignore
+        /* ignore UI errors */
       }
 
-      this.setLastSeq(this.lastSeq);
+      // Persist cursor continuously (so browser refresh survives)
+      this._cursorSeq = Math.max(this._cursorSeq, this._acceptAfterSeq);
+      this._persistCursor(this._cursorSeq);
     }
 
-    // SIMPLIFIED: Match old version's immediate transitions (no timers, no delays)
-    // This ensures fast transitions to live mode when server is ready
-    if (t === 'delta' && this.stage === 'history') {
-      this.stage = 'delta';
-    }
-    if (t === 'live' && (this.stage === 'history' || this.stage === 'delta')) {
-      this.stage = 'live';
-      // Clear any delta complete check timer since we're now in live
-      this._clearDeltaCompleteTimer();
-    }
+    if (kind === "delta" && this.stage === "history") this.stage = "delta";
+    if (kind === "live" && (this.stage === "history" || this.stage === "delta")) this.stage = "live";
 
     this._emitStatus();
   }
 
-  private _updateRegistry(sample: Sample): void {
+  private _updateRegistry(sample: FeedSample): void {
     const id = sample?.series_id;
     if (!id) return;
-    const t = Number(sample.t_ms ?? 0);
-    const seq = Number(sample.seq ?? 0);
-    const sseq = Number(sample.series_seq ?? 0);
+    const t = _safeNumber(sample.t_ms, 0);
+    const seq = _safeNumber(sample.seq, 0);
+    const sseq = _safeNumber(sample.series_seq, 0);
 
     let e = this._reg.get(id);
     if (!e) {
@@ -961,10 +1011,10 @@ export class WsFeedClient {
         lastSeq: seq,
         firstMs: t,
         lastMs: t,
-        prevSeriesSeq: null,
+        prevSeriesSeq: null as number | null,
         gaps: 0,
-        missed: 0
-      } as any; // Use 'any' to allow prevSeriesSeq which is internal-only
+        missed: 0,
+      };
       this._reg.set(id, e);
       this._regDirty = true;
     }
@@ -973,46 +1023,28 @@ export class WsFeedClient {
     e.lastSeq = seq;
     e.lastMs = t;
 
-    // Per-series gap detection using series_seq (matches wsfeed-client.js)
+    // Per-series gap detection via series_seq
     if (Number.isFinite(sseq) && sseq > 0) {
-      const prevSeriesSeq = (e as any).prevSeriesSeq;
-      if (prevSeriesSeq === null) {
-        // first time we see this series
-        (e as any).prevSeriesSeq = sseq;
+      if (e.prevSeriesSeq === null) {
+        e.prevSeriesSeq = sseq;
         if (sseq > 1) {
-          const missing = sseq - 1;
           e.gaps += 1;
-          e.missed += missing;
+          e.missed += sseq - 1;
         }
       } else {
-        if (sseq > prevSeriesSeq + 1) {
-          const gap = sseq - prevSeriesSeq - 1;
+        if (sseq > e.prevSeriesSeq + 1) {
           e.gaps += 1;
-          e.missed += gap;
+          e.missed += sseq - e.prevSeriesSeq - 1;
         }
-        (e as any).prevSeriesSeq = sseq;
+        e.prevSeriesSeq = sseq;
       }
     }
 
     this._regDirty = true;
   }
 
-  getRegistrySnapshot(): RegistryRow[] {
-    // Match wsfeed-client.js: don't include firstSeriesSeq/lastSeriesSeq in snapshot
-    return Array.from(this._reg.values()).map((r) => ({
-      id: r.id,
-      count: r.count,
-      firstSeq: r.firstSeq,
-      lastSeq: r.lastSeq,
-      firstMs: r.firstMs,
-      lastMs: r.lastMs,
-      gaps: r.gaps || 0,
-      missed: r.missed || 0
-    }));
-  }
-
-  private _emitStatus(force = false): void {
-    const now = Date.now();
+  private _emitStatus(force: boolean = false): void {
+    const now = _nowMs();
     const dt = now - this._lastStatusTs;
     if (!force && dt < this._statusThrottleMs) return;
 
@@ -1020,11 +1052,11 @@ export class WsFeedClient {
     this._sinceLastStatus = 0;
     this._lastStatusTs = now;
 
-    const expected = this.expectedHistory || 0;
-    const received = Math.min(this.historyReceived, expected);
+    const expected = this._expectedHistory || 0;
+    const received = Math.min(this._historyReceived, expected);
     const pct = expected ? Math.min(100, Math.round((received / expected) * 100)) : 100;
 
-    // Aggregate per-series gap stats
+    // Aggregate per-series gaps
     let totalSeriesGaps = 0;
     let totalSeriesMissed = 0;
     for (const e of this._reg.values()) {
@@ -1032,59 +1064,76 @@ export class WsFeedClient {
       totalSeriesMissed += e.missed || 0;
     }
 
-    const status: FeedStatus = {
-      type: 'status',
+    const status: WsFeedStatus = {
+      type: "status",
       stage: this.stage,
-      lastSeq: this.lastSeq,
-      bounds: { minSeq: this.minSeq, wmSeq: this.wmSeq },
+      url: this.url,
+      cursorPolicy: this._cursorPolicy,
+      lastSeq: this._acceptAfterSeq || 0,
+      bounds: { minSeq: this._minSeq, wmSeq: this._wmSeq, ringCapacity: this._ringCapacity },
       resume: {
-        requested: this.resumeFromRequested,
-        server: this.resumeFromServer,
-        truncated: this.resumeTruncated
+        requestedFromSeq: this._requestedFromSeq,
+        serverResumeFromSeq: this._serverResumeFromSeq,
+        truncated: this._resumeTruncated,
       },
-      history: { expected, received, pct },
-      delta: { received: this.deltaReceived },
-      live: { received: this.liveReceived },
+      history: { expected, received: this._historyReceived, pct },
+      delta: { received: this._deltaReceived },
+      live: { received: this._liveReceived },
       rate: { perSec: Number(rate.toFixed(1)), windowMs: this._statusThrottleMs },
       heartbeatLagMs: this.lastHeartbeatLagMs,
       registry: { total: this._reg.size },
       wireFormat: this.wireFormat,
       gaps: {
-        global: {
-          gaps: this.gapGlobalGaps,
-          missed: this.gapGlobalMissing
-        },
-        series: {
-          totalSeries: this._reg.size,
-          totalGaps: totalSeriesGaps,
-          totalMissed: totalSeriesMissed
-        }
+        global: { gaps: this._gapGlobalGaps, missed: this._gapGlobalMissing },
+        series: { totalSeries: this._reg.size, totalGaps: totalSeriesGaps, totalMissed: totalSeriesMissed },
       },
       decodeErrors: {
         text: this._decodeErrorsText,
-        binary: this._decodeErrorsBinary
+        binary: this._decodeErrorsBinary,
       },
       reconnect: {
         enabled: this._autoReconnect,
         attempts: this._reconnectAttempts || 0,
-        nextDelayMs: this._autoReconnectNextDelayMs
+        nextDelayMs: this._autoReconnectNextDelayMs,
       },
-      ts: now
+      ts: now,
     };
 
     try {
-      this.onStatus(status);
+      this._onStatus?.(status);
     } catch {
-      // ignore
+      /* ignore UI errors */
     }
 
     if (this._regDirty) {
       this._regDirty = false;
       try {
-        this.onRegistry(this.getRegistrySnapshot());
+        this._onRegistry?.(this.getRegistrySnapshot());
       } catch {
-        // ignore
+        /* ignore */
       }
+    }
+  }
+
+  private _notice(
+    kind: NoticeKind,
+    level: NoticeLevel,
+    code: string,
+    text: string,
+    details: Record<string, any> = {},
+  ): void {
+    const n: FeedNotice = {
+      kind,
+      level,
+      code,
+      text,
+      ts: _nowMs(),
+      details,
+    };
+    try {
+      this._onNotice?.(n);
+    } catch {
+      /* ignore */
     }
   }
 }
