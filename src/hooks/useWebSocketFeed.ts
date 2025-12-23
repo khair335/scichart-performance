@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { WsFeedClient, MemoryStorage, FeedStatus, RegistryRow, Sample } from '@/lib/wsfeed-client';
+import { WsFeedClient, MemoryStorage, FeedStatus, RegistryRow, Sample, CursorPolicy } from '@/lib/wsfeed-client';
+
+export type WireFormat = 'auto' | 'text' | 'binary';
 
 interface UseWebSocketFeedOptions {
   url: string;
   onSamples: (samples: Sample[]) => void;
   onSessionComplete?: () => void;
   autoConnect?: boolean;
+  cursorPolicy?: CursorPolicy;
+  useLocalStorage?: boolean;
+  autoReconnect?: boolean;
 }
 
 interface FeedState {
@@ -17,12 +22,27 @@ interface FeedState {
   heartbeatLag: number | null;
   registryCount: number;
   sessionComplete: boolean;
+  gaps: number;
+  wireFormat: string;
 }
 
-export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnect = true }: UseWebSocketFeedOptions) {
+export function useWebSocketFeed({ 
+  url, 
+  onSamples, 
+  onSessionComplete, 
+  autoConnect = true,
+  cursorPolicy = 'auto',
+  useLocalStorage = true,
+  autoReconnect: autoReconnectOption = true,
+}: UseWebSocketFeedOptions) {
   const clientRef = useRef<WsFeedClient | null>(null);
   const onSamplesRef = useRef(onSamples);
   const onSessionCompleteRef = useRef(onSessionComplete);
+  
+  // Config refs to track latest values without triggering reconnect
+  const cursorPolicyRef = useRef(cursorPolicy);
+  const useLocalStorageRef = useRef(useLocalStorage);
+  const autoReconnectRef = useRef(autoReconnectOption);
   
   const [state, setState] = useState<FeedState>({
     stage: 'idle',
@@ -33,6 +53,8 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     heartbeatLag: null,
     registryCount: 0,
     sessionComplete: false,
+    gaps: 0,
+    wireFormat: '',
   });
 
   const [registry, setRegistry] = useState<RegistryRow[]>([]);
@@ -45,6 +67,22 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
   useEffect(() => {
     onSessionCompleteRef.current = onSessionComplete;
   }, [onSessionComplete]);
+  
+  useEffect(() => {
+    cursorPolicyRef.current = cursorPolicy;
+  }, [cursorPolicy]);
+  
+  useEffect(() => {
+    useLocalStorageRef.current = useLocalStorage;
+  }, [useLocalStorage]);
+  
+  useEffect(() => {
+    autoReconnectRef.current = autoReconnectOption;
+    // Update client's auto-reconnect setting if it exists
+    if (clientRef.current) {
+      clientRef.current.setAutoReconnect(autoReconnectOption);
+    }
+  }, [autoReconnectOption]);
 
   const handleStatus = useCallback((status: FeedStatus) => {
     setState(prev => ({
@@ -55,7 +93,9 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
       rate: status.rate.perSec,
       heartbeatLag: status.heartbeatLagMs,
       registryCount: status.registry.total,
-      sessionComplete: prev.sessionComplete, // Preserve session complete state
+      sessionComplete: prev.sessionComplete,
+      gaps: status.gaps?.global?.gaps ?? 0,
+      wireFormat: status.wireFormat || '',
     }));
   }, []);
 
@@ -76,7 +116,6 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
       onSessionCompleteRef.current?.();
       
       // CRITICAL: Disable auto-reconnect to prevent reloading history
-      // The client should have already done this, but ensure it here too
       if (clientRef.current) {
         clientRef.current.setAutoReconnect(false);
       }
@@ -89,19 +128,20 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     }
 
     // Reset session complete state on new connection
-    setState(prev => ({ ...prev, sessionComplete: false }));
+    setState(prev => ({ ...prev, sessionComplete: false, stage: 'connecting' }));
 
-    // Use localStorage for data persistence across page refreshes
-    const storage = typeof window !== 'undefined' && window.localStorage
+    // Use localStorage or MemoryStorage based on config
+    const storage = useLocalStorageRef.current && typeof window !== 'undefined' && window.localStorage
       ? window.localStorage
       : new MemoryStorage();
 
     const client = new WsFeedClient({
       url,
       storage: storage,
-      autoReconnect: true, // Enable auto-reconnect for better reliability
-      autoReconnectInitialDelayMs: 500, // Faster initial retry (500ms instead of 1000ms)
-      autoReconnectMaxDelayMs: 5000, // Cap at 5 seconds instead of 30 seconds for faster reconnection
+      cursorPolicy: cursorPolicyRef.current,
+      autoReconnect: autoReconnectRef.current,
+      autoReconnectInitialDelayMs: 500,
+      autoReconnectMaxDelayMs: 5000,
       onSamples: (samples) => {
         onSamplesRef.current(samples);
       },
@@ -110,26 +150,22 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
       onEvent: (evt) => {
         handleEvent(evt);
         
-        // Handle server restart detection - reset cursor if server sequence numbers are lower
+        // Handle server restart detection
         if (evt.type === 'init_begin') {
           const minSeq = evt.min_seq as number;
           const wmSeq = evt.wm_seq as number;
           const lastSeq = client.getLastSeq();
           
-          // If server's minSeq or wmSeq is lower than our stored lastSeq,
-          // it means the server has restarted and sequence numbers have reset
           if (lastSeq > 0 && (minSeq < lastSeq || wmSeq < lastSeq)) {
             console.log(`[WebSocket] Server restart detected: minSeq=${minSeq}, wmSeq=${wmSeq}, lastSeq=${lastSeq}, resetting cursor`);
             client.resetCursor();
           }
         }
         
-        // Log reconnect attempts for debugging
         if (evt.type === 'reconnect_scheduled') {
           console.log('[WebSocket] Reconnect scheduled:', evt);
         }
         
-        // Log decode errors for debugging
         if (evt.type === 'decode_error') {
           console.warn('[WebSocket] Decode error:', evt);
         }
@@ -141,7 +177,27 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
   }, [url, handleStatus, handleRegistry, handleEvent]);
 
   const disconnect = useCallback(() => {
-    clientRef.current?.close();
+    if (clientRef.current) {
+      clientRef.current.close();
+      setState(prev => ({ ...prev, stage: 'closed', connected: false }));
+    }
+  }, []);
+  
+  const resetCursor = useCallback((reconnect: boolean = false) => {
+    if (clientRef.current) {
+      clientRef.current.resetCursor({ persist: true });
+      if (reconnect) {
+        clientRef.current.close();
+        connect();
+      }
+    }
+  }, [connect]);
+  
+  const setAutoReconnect = useCallback((enabled: boolean) => {
+    autoReconnectRef.current = enabled;
+    if (clientRef.current) {
+      clientRef.current.setAutoReconnect(enabled);
+    }
   }, []);
 
   // Auto-connect on mount
@@ -163,5 +219,7 @@ export function useWebSocketFeed({ url, onSamples, onSessionComplete, autoConnec
     registry,
     connect,
     disconnect,
+    resetCursor,
+    setAutoReconnect,
   };
 }
