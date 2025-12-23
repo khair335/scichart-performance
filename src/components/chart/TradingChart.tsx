@@ -4,6 +4,7 @@ import { useWebSocketFeed } from '@/hooks/useWebSocketFeed';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
 import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
+import { ConnectionControls, type CursorPolicy, type WireFormat } from './ConnectionControls';
 import { SeriesBrowser } from './SeriesBrowser';
 import { CommandPalette } from './CommandPalette';
 import { FloatingMinimap } from './FloatingMinimap';
@@ -159,7 +160,7 @@ interface TradingChartProps {
   uiConfig?: any;
 }
 
-export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfig }: TradingChartProps) {
+export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', className, uiConfig }: TradingChartProps) {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [minimapEnabled, setMinimapEnabled] = useState(defaultChartConfig.minimap.enabled);
   const [seriesBrowserOpen, setSeriesBrowserOpen] = useState(false);
@@ -174,10 +175,18 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   const [autoReloadEnabled, setAutoReloadEnabled] = useState(true);
   const [hudVisible, setHudVisible] = useState(true);
   const [toolbarVisible, setToolbarVisible] = useState(true);
+  const [connectionControlsVisible, setConnectionControlsVisible] = useState(true);
   const [zoomMode, setZoomMode] = useState<'box' | 'x-only' | 'y-only'>('box');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [cursorEnabled, setCursorEnabled] = useState(false);
   const [legendsEnabled, setLegendsEnabled] = useState(false);
+  
+  // Connection settings state
+  const [wsUrl, setWsUrl] = useState(initialWsUrl);
+  const [cursorPolicy, setCursorPolicy] = useState<CursorPolicy>('auto');
+  const [wireFormat, setWireFormat] = useState<WireFormat>('auto');
+  const [autoReconnect, setAutoReconnect] = useState(true);
+  const [useLocalStorage, setUseLocalStorage] = useState(true);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
@@ -217,11 +226,20 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
   }, []);
   
   // WebSocket feed - must be called before useMultiPaneChart to get feedState
-  const { state: feedState, registry: wsRegistry } = useWebSocketFeed({
+  const { 
+    state: feedState, 
+    registry: wsRegistry, 
+    connect: wsConnect, 
+    disconnect: wsDisconnect, 
+    resetCursor: wsResetCursor,
+  } = useWebSocketFeed({
     url: wsUrl,
     onSamples: (samples) => handleSamplesRef.current(samples),
     onSessionComplete: handleSessionComplete,
     autoConnect: !demoMode,
+    cursorPolicy: cursorPolicy as any,
+    useLocalStorage,
+    autoReconnect,
   });
 
   // Use appropriate registry based on mode - must be defined before useMultiPaneChart
@@ -1146,6 +1164,33 @@ export function TradingChart({ wsUrl = 'ws://127.0.0.1:8765', className, uiConfi
       >
         <div id="overview-chart" className="w-full h-full" />
       </FloatingMinimap>
+
+      {/* Connection Controls Panel */}
+      <ConnectionControls
+        wsUrl={wsUrl}
+        onWsUrlChange={setWsUrl}
+        cursorPolicy={cursorPolicy}
+        onCursorPolicyChange={setCursorPolicy}
+        wireFormat={wireFormat}
+        onWireFormatChange={setWireFormat}
+        autoReconnect={autoReconnect}
+        onAutoReconnectChange={setAutoReconnect}
+        useLocalStorage={useLocalStorage}
+        onUseLocalStorageChange={setUseLocalStorage}
+        onConnect={wsConnect}
+        onDisconnect={wsDisconnect}
+        onResetCursor={() => wsResetCursor(true)}
+        isConnected={feedState.connected}
+        isConnecting={feedState.stage === 'connecting'}
+        stage={feedState.stage}
+        lastSeq={feedState.lastSeq}
+        heartbeatLag={feedState.heartbeatLag}
+        rate={feedState.rate}
+        gaps={feedState.gaps}
+        wireFormatActive={feedState.wireFormat}
+        visible={connectionControlsVisible}
+        className="shrink-0 border-b border-border"
+      />
 
       {/* Series Browser Drawer */}
       <SeriesBrowser
