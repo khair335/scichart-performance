@@ -16,6 +16,7 @@ import type { Sample, RegistryRow } from '@/lib/wsfeed-client';
 import { parseSeriesType } from '@/lib/series-namespace';
 import { parsePlotLayout, getDefaultLayout, type ParsedLayout } from '@/types/plot-layout';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
+import { sharedDataSeriesPool } from '@/lib/shared-data-series-pool';
 
 interface NoConnectionOverlayProps {
   wsUrl: string;
@@ -1099,7 +1100,11 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         onUseLocalStorageChange={setUseLocalStorage}
         onConnect={wsConnect}
         onDisconnect={wsDisconnect}
-        onResetCursor={() => wsResetCursor(true)}
+        onResetCursor={() => {
+          // Clear all chart data before resetting cursor to avoid duplicate/overlapping lines
+          sharedDataSeriesPool.clearAllData();
+          wsResetCursor(true);
+        }}
         isConnected={feedState.connected}
         isConnecting={feedState.stage === 'connecting'}
         stage={feedState.stage}
