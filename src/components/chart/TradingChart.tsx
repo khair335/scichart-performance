@@ -1085,6 +1085,33 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         )}
       />
 
+      {/* Connection Controls Panel */}
+      <ConnectionControls
+        wsUrl={wsUrl}
+        onWsUrlChange={setWsUrl}
+        cursorPolicy={cursorPolicy}
+        onCursorPolicyChange={setCursorPolicy}
+        wireFormat={wireFormat}
+        onWireFormatChange={setWireFormat}
+        autoReconnect={autoReconnect}
+        onAutoReconnectChange={setAutoReconnect}
+        useLocalStorage={useLocalStorage}
+        onUseLocalStorageChange={setUseLocalStorage}
+        onConnect={wsConnect}
+        onDisconnect={wsDisconnect}
+        onResetCursor={() => wsResetCursor(true)}
+        isConnected={feedState.connected}
+        isConnecting={feedState.stage === 'connecting'}
+        stage={feedState.stage}
+        lastSeq={feedState.lastSeq}
+        heartbeatLag={feedState.heartbeatLag}
+        rate={feedState.rate}
+        gaps={feedState.gaps}
+        wireFormatActive={feedState.wireFormat}
+        visible={connectionControlsVisible}
+        className="shrink-0 border-b border-border"
+      />
+
       {/* Main Chart Area */}
       {/* When hasMinHeight, allow container to grow beyond flex-1 by using min-h-0 auto and removing flex-1 constraint */}
       <div 
@@ -1165,32 +1192,6 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         <div id="overview-chart" className="w-full h-full" />
       </FloatingMinimap>
 
-      {/* Connection Controls Panel */}
-      <ConnectionControls
-        wsUrl={wsUrl}
-        onWsUrlChange={setWsUrl}
-        cursorPolicy={cursorPolicy}
-        onCursorPolicyChange={setCursorPolicy}
-        wireFormat={wireFormat}
-        onWireFormatChange={setWireFormat}
-        autoReconnect={autoReconnect}
-        onAutoReconnectChange={setAutoReconnect}
-        useLocalStorage={useLocalStorage}
-        onUseLocalStorageChange={setUseLocalStorage}
-        onConnect={wsConnect}
-        onDisconnect={wsDisconnect}
-        onResetCursor={() => wsResetCursor(true)}
-        isConnected={feedState.connected}
-        isConnecting={feedState.stage === 'connecting'}
-        stage={feedState.stage}
-        lastSeq={feedState.lastSeq}
-        heartbeatLag={feedState.heartbeatLag}
-        rate={feedState.rate}
-        gaps={feedState.gaps}
-        wireFormatActive={feedState.wireFormat}
-        visible={connectionControlsVisible}
-        className="shrink-0 border-b border-border"
-      />
 
       {/* Series Browser Drawer */}
       <SeriesBrowser
