@@ -118,16 +118,6 @@ export function ConnectionControls({
           </Select>
         </div>
 
-        {/* Sample format (read-only - server decides) */}
-        <div className="flex flex-col gap-0.5 min-w-[100px]">
-          <label className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
-            Wire format
-          </label>
-          <div className="h-8 px-3 text-xs bg-card border border-border/50 rounded-md flex items-center font-mono text-muted-foreground">
-            {wireFormatActive || 'auto'}
-          </div>
-        </div>
-
         {/* Actions */}
         <div className="flex flex-col gap-0.5">
           <label className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
@@ -161,68 +151,28 @@ export function ConnectionControls({
             </Button>
           </div>
         </div>
+
+        {/* Connection status */}
+        <div className="flex items-center gap-2 ml-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-card border border-border/50 text-[11px]">
+            <span className={cn('w-2 h-2 rounded-full', getStatusDotClass())} />
+            <span className="font-medium">{getStatusText()}</span>
+          </span>
+          
+          <span className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full bg-card border border-border/50 text-[11px]">
+            <span className="font-mono text-muted-foreground">lastSeq:</span>
+            <span className="font-mono text-foreground font-medium">{lastSeq}</span>
+          </span>
+
+          <span className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full bg-card border border-border/50 text-[11px]">
+            <span className="font-mono text-muted-foreground">wire:</span>
+            <span className="font-mono text-foreground font-medium">{wireFormatActive || '—'}</span>
+          </span>
+        </div>
       </div>
 
-      {/* Status pills row */}
+      {/* Options row */}
       <div className="flex items-center gap-2 flex-wrap mt-2">
-        {/* Connection status pill */}
-        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px] text-muted-foreground">
-          <span className={cn('w-2 h-2 rounded-full', getStatusDotClass())} />
-          {getStatusText()}
-        </span>
-
-        {/* lastSeq */}
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px]">
-          <span className="font-mono text-muted-foreground">lastSeq</span>
-          <span className="text-muted-foreground">:</span>
-          <span className="font-mono text-foreground font-medium">{lastSeq}</span>
-        </span>
-
-        {/* stage */}
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px]">
-          <span className="font-mono text-muted-foreground">stage</span>
-          <span className="text-muted-foreground">:</span>
-          <span className="font-mono text-foreground font-medium">{stage || 'idle'}</span>
-        </span>
-
-        {/* wire format */}
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px]">
-          <span className="font-mono text-muted-foreground">wire</span>
-          <span className="text-muted-foreground">:</span>
-          <span className="font-mono text-foreground font-medium">{wireFormatActive || '—'}</span>
-        </span>
-
-        {/* heartbeatLag */}
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px]">
-          <span className="font-mono text-muted-foreground">heartbeatLag</span>
-          <span className="text-muted-foreground">:</span>
-          <span className="font-mono text-foreground font-medium">
-            {heartbeatLag !== null ? `${Math.round(heartbeatLag)}ms` : '—'}
-          </span>
-        </span>
-
-        {/* rate */}
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px]">
-          <span className="font-mono text-muted-foreground">rate</span>
-          <span className="text-muted-foreground">:</span>
-          <span className="font-mono text-foreground font-medium">
-            {rate > 0 ? `${Math.round(rate)}/s` : '—'}
-          </span>
-        </span>
-
-        {/* gaps */}
-        <span className={cn(
-          'inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[11px]',
-          gaps > 0 ? 'bg-warning/10 border-warning/30' : 'bg-card border-border/50'
-        )}>
-          <span className="font-mono text-muted-foreground">gaps</span>
-          <span className="text-muted-foreground">:</span>
-          <span className={cn('font-mono font-medium', gaps > 0 ? 'text-warning' : 'text-foreground')}>
-            {gaps}
-          </span>
-        </span>
-
-        {/* Checkboxes */}
         <label className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-card border border-border/50 text-[11px] cursor-pointer hover:bg-muted/50 transition-colors">
           <Checkbox
             checked={autoReconnect}
