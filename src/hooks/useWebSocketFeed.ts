@@ -200,6 +200,13 @@ export function useWebSocketFeed({
     }
   }, []);
 
+  const setCursorPolicy = useCallback((policy: CursorPolicy) => {
+    cursorPolicyRef.current = policy;
+    if (clientRef.current) {
+      clientRef.current.setCursorPolicy(policy);
+    }
+  }, []);
+
   // Auto-connect on mount
   useEffect(() => {
     if (autoConnect) {
@@ -221,5 +228,6 @@ export function useWebSocketFeed({
     disconnect,
     resetCursor,
     setAutoReconnect,
+    setCursorPolicy,
   };
 }

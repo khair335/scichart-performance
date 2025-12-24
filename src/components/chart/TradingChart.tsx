@@ -233,6 +233,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     connect: wsConnect, 
     disconnect: wsDisconnect, 
     resetCursor: wsResetCursor,
+    setCursorPolicy: wsSetCursorPolicy,
   } = useWebSocketFeed({
     url: wsUrl,
     onSamples: (samples) => handleSamplesRef.current(samples),
@@ -242,6 +243,12 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     useLocalStorage,
     autoReconnect,
   });
+  
+  // Handler for cursor policy change - updates both local state and client
+  const handleCursorPolicyChange = useCallback((policy: CursorPolicy) => {
+    setCursorPolicy(policy);
+    wsSetCursorPolicy(policy as any);
+  }, [wsSetCursorPolicy]);
 
   // Use appropriate registry based on mode - must be defined before useMultiPaneChart
   const registry = demoMode ? demoRegistry : wsRegistry;
@@ -1091,7 +1098,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         wsUrl={wsUrl}
         onWsUrlChange={setWsUrl}
         cursorPolicy={cursorPolicy}
-        onCursorPolicyChange={setCursorPolicy}
+        onCursorPolicyChange={handleCursorPolicyChange}
         wireFormat={wireFormat}
         onWireFormatChange={setWireFormat}
         autoReconnect={autoReconnect}
