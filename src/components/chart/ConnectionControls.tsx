@@ -19,8 +19,8 @@ interface ConnectionControlsProps {
   onWsUrlChange: (url: string) => void;
   cursorPolicy: CursorPolicy;
   onCursorPolicyChange: (policy: CursorPolicy) => void;
-  wireFormat: WireFormat;
-  onWireFormatChange: (format: WireFormat) => void;
+  wireFormat?: WireFormat; // Kept for backward compat but not used
+  onWireFormatChange?: (format: WireFormat) => void; // Not used - server decides
   autoReconnect: boolean;
   onAutoReconnectChange: (enabled: boolean) => void;
   useLocalStorage: boolean;
@@ -37,7 +37,7 @@ interface ConnectionControlsProps {
   heartbeatLag: number | null;
   rate: number;
   gaps: number;
-  wireFormatActive?: string;
+  wireFormatActive?: string; // Actual wire format from server
   className?: string;
   visible?: boolean;
 }
@@ -47,8 +47,6 @@ export function ConnectionControls({
   onWsUrlChange,
   cursorPolicy,
   onCursorPolicyChange,
-  wireFormat,
-  onWireFormatChange,
   autoReconnect,
   onAutoReconnectChange,
   useLocalStorage,
@@ -120,21 +118,14 @@ export function ConnectionControls({
           </Select>
         </div>
 
-        {/* Expected sample format */}
-        <div className="flex flex-col gap-0.5 min-w-[140px]">
+        {/* Sample format (read-only - server decides) */}
+        <div className="flex flex-col gap-0.5 min-w-[100px]">
           <label className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
-            Expected sample format
+            Wire format
           </label>
-          <Select value={wireFormat} onValueChange={(v) => onWireFormatChange(v as WireFormat)}>
-            <SelectTrigger className="h-8 text-xs bg-card border-border/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="auto">auto (server decides)</SelectItem>
-              <SelectItem value="text">text</SelectItem>
-              <SelectItem value="binary">binary</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="h-8 px-3 text-xs bg-card border border-border/50 rounded-md flex items-center font-mono text-muted-foreground">
+            {wireFormatActive || 'auto'}
+          </div>
         </div>
 
         {/* Actions */}
