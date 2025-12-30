@@ -7461,44 +7461,53 @@ export function useMultiPaneChart({
   }, [zoomExtents]);
 
   // Reset data state - called when Reset Cursor is clicked
-  // Clears seriesHasData tracking and waiting annotations to show "Waiting for Data..." overlays again
+  // IMPORTANT: Must clear the *same* DataSeries instances that RenderableSeries are bound to,
+  // otherwise new points will connect to old points (diagonal/straight lines).
   const resetDataState = useCallback(() => {
     const refs = chartRefs.current;
-    
+
     console.log('[MultiPaneChart] Resetting data state for Reset Cursor');
-    
-    // 1. Clear seriesHasData tracking - this makes all panes show "Waiting for Data..." again
+
+    // 1) Clear all DataSeries currently bound to RenderableSeries (dynamic + legacy)
+    for (const [, entry] of refs.dataSeriesStore) {
+      try {
+        entry.dataSeries?.clear();
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2) Reset pane-level data flags so panes go back to "Waiting for Data..."
+    for (const [, paneSurface] of refs.paneSurfaces) {
+      paneSurface.hasData = false;
+    }
+
+    // 3) Reset seriesHasData tracking (drives per-pane waiting overlays)
     refs.seriesHasData.clear();
-    
-    // 2. Clear waiting annotations (they will be recreated when panes detect no data)
+
+    // 4) Clear waiting annotations (they will be recreated by pane logic)
     for (const [paneId, annotation] of refs.waitingAnnotations) {
       try {
         const paneSurface = refs.paneSurfaces.get(paneId);
-        if (paneSurface) {
-          paneSurface.surface.annotations.remove(annotation);
-        }
+        if (paneSurface) paneSurface.surface.annotations.remove(annotation);
         annotation.delete();
-      } catch (e) {
-        // Ignore errors during cleanup
+      } catch {
+        // ignore
       }
     }
     refs.waitingAnnotations.clear();
-    
-    // 3. Reset anyPaneHasData flag so auto-scroll waits for new data
+
+    // 5) Reset global gate so auto-scroll waits for fresh data
     anyPaneHasDataRef.current = false;
-    
-    // 4. Clear local dataSeriesStore (though SharedDataSeriesPool is the source of truth)
-    // This helps ensure RenderableSeries get fresh DataSeries from the pool
-    refs.dataSeriesStore.clear();
-    
-    // 5. Re-initialize seriesHasData for current layout
+
+    // 6) Re-initialize seriesHasData for current layout (all false)
     const currentLayout = plotLayoutRef.current;
     if (currentLayout) {
       for (const seriesAssignment of currentLayout.layout.series) {
         refs.seriesHasData.set(seriesAssignment.series_id, false);
       }
     }
-    
+
     console.log('[MultiPaneChart] Data state reset complete');
   }, []);
 
