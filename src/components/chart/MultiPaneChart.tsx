@@ -3878,6 +3878,13 @@ export function useMultiPaneChart({
 
           // NOW clear our local references after cleanup is done
           refs.paneSurfaces.clear();
+          
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          // This prevents old series data status from affecting new layout
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
 
           // CRITICAL: Only clear renderableSeries references, NOT dataSeries
           // DataSeries persist in sharedDataSeriesPool across layout changes
@@ -3905,7 +3912,11 @@ export function useMultiPaneChart({
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
           
-          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
           // DataSeries persist in sharedDataSeriesPool across layout changes
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
             if (entry.renderableSeries) {
@@ -3935,7 +3946,13 @@ export function useMultiPaneChart({
     }
 
     // Create a stable layout ID to detect actual layout changes
-    const layoutId = JSON.stringify(plotLayout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })));
+    // CRITICAL: Include both pane structure AND series assignments in the layout ID
+    // This ensures layout changes are detected when series assignments change (e.g., ES vs MESU5s)
+    const layoutId = JSON.stringify({
+      panes: plotLayout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
+      series: plotLayout.layout.series.map(s => ({ series_id: s.series_id, pane: s.pane })),
+      minimap: plotLayout.layout.minimap?.source?.series_id || null,
+    });
 
     // If layout changed, reset everything
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
@@ -3969,8 +3986,13 @@ export function useMultiPaneChart({
 
           // NOW clear our local references after cleanup is done
           refs.paneSurfaces.clear();
-
-          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          // This prevents old series data status from affecting new layout
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
           // DataSeries persist in sharedDataSeriesPool across layout changes
           // This ensures all historical data is preserved when layout changes
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
@@ -3996,6 +4018,12 @@ export function useMultiPaneChart({
 
           // Even on error, clear references to prevent memory leaks
           refs.paneSurfaces.clear();
+          
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
           
           // CRITICAL: Only clear renderableSeries references, NOT dataSeries
           for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
