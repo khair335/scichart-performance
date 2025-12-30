@@ -393,6 +393,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     jumpToLive,
     setTimeWindow,
     handleGridReady,
+    resetDataState,
   } = useMultiPaneChart({
     tickContainerId: 'tick-chart',
     ohlcContainerId: 'ohlc-chart',
@@ -1133,8 +1134,12 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         onConnect={wsConnect}
         onDisconnect={wsDisconnect}
         onResetCursor={() => {
-          // Clear all chart data before resetting cursor to avoid duplicate/overlapping lines
+          // CRITICAL: Reset data state BEFORE clearing data to avoid straight lines
+          // 1. Reset chart's internal data tracking (seriesHasData, waiting annotations)
+          resetDataState();
+          // 2. Clear all data from SharedDataSeriesPool
           sharedDataSeriesPool.clearAllData();
+          // 3. Reset cursor and reconnect to fetch fresh data from beginning
           wsResetCursor(true);
         }}
         isConnected={feedState.connected}
