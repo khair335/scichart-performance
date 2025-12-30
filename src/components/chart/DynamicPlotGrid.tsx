@@ -79,6 +79,7 @@ export function DynamicPlotGrid({
         gridRef.current.innerHTML = '';
       }
       containerIdsRef.current.clear();
+      notifiedPanesRef.current.clear(); // CRITICAL: Clear notified panes
       gridReadyNotifiedRef.current = false;
       lastLayoutIdRef.current = null;
       // Reset parent container styles
@@ -91,16 +92,33 @@ export function DynamicPlotGrid({
     // Grid format: [M, N] where M = rows, N = columns (like a matrix)
     const [rows, cols] = layout.layout.grid;
 
-    // Create a layout ID to detect changes (include min_height to detect changes)
+    // Create a layout ID to detect changes - include series assignments to detect layout changes
     const layoutId = JSON.stringify({
       panes: layout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
+      series: layout.layout.series?.map(s => ({ series_id: s.series_id, pane: s.pane })) || [],
       grid: layout.layout.grid,
       min_height: layout.layout.min_height
     });
 
-    // Reset notification flag if layout changed
+    // Reset and clear everything if layout changed
     if (lastLayoutIdRef.current !== layoutId) {
-      console.log('[DynamicPlotGrid] Layout changed, resetting notification flag');
+      console.log('[DynamicPlotGrid] Layout changed, clearing all panes and resetting state');
+      
+      // CRITICAL: Clear the grid completely for new layout
+      if (gridRef.current) {
+        gridRef.current.innerHTML = '';
+      }
+      
+      // Notify about destroyed panes BEFORE clearing tracking
+      if (onPaneDestroyed) {
+        for (const paneId of containerIdsRef.current.keys()) {
+          onPaneDestroyed(paneId);
+        }
+      }
+      
+      // Clear all tracking refs
+      containerIdsRef.current.clear();
+      notifiedPanesRef.current.clear();
       gridReadyNotifiedRef.current = false;
       lastLayoutIdRef.current = layoutId;
     }
@@ -146,10 +164,7 @@ export function DynamicPlotGrid({
 
     // Create container divs for each pane
     if (gridRef.current) {
-      // Don't clear innerHTML - preserve existing panes and only update what's needed
-      const oldContainerIds = new Set(containerIdsRef.current.values());
-      
-      // Create panes
+      // Create panes (grid is already cleared on layout change above)
       const newContainerIds = new Map<string, string>();
       for (const pane of layout.layout.panes) {
         const containerId = `pane-${pane.id}`;
