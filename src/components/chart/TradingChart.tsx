@@ -193,7 +193,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
   const [currentLayoutName, setCurrentLayoutName] = useState<string | null>(null);
   const [layoutError, setLayoutError] = useState<string | null>(null);
-  const [layoutHistory, setLayoutHistory] = useState<Array<{ name: string; path?: string; loadedAt: number }>>([]);
+  const [layoutHistory, setLayoutHistory] = useState<Array<{ name: string; path?: string; layoutJson?: any; loadedAt: number }>>([]);
   
   // Time window presets from config
   const [timeWindowPresets, setTimeWindowPresets] = useState<Array<{ label: string; minutes: number }>>([
@@ -870,9 +870,9 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           setPlotLayout(parsed);
           setLayoutError(null); // Clear any previous errors
           
-          // Add to layout history
+          // Add to layout history (store the JSON content for file-loaded layouts)
           setLayoutHistory(prev => {
-            const newEntry = { name: layoutName, loadedAt: Date.now() };
+            const newEntry = { name: layoutName, layoutJson, loadedAt: Date.now() };
             const filtered = prev.filter(e => e.name !== layoutName);
             return [newEntry, ...filtered].slice(0, 10);
           });
@@ -962,34 +962,42 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   // This prevents unnecessary re-renders and makes the UI cleaner
 
   // Handle loading layout from history
-  const handleLoadHistoryLayout = useCallback(async (entry: { name: string; path?: string; loadedAt: number }) => {
-    if (entry.path) {
-      try {
+  const handleLoadHistoryLayout = useCallback(async (entry: { name: string; path?: string; layoutJson?: any; loadedAt: number }) => {
+    try {
+      let layoutJson: any;
+      
+      if (entry.path) {
+        // Fetch from path (public/layouts/ files)
         const layoutResponse = await fetch(entry.path);
         if (!layoutResponse.ok) {
           throw new Error(`Failed to fetch layout: ${layoutResponse.statusText}`);
         }
-        const layoutJson = await layoutResponse.json();
-        const parsed = parsePlotLayout(layoutJson);
-        
-        setPlotLayout(parsed);
-        setCurrentLayoutName(entry.name);
-        setLayoutError(null);
-        
-        // Move to front of history
-        setLayoutHistory(prev => {
-          const filtered = prev.filter(e => e.name !== entry.name);
-          return [{ ...entry, loadedAt: Date.now() }, ...filtered].slice(0, 10);
-        });
-      } catch (err) {
-        console.error('[TradingChart] Failed to load layout from history:', err);
-        alert(`Failed to load layout: ${err instanceof Error ? err.message : String(err)}`);
+        layoutJson = await layoutResponse.json();
+      } else if (entry.layoutJson) {
+        // Use cached JSON content (file-loaded layouts)
+        layoutJson = entry.layoutJson;
+      } else {
+        // No path and no cached JSON - shouldn't happen, but handle gracefully
+        console.warn('[TradingChart] Layout history entry has no path or cached JSON:', entry.name);
+        return;
       }
-    } else {
-      // Layout was loaded from file, trigger file picker
-      handleLoadLayout();
+      
+      const parsed = parsePlotLayout(layoutJson);
+      
+      setPlotLayout(parsed);
+      setCurrentLayoutName(entry.name);
+      setLayoutError(null);
+      
+      // Move to front of history
+      setLayoutHistory(prev => {
+        const filtered = prev.filter(e => e.name !== entry.name);
+        return [{ ...entry, loadedAt: Date.now() }, ...filtered].slice(0, 10);
+      });
+    } catch (err) {
+      console.error('[TradingChart] Failed to load layout from history:', err);
+      alert(`Failed to load layout: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [handleLoadLayout]);
+  }, []);
 
   // Treat sessionComplete as a "connected" final state to avoid auto-reload overlays
   // Also include 'connecting' as a valid state to avoid showing overlay during connection attempts
