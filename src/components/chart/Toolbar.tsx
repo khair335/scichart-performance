@@ -38,6 +38,7 @@ export interface TimeWindowPreset {
 export interface LayoutHistoryEntry {
   name: string;
   path?: string;
+  layoutJson?: any;
   loadedAt: number;
 }
 
