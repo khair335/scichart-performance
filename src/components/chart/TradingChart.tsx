@@ -218,7 +218,10 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [gpuMetrics, setGpuMetrics] = useState({ drawCalls: 0, triangles: 0 });
 
   // Handle samples from any source - defined early so it can be used in useWebSocketFeed
-  const handleSamplesRef = useRef<(samples: Sample[]) => void>(() => {});
+  // CRITICAL: Start with null to signal "not ready yet" - prevents samples from being lost
+  const handleSamplesRef = useRef<((samples: Sample[]) => void) | null>(null);
+  // Buffer for samples received before handler is ready
+  const pendingSamplesRef = useRef<Sample[]>([]);
   
   // Session complete handler - auto-pause when server finishes
   const handleSessionComplete = useCallback(() => {
@@ -236,7 +239,14 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     setCursorPolicy: wsSetCursorPolicy,
   } = useWebSocketFeed({
     url: wsUrl,
-    onSamples: (samples) => handleSamplesRef.current(samples),
+    onSamples: (samples) => {
+      // Buffer samples if handler not ready yet
+      if (handleSamplesRef.current) {
+        handleSamplesRef.current(samples);
+      } else {
+        pendingSamplesRef.current.push(...samples);
+      }
+    },
     onSessionComplete: handleSessionComplete,
     autoConnect: !demoMode,
     cursorPolicy: cursorPolicy as any,
@@ -460,9 +470,16 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     }
   }, [appendSamples, demoMode]);
 
-  // Update the ref so useWebSocketFeed can call it
+  // Update the ref so useWebSocketFeed can call it - also flush any pending samples
   useEffect(() => {
     handleSamplesRef.current = handleSamples;
+    
+    // Flush any samples that were buffered before handler was ready
+    if (pendingSamplesRef.current.length > 0) {
+      console.log(`[TradingChart] Flushing ${pendingSamplesRef.current.length} buffered samples`);
+      handleSamples(pendingSamplesRef.current);
+      pendingSamplesRef.current = [];
+    }
   }, [handleSamples]);
 
   // Performance monitoring
