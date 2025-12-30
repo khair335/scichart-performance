@@ -7460,6 +7460,48 @@ export function useMultiPaneChart({
     }
   }, [zoomExtents]);
 
+  // Reset data state - called when Reset Cursor is clicked
+  // Clears seriesHasData tracking and waiting annotations to show "Waiting for Data..." overlays again
+  const resetDataState = useCallback(() => {
+    const refs = chartRefs.current;
+    
+    console.log('[MultiPaneChart] Resetting data state for Reset Cursor');
+    
+    // 1. Clear seriesHasData tracking - this makes all panes show "Waiting for Data..." again
+    refs.seriesHasData.clear();
+    
+    // 2. Clear waiting annotations (they will be recreated when panes detect no data)
+    for (const [paneId, annotation] of refs.waitingAnnotations) {
+      try {
+        const paneSurface = refs.paneSurfaces.get(paneId);
+        if (paneSurface) {
+          paneSurface.surface.annotations.remove(annotation);
+        }
+        annotation.delete();
+      } catch (e) {
+        // Ignore errors during cleanup
+      }
+    }
+    refs.waitingAnnotations.clear();
+    
+    // 3. Reset anyPaneHasData flag so auto-scroll waits for new data
+    anyPaneHasDataRef.current = false;
+    
+    // 4. Clear local dataSeriesStore (though SharedDataSeriesPool is the source of truth)
+    // This helps ensure RenderableSeries get fresh DataSeries from the pool
+    refs.dataSeriesStore.clear();
+    
+    // 5. Re-initialize seriesHasData for current layout
+    const currentLayout = plotLayoutRef.current;
+    if (currentLayout) {
+      for (const seriesAssignment of currentLayout.layout.series) {
+        refs.seriesHasData.set(seriesAssignment.series_id, false);
+      }
+    }
+    
+    console.log('[MultiPaneChart] Data state reset complete');
+  }, []);
+
   return {
     isReady,
     appendSamples,
@@ -7469,5 +7511,6 @@ export function useMultiPaneChart({
     setTimeWindow,
     chartRefs,
     handleGridReady,
+    resetDataState,
   };
 }
