@@ -63,8 +63,9 @@ import { sharedDataSeriesPool, type PooledDataSeries } from '@/lib/shared-data-s
 /**
  * Formats a timestamp value to date string with time and milliseconds
  * Handles both milliseconds and seconds (DateTimeNumericAxis uses milliseconds internally)
+ * Uses UTC methods when timezone is 'UTC', otherwise uses local time
  */
-function formatDateTimeWithMilliseconds(dataValue: number): string {
+function formatDateTimeWithMilliseconds(dataValue: number, timezone: string = 'UTC'): string {
   // DateTimeNumericAxis uses milliseconds internally, but check if we need to convert
   // If value is very small (< year 2000 in ms), it might be in seconds
   let timestamp = dataValue;
@@ -74,28 +75,40 @@ function formatDateTimeWithMilliseconds(dataValue: number): string {
   
   const date = new Date(timestamp);
   
+  // Use UTC methods when timezone is UTC, otherwise use local methods
+  const isUTC = timezone === 'UTC';
+  
   // Format as: YYYY-MM-DD HH:mm:ss.SSS
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+  const year = isUTC ? date.getUTCFullYear() : date.getFullYear();
+  const month = String(isUTC ? date.getUTCMonth() + 1 : date.getMonth() + 1).padStart(2, '0');
+  const day = String(isUTC ? date.getUTCDate() : date.getDate()).padStart(2, '0');
+  const hours = String(isUTC ? date.getUTCHours() : date.getHours()).padStart(2, '0');
+  const minutes = String(isUTC ? date.getUTCMinutes() : date.getMinutes()).padStart(2, '0');
+  const seconds = String(isUTC ? date.getUTCSeconds() : date.getSeconds()).padStart(2, '0');
+  const milliseconds = String(isUTC ? date.getUTCMilliseconds() : date.getMilliseconds()).padStart(3, '0');
   
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
+/**
+ * Creates a formatter function with the specified timezone bound
+ */
+function createTimezoneFormatter(timezone: string): (dataValue: number) => string {
+  return (dataValue: number) => formatDateTimeWithMilliseconds(dataValue, timezone);
 }
 
 /**
  * Custom label provider wrapper that formats dates with time and milliseconds for cursor labels
  * Preserves all original labelProvider methods while overriding formatLabel and formatCursorLabel
  */
-function createCursorLabelProvider(originalLabelProvider: any) {
+function createCursorLabelProvider(originalLabelProvider: any, timezone: string = 'UTC') {
+  const formatter = createTimezoneFormatter(timezone);
+  
   if (!originalLabelProvider) {
     // If no original provider, return a minimal implementation
     return {
-      formatLabel: formatDateTimeWithMilliseconds,
-      formatCursorLabel: formatDateTimeWithMilliseconds,
+      formatLabel: formatter,
+      formatCursorLabel: formatter,
     };
   }
   
@@ -106,9 +119,9 @@ function createCursorLabelProvider(originalLabelProvider: any) {
   }
   
   // Directly override the methods on the original provider object
-  originalLabelProvider.formatLabel = formatDateTimeWithMilliseconds;
+  originalLabelProvider.formatLabel = formatter;
   if (originalLabelProvider.formatCursorLabel !== undefined) {
-    originalLabelProvider.formatCursorLabel = formatDateTimeWithMilliseconds;
+    originalLabelProvider.formatCursorLabel = formatter;
   }
   
   return originalLabelProvider;
@@ -5947,7 +5960,8 @@ export function useMultiPaneChart({
           // Set custom label provider when cursor is enabled
           if (cursorEnabled) {
             const originalProvider = (xAxis as any)._originalLabelProvider;
-            xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+            const timezone = config?.chart?.timezone || 'UTC';
+            xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
             // Invalidate surface to force label refresh
             paneSurface.surface.invalidateElement();
           } else if ((xAxis as any)._originalLabelProvider !== undefined) {
@@ -5964,7 +5978,8 @@ export function useMultiPaneChart({
           // Set label provider BEFORE creating CursorModifier so it uses the updated provider
           if (xAxis) {
             const originalProvider = (xAxis as any)._originalLabelProvider;
-            xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+            const timezone = config?.chart?.timezone || 'UTC';
+            xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
           }
           // Add CursorModifier
           const cursorModifier = new CursorModifier({
@@ -6009,7 +6024,8 @@ export function useMultiPaneChart({
             }
             if (cursorEnabled) {
               const originalProvider = (xAxis as any)._originalLabelProvider;
-              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              const timezone = config?.chart?.timezone || 'UTC';
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
               // Invalidate surface to force label refresh
               refs.tickSurface.invalidateElement();
             } else if ((xAxis as any)._originalLabelProvider !== undefined) {
@@ -6027,7 +6043,8 @@ export function useMultiPaneChart({
           for (const xAxis of xAxes) {
             if (xAxis instanceof DateTimeNumericAxis) {
               const originalProvider = (xAxis as any)._originalLabelProvider;
-              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              const timezone = config?.chart?.timezone || 'UTC';
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
             }
           }
           const cursorModifier = new CursorModifier({
@@ -6066,7 +6083,8 @@ export function useMultiPaneChart({
             }
             if (cursorEnabled) {
               const originalProvider = (xAxis as any)._originalLabelProvider;
-              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              const timezone = config?.chart?.timezone || 'UTC';
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
               // Invalidate surface to force label refresh
               refs.ohlcSurface.invalidateElement();
             } else if ((xAxis as any)._originalLabelProvider !== undefined) {
@@ -6084,7 +6102,8 @@ export function useMultiPaneChart({
           for (const xAxis of xAxes) {
             if (xAxis instanceof DateTimeNumericAxis) {
               const originalProvider = (xAxis as any)._originalLabelProvider;
-              xAxis.labelProvider = createCursorLabelProvider(originalProvider) as any;
+              const timezone = config?.chart?.timezone || 'UTC';
+              xAxis.labelProvider = createCursorLabelProvider(originalProvider, timezone) as any;
             }
           }
           const cursorModifier = new CursorModifier({
