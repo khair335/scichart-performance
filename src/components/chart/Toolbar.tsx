@@ -21,6 +21,8 @@ import {
   MousePointer2,
   List,
   Bug,
+  Activity,
+  Wifi,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -82,6 +84,11 @@ interface ToolbarProps {
   onToggleLegends?: () => void;
   // Debug panel
   onOpenDebugPanel?: () => void;
+  // Panel toggles
+  hudVisible?: boolean;
+  onToggleHud?: () => void;
+  connectionControlsVisible?: boolean;
+  onToggleConnectionControls?: () => void;
 }
 
 export function Toolbar({
@@ -117,6 +124,10 @@ export function Toolbar({
   legendsEnabled = false,
   onToggleLegends,
   onOpenDebugPanel,
+  hudVisible = true,
+  onToggleHud,
+  connectionControlsVisible = true,
+  onToggleConnectionControls,
 }: ToolbarProps) {
   if (!visible) return null;
   return (
@@ -492,6 +503,44 @@ export function Toolbar({
             title="Open Debug Panel (D)"
           >
             <Bug className="w-3.5 h-3.5" />
+          </Button>
+        )}
+
+        <div className="w-px h-6 bg-border/40" />
+
+        {/* HUD Panel Toggle */}
+        {onToggleHud && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleHud}
+            className={cn(
+              "h-8 w-8 p-0 rounded-lg btn-modern transition-all",
+              hudVisible 
+                ? "text-primary bg-primary/10 hover:bg-primary/20" 
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+            title={hudVisible ? 'Hide Status Bar' : 'Show Status Bar'}
+          >
+            <Activity className="w-3.5 h-3.5" />
+          </Button>
+        )}
+
+        {/* Connection Controls Toggle */}
+        {onToggleConnectionControls && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleConnectionControls}
+            className={cn(
+              "h-8 w-8 p-0 rounded-lg btn-modern transition-all",
+              connectionControlsVisible 
+                ? "text-primary bg-primary/10 hover:bg-primary/20" 
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+            title={connectionControlsVisible ? 'Hide Connection Controls' : 'Show Connection Controls'}
+          >
+            <Wifi className="w-3.5 h-3.5" />
           </Button>
         )}
       </div>
