@@ -536,7 +536,7 @@ export class DynamicPaneManager {
         axisAlignment: EAxisAlignment.Right,
         useNativeText: true,
         useSharedCache: true,
-        maxAutoTicks: 3,
+        maxAutoTicks: 10, // Increased from 3 for better Y-axis tick density
         growBy: new NumberRange(0.1, 0.1),
         // Don't set axisTitle - causes text rendering issues with subsurfaces
         // axisTitle: "Price",
