@@ -20,6 +20,7 @@ import {
   ChevronDown,
   MousePointer2,
   List,
+  Bug,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -79,6 +80,8 @@ interface ToolbarProps {
   onToggleCursor?: () => void;
   legendsEnabled?: boolean;
   onToggleLegends?: () => void;
+  // Debug panel
+  onOpenDebugPanel?: () => void;
 }
 
 export function Toolbar({
@@ -113,6 +116,7 @@ export function Toolbar({
   onToggleCursor,
   legendsEnabled = false,
   onToggleLegends,
+  onOpenDebugPanel,
 }: ToolbarProps) {
   if (!visible) return null;
   return (
@@ -475,6 +479,19 @@ export function Toolbar({
             ) : (
               <Maximize2 className="w-3.5 h-3.5" />
             )}
+          </Button>
+        )}
+
+        {/* Debug Panel Toggle */}
+        {onOpenDebugPanel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenDebugPanel}
+            className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 btn-modern transition-all"
+            title="Open Debug Panel (D)"
+          >
+            <Bug className="w-3.5 h-3.5" />
           </Button>
         )}
       </div>
