@@ -8,6 +8,7 @@ import { ConnectionControls, type CursorPolicy, type WireFormat } from './Connec
 import { SeriesBrowser } from './SeriesBrowser';
 import { CommandPalette } from './CommandPalette';
 import { FloatingMinimap } from './FloatingMinimap';
+import { DebugPanel, DebugPanelButton } from './DebugPanel';
 import { defaultChartConfig } from '@/types/chart';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -216,6 +217,13 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [cpuUsage, setCpuUsage] = useState(0);
   const [memoryUsage, setMemoryUsage] = useState(0);
   const [gpuMetrics, setGpuMetrics] = useState({ drawCalls: 0, triangles: 0 });
+
+  // Debug panel state
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
+  const [debugSamples, setDebugSamples] = useState<Sample[]>([]);
+  const [debugNotices, setDebugNotices] = useState<Array<{ ts: number; level: string; code: string; text: string; details?: any }>>([]);
+  const debugSamplesRef = useRef<Sample[]>([]);
+  const MAX_DEBUG_SAMPLES = 10000; // Keep last 10k samples for debug panel
 
   // Handle samples from any source - defined early so it can be used in useWebSocketFeed
   // CRITICAL: Start with null to signal "not ready yet" - prevents samples from being lost
@@ -440,6 +448,22 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   // Handle samples from any source
   const handleSamples = useCallback((samples: Sample[]) => {
     appendSamples(samples);
+
+    // Collect strategy samples for debug panel (signals, markers, pnl)
+    const strategySamples = samples.filter(s => {
+      const id = s.series_id.toLowerCase();
+      return id.includes(':signals') || id.includes(':markers') || id.includes(':pnl');
+    });
+    
+    if (strategySamples.length > 0) {
+      debugSamplesRef.current = [...debugSamplesRef.current, ...strategySamples];
+      // Keep only last MAX_DEBUG_SAMPLES
+      if (debugSamplesRef.current.length > MAX_DEBUG_SAMPLES) {
+        debugSamplesRef.current = debugSamplesRef.current.slice(-MAX_DEBUG_SAMPLES);
+      }
+      // Update state periodically (not on every sample to avoid re-renders)
+      setDebugSamples([...debugSamplesRef.current]);
+    }
 
     // Update demo registry
     if (demoMode) {
@@ -1080,6 +1104,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         onToggleCursor={() => setCursorEnabled(!cursorEnabled)}
         legendsEnabled={legendsEnabled}
         onToggleLegends={() => setLegendsEnabled(!legendsEnabled)}
+        onOpenDebugPanel={() => setDebugPanelOpen(true)}
         className={cn(
           "shrink-0 border-b border-border transition-opacity duration-300",
           !toolbarVisible && "opacity-0 pointer-events-none"
@@ -1262,6 +1287,25 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         isLive={isLive}
         minimapEnabled={minimapEnabled}
         theme={theme}
+      />
+
+      {/* Debug Panel */}
+      <DebugPanel
+        open={debugPanelOpen}
+        onOpenChange={setDebugPanelOpen}
+        registry={registry}
+        notices={debugNotices}
+        protocolStatus={{
+          requestedFromSeq: feedState.lastSeq > 0 ? 1 : 0,
+          serverMinSeq: 1,
+          serverWmSeq: feedState.lastSeq,
+          ringCapacity: null,
+          resumeTruncated: false,
+          historyProgress: feedState.historyProgress,
+          historyExpected: 0,
+          historyReceived: 0,
+        }}
+        samples={debugSamples}
       />
     </div>
   );
