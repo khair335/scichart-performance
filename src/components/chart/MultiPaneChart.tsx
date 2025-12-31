@@ -1343,7 +1343,7 @@ export function useMultiPaneChart({
           axisAlignment: EAxisAlignment.Right,
           useNativeText: true, // Use native text for better performance (large improvement)
           useSharedCache: true, // Share label cache
-          maxAutoTicks: 3, // Ultra-reduced label count (3 labels max) for maximum performance
+          maxAutoTicks: 10, // Increased from 3 for better Y-axis tick density
           growBy: new NumberRange(0.1, 0.1), // Add 10% padding above and below
           // Add styling to make Y-axis visible (match new-index.html)
           axisTitle: "Price",
@@ -1411,7 +1411,7 @@ export function useMultiPaneChart({
           axisAlignment: EAxisAlignment.Right,
           useNativeText: true, // Use native text for better performance
           useSharedCache: true, // Share label cache
-          maxAutoTicks: 3, // Ultra-reduced label count (3 labels max) for maximum performance
+          maxAutoTicks: 10, // Increased from 3 for better Y-axis tick density
           growBy: new NumberRange(0.1, 0.1), // Add 10% padding above and below
           // Add styling to make Y-axis visible (match new-index.html)
           axisTitle: "Price",
