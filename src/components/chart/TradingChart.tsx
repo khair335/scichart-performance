@@ -1105,79 +1105,81 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         legendsEnabled={legendsEnabled}
         onToggleLegends={() => setLegendsEnabled(!legendsEnabled)}
         onOpenDebugPanel={() => setDebugPanelOpen(true)}
-        className={cn(
-          "shrink-0 border-b border-border transition-opacity duration-300",
-          !toolbarVisible && "opacity-0 pointer-events-none"
-        )}
-      />
-
-      {/* HUD Status Bar */}
-      <HUD
-        stage={currentStage}
-        rate={demoMode ? 50 : feedState.rate}
-        fps={fps}
-        heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
-        dataClockMs={dataClockMs}
-        isLive={isLive}
-        historyProgress={demoMode ? 100 : feedState.historyProgress}
-        tickCount={tickCount}
-        cpuUsage={cpuUsage}
-        memoryUsage={memoryUsage}
-        gpuDrawCalls={gpuMetrics.drawCalls}
-        currentLayoutName={currentLayoutName}
-        onReloadLayout={handleReloadLayout}
-        seriesCount={registry.length}
-        minimapEnabled={minimapEnabled}
-        onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
-        onToggleFullscreen={handleToggleFullscreen}
-        isFullscreen={isFullscreen}
-        totalGaps={gapMetrics.totalGaps}
-        initGap={gapMetrics.initGap}
-        seriesGaps={gapMetrics.seriesGaps}
-        visible={hudVisible}
-        className={cn(
-          "shrink-0 border-b border-border transition-opacity duration-300",
-          !hudVisible && "opacity-0 pointer-events-none"
-        )}
-      />
-
-      {/* Connection Controls Panel */}
-      <ConnectionControls
-        wsUrl={wsUrl}
-        onWsUrlChange={setWsUrl}
-        cursorPolicy={cursorPolicy}
-        onCursorPolicyChange={handleCursorPolicyChange}
-        wireFormat={wireFormat}
-        onWireFormatChange={setWireFormat}
-        autoReconnect={autoReconnect}
-        onAutoReconnectChange={setAutoReconnect}
-        useLocalStorage={useLocalStorage}
-        onUseLocalStorageChange={setUseLocalStorage}
-        onConnect={wsConnect}
-        onDisconnect={wsDisconnect}
-        onResetCursor={() => {
-          // CRITICAL: Reset data state BEFORE clearing data to avoid straight lines
-          // 1. Reset chart's internal data tracking (seriesHasData, waiting annotations)
-          resetDataState();
-          // 2. Clear all data from SharedDataSeriesPool
-          sharedDataSeriesPool.clearAllData();
-          // 3. Reset cursor and reconnect to fetch fresh data from beginning
-          wsResetCursor(true);
-        }}
-        isConnected={feedState.connected}
-        isConnecting={feedState.stage === 'connecting'}
-        stage={feedState.stage}
-        lastSeq={feedState.lastSeq}
-        heartbeatLag={feedState.heartbeatLag}
-        rate={feedState.rate}
-        gaps={feedState.gaps}
-        wireFormatActive={feedState.wireFormat}
-        visible={connectionControlsVisible}
+        hudVisible={hudVisible}
+        onToggleHud={() => setHudVisible(!hudVisible)}
+        connectionControlsVisible={connectionControlsVisible}
+        onToggleConnectionControls={() => setConnectionControlsVisible(!connectionControlsVisible)}
         className="shrink-0 border-b border-border"
       />
+
+      {/* HUD Status Bar - Collapsible */}
+      {hudVisible && (
+        <HUD
+          stage={currentStage}
+          rate={demoMode ? 50 : feedState.rate}
+          fps={fps}
+          heartbeatLag={demoMode ? 0 : feedState.heartbeatLag}
+          dataClockMs={dataClockMs}
+          isLive={isLive}
+          historyProgress={demoMode ? 100 : feedState.historyProgress}
+          tickCount={tickCount}
+          cpuUsage={cpuUsage}
+          memoryUsage={memoryUsage}
+          gpuDrawCalls={gpuMetrics.drawCalls}
+          currentLayoutName={currentLayoutName}
+          onReloadLayout={handleReloadLayout}
+          seriesCount={registry.length}
+          minimapEnabled={minimapEnabled}
+          onToggleMinimap={() => setMinimapEnabled(!minimapEnabled)}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          onToggleFullscreen={handleToggleFullscreen}
+          isFullscreen={isFullscreen}
+          totalGaps={gapMetrics.totalGaps}
+          initGap={gapMetrics.initGap}
+          seriesGaps={gapMetrics.seriesGaps}
+          visible={true}
+          className="shrink-0 border-b border-border animate-in slide-in-from-top-2 duration-200"
+        />
+      )}
+
+      {/* Connection Controls Panel - Collapsible */}
+      {connectionControlsVisible && (
+        <ConnectionControls
+          wsUrl={wsUrl}
+          onWsUrlChange={setWsUrl}
+          cursorPolicy={cursorPolicy}
+          onCursorPolicyChange={handleCursorPolicyChange}
+          wireFormat={wireFormat}
+          onWireFormatChange={setWireFormat}
+          autoReconnect={autoReconnect}
+          onAutoReconnectChange={setAutoReconnect}
+          useLocalStorage={useLocalStorage}
+          onUseLocalStorageChange={setUseLocalStorage}
+          onConnect={wsConnect}
+          onDisconnect={wsDisconnect}
+          onResetCursor={() => {
+            // CRITICAL: Reset data state BEFORE clearing data to avoid straight lines
+            // 1. Reset chart's internal data tracking (seriesHasData, waiting annotations)
+            resetDataState();
+            // 2. Clear all data from SharedDataSeriesPool
+            sharedDataSeriesPool.clearAllData();
+            // 3. Reset cursor and reconnect to fetch fresh data from beginning
+            wsResetCursor(true);
+          }}
+          isConnected={feedState.connected}
+          isConnecting={feedState.stage === 'connecting'}
+          stage={feedState.stage}
+          lastSeq={feedState.lastSeq}
+          heartbeatLag={feedState.heartbeatLag}
+          rate={feedState.rate}
+          gaps={feedState.gaps}
+          wireFormatActive={feedState.wireFormat}
+          visible={true}
+          className="shrink-0 border-b border-border animate-in slide-in-from-top-2 duration-200"
+        />
+      )}
 
       {/* Main Chart Area */}
       {/* When hasMinHeight, allow container to grow beyond flex-1 by using min-h-0 auto and removing flex-1 constraint */}
