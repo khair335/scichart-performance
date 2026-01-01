@@ -92,13 +92,9 @@ export function DynamicPlotGrid({
     // Grid format: [M, N] where M = rows, N = columns (like a matrix)
     const [rows, cols] = layout.layout.grid;
 
-    // Create a layout ID to detect changes - include series assignments to detect layout changes
-    const layoutId = JSON.stringify({
-      panes: layout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
-      series: layout.layout.series?.map(s => ({ series_id: s.series_id, pane: s.pane })) || [],
-      grid: layout.layout.grid,
-      min_height: layout.layout.min_height
-    });
+    // Create a layout ID to detect changes - use full JSON to detect ANY change
+    // This ensures reloading the same file with modifications triggers a refresh
+    const layoutId = JSON.stringify(layout.layout);
 
     // Reset and clear everything if layout changed
     if (lastLayoutIdRef.current !== layoutId) {

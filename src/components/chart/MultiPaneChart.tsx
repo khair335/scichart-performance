@@ -3990,13 +3990,9 @@ export function useMultiPaneChart({
     }
 
     // Create a stable layout ID to detect actual layout changes
-    // CRITICAL: Include both pane structure AND series assignments in the layout ID
-    // This ensures layout changes are detected when series assignments change (e.g., ES vs MESU5s)
-    const layoutId = JSON.stringify({
-      panes: plotLayout.layout.panes.map(p => ({ id: p.id, row: p.row, col: p.col })),
-      series: plotLayout.layout.series.map(s => ({ series_id: s.series_id, pane: s.pane })),
-      minimap: plotLayout.layout.minimap?.source?.series_id || null,
-    });
+    // CRITICAL: Use full JSON stringify to detect ANY change in the layout
+    // This ensures reloading the same file with modifications triggers a refresh
+    const layoutId = JSON.stringify(plotLayout.layout);
 
     // If layout changed, reset everything
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
