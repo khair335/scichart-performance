@@ -286,6 +286,10 @@ interface UIConfig {
     maxAutoTicks: number;
     fifoEnabled?: boolean;
     fifoSweepSize?: number;
+    // Resampling settings: "None" | "Auto" | "MinMax" | "MinMaxWithUnevenSpacing" | "Mid" | "Max" | "Min"
+    resamplingMode?: string;
+    // Resampling precision: higher = better quality, lower = better performance (1-10)
+    resamplingPrecision?: number;
   };
   chart: {
     separateXAxes: boolean;
@@ -406,9 +410,11 @@ export function useMultiPaneChart({
       targetFPS: 60,
       batchSize: 5000, // Large batches for SciChart's WebGL efficiency
       downsampleRatio: 1, // CRITICAL: No downsampling - plot all data points
-      maxAutoTicks: 6,
+      maxAutoTicks: 10,
       fifoEnabled: true,
       fifoSweepSize: 100000, // Larger FIFO sweep for high-throughput data
+      resamplingMode: 'Auto', // None, Auto, MinMax, MinMaxWithUnevenSpacing, Mid, Max, Min
+      resamplingPrecision: 1, // Quality vs performance (1-10, higher = better quality)
     },
     chart: {
       separateXAxes: false,
@@ -521,8 +527,28 @@ export function useMultiPaneChart({
   const getSeriesCapacity = (): number => {
     return config.data?.buffers.pointsPerSeries ?? 1_000_000;
   };
+  
+  // Helper to convert resampling mode string to SciChart enum
+  const getResamplingMode = (): EResamplingMode => {
+    const modeStr = config.performance.resamplingMode ?? 'Auto';
+    switch (modeStr) {
+      case 'None': return EResamplingMode.None;
+      case 'MinMax': return EResamplingMode.MinMax;
+      case 'MinMaxWithUnevenSpacing': return EResamplingMode.MinMaxWithUnevenSpacing;
+      case 'Mid': return EResamplingMode.Mid;
+      case 'Max': return EResamplingMode.Max;
+      case 'Min': return EResamplingMode.Min;
+      case 'Auto':
+      default: return EResamplingMode.Auto;
+    }
+  };
+  
+  // Helper to get resampling precision (affects quality vs performance)
+  const getResamplingPrecision = (): number => {
+    return config.performance.resamplingPrecision ?? 1;
+  };
 
-  // Helper to calculate default X-axis range from plot layout
+
   const calculateDefaultXAxisRange = (
     defaultRange: PlotLayout['xAxis']['defaultRange'],
     latestTime: number,
@@ -967,7 +993,8 @@ export function useMultiPaneChart({
           strokeDown: '#ef5350',
           brushDown: '#ef535088',
           strokeThickness: 1,
-          resamplingMode: EResamplingMode.Auto,
+          resamplingMode: getResamplingMode(),
+          resamplingPrecision: getResamplingPrecision(),
         });
       } else {
         // Get series assignment from layout for styling
@@ -997,7 +1024,8 @@ export function useMultiPaneChart({
             fill: fill,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto,
+            resamplingMode: getResamplingMode(),
+            resamplingPrecision: getResamplingPrecision(),
           });
         } else {
           renderableSeries = new FastLineRenderableSeries(wasm, {
@@ -1005,7 +1033,8 @@ export function useMultiPaneChart({
             stroke: stroke,
             strokeThickness: strokeThickness,
             pointMarker: pointMarker,
-            resamplingMode: EResamplingMode.Auto,
+            resamplingMode: getResamplingMode(),
+            resamplingPrecision: getResamplingPrecision(),
           });
         }
       }
@@ -3093,7 +3122,6 @@ export function useMultiPaneChart({
           // Get point marker setting from layout
           const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined; // TODO: Implement point markers if needed
           
-          // Create renderable series based on layout type
           if (renderableSeriesType === 'FastMountainRenderableSeries') {
             renderableSeries = new FastMountainRenderableSeries(wasm, {
               dataSeries: dataSeries as XyDataSeries,
@@ -3101,7 +3129,8 @@ export function useMultiPaneChart({
               fill: fill,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: EResamplingMode.Auto,
+              resamplingMode: getResamplingMode(),
+              resamplingPrecision: getResamplingPrecision(),
             });
           } else {
             // Default to FastLineRenderableSeries
@@ -3110,7 +3139,8 @@ export function useMultiPaneChart({
               stroke: stroke,
               strokeThickness: strokeThickness,
               pointMarker: pointMarker,
-              resamplingMode: EResamplingMode.Auto,
+              resamplingMode: getResamplingMode(),
+              resamplingPrecision: getResamplingPrecision(),
             });
           }
         }
@@ -3279,7 +3309,8 @@ export function useMultiPaneChart({
                 stroke: markerStroke,
                 strokeThickness: markerStrokeThickness,
                 pointMarker: undefined,
-                resamplingMode: EResamplingMode.Auto,
+                resamplingMode: getResamplingMode(),
+                resamplingPrecision: getResamplingPrecision(),
               });
               
               // Set visibility to match primary series
@@ -4805,7 +4836,8 @@ export function useMultiPaneChart({
                       fill: fill,
                       strokeThickness: strokeThickness,
                       pointMarker: pointMarker,
-                      resamplingMode: EResamplingMode.Auto,
+                      resamplingMode: getResamplingMode(),
+                      resamplingPrecision: getResamplingPrecision(),
                     });
                   } else {
                     renderableSeries = new FastLineRenderableSeries(wasm, {
@@ -4813,7 +4845,8 @@ export function useMultiPaneChart({
                       stroke: stroke,
                       strokeThickness: strokeThickness,
                       pointMarker: pointMarker,
-                      resamplingMode: EResamplingMode.Auto,
+                      resamplingMode: getResamplingMode(),
+                      resamplingPrecision: getResamplingPrecision(),
                     });
                   }
                 }
@@ -4983,10 +5016,11 @@ export function useMultiPaneChart({
             entry.renderableSeries.isVisible = isInLayout !== false;
           }
           
-          // Set resampling mode for all series - use Auto for better performance
-          // Auto resampling significantly reduces CPU usage by rendering only visible pixels
+          // Set resampling mode for all series - use configured mode
+          // Resampling reduces CPU usage by rendering only visible pixels
           if (entry.renderableSeries instanceof FastLineRenderableSeries) {
-            entry.renderableSeries.resamplingMode = EResamplingMode.Auto;
+            entry.renderableSeries.resamplingMode = getResamplingMode();
+            entry.renderableSeries.resamplingPrecision = getResamplingPrecision();
           }
         }
       });

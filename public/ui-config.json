@@ -26,10 +26,12 @@
     "targetFPS": 60,
     "batchSize": 5000,
     "downsampleRatio": 1,
-    "maxAutoTicks": 6,
+    "maxAutoTicks": 10,
     "fifoEnabled": true,
     "fifoSweepSize": 100000,
-    "updateIntervalMs": 16
+    "updateIntervalMs": 16,
+    "resamplingMode": "Auto",
+    "resamplingPrecision": 1
   },
   "chart": {
     "separateXAxes": false,
