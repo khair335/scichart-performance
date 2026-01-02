@@ -43,7 +43,12 @@ export function useWebSocketFeed({
   const cursorPolicyRef = useRef(cursorPolicy);
   const useLocalStorageRef = useRef(useLocalStorage);
   const autoReconnectRef = useRef(autoReconnectOption);
-  
+
+  // During a reset+reconnect, the old socket can still deliver a few late frames.
+  // If we accept those, and then replay history from seq=1, we can end up appending
+  // older timestamps after newer ones -> visible “bridge” lines.
+  const suppressSamplesRef = useRef(false);
+
   const [state, setState] = useState<FeedState>({
     stage: 'idle',
     connected: false,
@@ -67,15 +72,15 @@ export function useWebSocketFeed({
   useEffect(() => {
     onSessionCompleteRef.current = onSessionComplete;
   }, [onSessionComplete]);
-  
+
   useEffect(() => {
     cursorPolicyRef.current = cursorPolicy;
   }, [cursorPolicy]);
-  
+
   useEffect(() => {
     useLocalStorageRef.current = useLocalStorage;
   }, [useLocalStorage]);
-  
+
   useEffect(() => {
     autoReconnectRef.current = autoReconnectOption;
     // Update client's auto-reconnect setting if it exists
@@ -85,6 +90,11 @@ export function useWebSocketFeed({
   }, [autoReconnectOption]);
 
   const handleStatus = useCallback((status: FeedStatus) => {
+    // Once the *new* connection starts progressing, allow samples again.
+    if (suppressSamplesRef.current && (status.stage === 'history' || status.stage === 'delta' || status.stage === 'live')) {
+      suppressSamplesRef.current = false;
+    }
+
     setState(prev => ({
       stage: status.stage,
       connected: status.stage === 'live' || status.stage === 'history' || status.stage === 'delta',
@@ -143,29 +153,30 @@ export function useWebSocketFeed({
       autoReconnectInitialDelayMs: 500,
       autoReconnectMaxDelayMs: 5000,
       onSamples: (samples) => {
+        if (suppressSamplesRef.current) return;
         onSamplesRef.current(samples);
       },
       onStatus: handleStatus,
       onRegistry: handleRegistry,
       onEvent: (evt) => {
         handleEvent(evt);
-        
+
         // Handle server restart detection
         if (evt.type === 'init_begin') {
           const minSeq = evt.min_seq as number;
           const wmSeq = evt.wm_seq as number;
           const lastSeq = client.getLastSeq();
-          
+
           if (lastSeq > 0 && (minSeq < lastSeq || wmSeq < lastSeq)) {
             console.log(`[WebSocket] Server restart detected: minSeq=${minSeq}, wmSeq=${wmSeq}, lastSeq=${lastSeq}, resetting cursor`);
             client.resetCursor();
           }
         }
-        
+
         if (evt.type === 'reconnect_scheduled') {
           console.log('[WebSocket] Reconnect scheduled:', evt);
         }
-        
+
         if (evt.type === 'decode_error') {
           console.warn('[WebSocket] Decode error:', evt);
         }
@@ -184,12 +195,19 @@ export function useWebSocketFeed({
   }, []);
   
   const resetCursor = useCallback((reconnect: boolean = false) => {
-    if (clientRef.current) {
-      clientRef.current.resetCursor({ persist: true });
-      if (reconnect) {
-        clientRef.current.close();
-        connect();
-      }
+    if (!clientRef.current) return;
+
+    // Suppress late frames from the old socket so we don't append "new" data and then replay history.
+    suppressSamplesRef.current = true;
+
+    clientRef.current.resetCursor({ persist: true });
+
+    if (reconnect) {
+      clientRef.current.close();
+      connect();
+    } else {
+      // No reconnect: allow samples immediately.
+      suppressSamplesRef.current = false;
     }
   }, [connect]);
   
