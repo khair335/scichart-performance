@@ -7517,6 +7517,25 @@ export function useMultiPaneChart({
 
     console.log('[MultiPaneChart] Resetting data state for Reset Cursor');
 
+    // 0) Cancel any scheduled batch processing + drop any buffered samples.
+    // If we don't, a queued RAF can append pre-reset samples *after* clears, causing out-of-order X
+    // and intermittent “bridge” lines.
+    try {
+      const pending = pendingUpdateRef.current;
+      if (pending !== null) {
+        if (typeof pending === 'number') {
+          cancelAnimationFrame(pending);
+        } else {
+          clearTimeout(pending as any);
+        }
+        pendingUpdateRef.current = null;
+      }
+    } catch {
+      // ignore
+      pendingUpdateRef.current = null;
+    }
+    sampleBufferRef.current = [];
+
     // 1) Clear all DataSeries currently bound to RenderableSeries (dynamic + legacy)
     for (const [, entry] of refs.dataSeriesStore) {
       try {
