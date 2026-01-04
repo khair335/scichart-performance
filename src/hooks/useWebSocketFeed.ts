@@ -13,17 +13,25 @@ interface UseWebSocketFeedOptions {
   autoReconnect?: boolean;
 }
 
-interface FeedState {
+export interface FeedState {
   stage: string;
   connected: boolean;
   lastSeq: number;
   historyProgress: number;
+  historyExpected: number;
+  historyReceived: number;
   rate: number;
   heartbeatLag: number | null;
   registryCount: number;
   sessionComplete: boolean;
   gaps: number;
   wireFormat: string;
+  // Protocol status fields
+  requestedFromSeq: number;
+  serverMinSeq: number;
+  serverWmSeq: number;
+  ringCapacity: number | null;
+  resumeTruncated: boolean;
 }
 
 export function useWebSocketFeed({ 
@@ -54,13 +62,23 @@ export function useWebSocketFeed({
     connected: false,
     lastSeq: 0,
     historyProgress: 0,
+    historyExpected: 0,
+    historyReceived: 0,
     rate: 0,
     heartbeatLag: null,
     registryCount: 0,
     sessionComplete: false,
     gaps: 0,
     wireFormat: '',
+    requestedFromSeq: 0,
+    serverMinSeq: 0,
+    serverWmSeq: 0,
+    ringCapacity: null,
+    resumeTruncated: false,
   });
+  
+  const [notices, setNotices] = useState<Array<{ ts: number; level: string; code: string; text: string; details?: any }>>([]);
+  const MAX_NOTICES = 200;
 
   const [registry, setRegistry] = useState<RegistryRow[]>([]);
 
@@ -100,12 +118,19 @@ export function useWebSocketFeed({
       connected: status.stage === 'live' || status.stage === 'history' || status.stage === 'delta',
       lastSeq: status.lastSeq,
       historyProgress: status.history.pct,
+      historyExpected: status.history.expected,
+      historyReceived: status.history.received,
       rate: status.rate.perSec,
       heartbeatLag: status.heartbeatLagMs,
       registryCount: status.registry.total,
       sessionComplete: prev.sessionComplete,
       gaps: status.gaps?.global?.gaps ?? 0,
       wireFormat: status.wireFormat || '',
+      requestedFromSeq: status.resume?.requestedFromSeq ?? 0,
+      serverMinSeq: status.bounds?.minSeq ?? 0,
+      serverWmSeq: status.bounds?.wmSeq ?? 0,
+      ringCapacity: status.bounds?.ringCapacity ?? null,
+      resumeTruncated: status.resume?.truncated ?? false,
     }));
   }, []);
 
@@ -158,6 +183,22 @@ export function useWebSocketFeed({
       },
       onStatus: handleStatus,
       onRegistry: handleRegistry,
+      onNotice: (notice) => {
+        setNotices(prev => {
+          const newNotices = [...prev, {
+            ts: notice.ts,
+            level: notice.level,
+            code: notice.code,
+            text: notice.text,
+            details: notice.details,
+          }];
+          // Trim to prevent unbounded growth
+          if (newNotices.length > MAX_NOTICES) {
+            return newNotices.slice(-MAX_NOTICES);
+          }
+          return newNotices;
+        });
+      },
       onEvent: (evt) => {
         handleEvent(evt);
 
@@ -239,13 +280,19 @@ export function useWebSocketFeed({
     };
   }, [autoConnect, connect]);
 
+  const clearNotices = useCallback(() => {
+    setNotices([]);
+  }, []);
+
   return {
     state,
     registry,
+    notices,
     connect,
     disconnect,
     resetCursor,
     setAutoReconnect,
     setCursorPolicy,
+    clearNotices,
   };
 }
