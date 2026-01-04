@@ -241,10 +241,12 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const { 
     state: feedState, 
     registry: wsRegistry, 
+    notices: wsNotices,
     connect: wsConnect, 
     disconnect: wsDisconnect, 
     resetCursor: wsResetCursor,
     setCursorPolicy: wsSetCursorPolicy,
+    clearNotices: wsClearNotices,
   } = useWebSocketFeed({
     url: wsUrl,
     onSamples: (samples) => {
@@ -1296,16 +1298,16 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         open={debugPanelOpen}
         onOpenChange={setDebugPanelOpen}
         registry={registry}
-        notices={debugNotices}
+        notices={demoMode ? debugNotices : wsNotices}
         protocolStatus={{
-          requestedFromSeq: feedState.lastSeq > 0 ? 1 : 0,
-          serverMinSeq: 1,
-          serverWmSeq: feedState.lastSeq,
-          ringCapacity: null,
-          resumeTruncated: false,
+          requestedFromSeq: feedState.requestedFromSeq,
+          serverMinSeq: feedState.serverMinSeq,
+          serverWmSeq: feedState.serverWmSeq,
+          ringCapacity: feedState.ringCapacity,
+          resumeTruncated: feedState.resumeTruncated,
           historyProgress: feedState.historyProgress,
-          historyExpected: 0,
-          historyReceived: 0,
+          historyExpected: feedState.historyExpected,
+          historyReceived: feedState.historyReceived,
         }}
         samples={debugSamples}
       />
