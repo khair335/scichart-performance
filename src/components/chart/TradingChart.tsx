@@ -196,6 +196,9 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [layoutHistory, setLayoutHistory] = useState<Array<{ name: string; path?: string; layoutJson?: any; loadedAt: number }>>([]);
   
+  // Store loaded ui-config for passing to MultiPaneChart
+  const [loadedUiConfig, setLoadedUiConfig] = useState<any>(null);
+  
   // Time window presets from config
   const [timeWindowPresets, setTimeWindowPresets] = useState<Array<{ label: string; minutes: number }>>([
     { label: 'Last 15 min', minutes: 15 },
@@ -292,6 +295,11 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         }
 
         const config = await configResponse.json();
+        
+        // Store the full config for passing to MultiPaneChart (for resampling settings, etc.)
+        if (mounted) {
+          setLoadedUiConfig(config);
+        }
         
         // Load UI settings from config
         if (config.ui && mounted) {
@@ -414,7 +422,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     onGpuUpdate: (drawCalls) => setGpuMetrics({ drawCalls, triangles: 0 }),
     visibleSeries,
     feedStage: demoMode ? 'demo' : feedState.stage,
-    uiConfig: uiConfig,
+    uiConfig: uiConfig ?? loadedUiConfig,
     registry: registry, // Pass registry for global data clock calculation
     onTimeWindowChanged: (window) => {
       // Sync Toolbar display when time window changes (from minimap or setTimeWindow)
