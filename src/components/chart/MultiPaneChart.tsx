@@ -7545,6 +7545,17 @@ export function useMultiPaneChart({
       }
     }
 
+    // 1b) Clear minimap data series to prevent stray lines in minimap
+    try {
+      const minimapDataSeries = (refs as any).minimapDataSeries;
+      if (minimapDataSeries && typeof minimapDataSeries.clear === 'function') {
+        minimapDataSeries.clear();
+        console.log('[MultiPaneChart] Minimap data series cleared');
+      }
+    } catch {
+      // ignore
+    }
+
     // 2) Reset pane-level data flags so panes go back to "Waiting for Data..."
     for (const [, paneSurface] of refs.paneSurfaces) {
       paneSurface.hasData = false;
