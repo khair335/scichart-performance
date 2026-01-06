@@ -2,7 +2,10 @@
   "transport": {
     "wsUrl": "ws://127.0.0.1:8765",
     "binary": false,
-    "useWorker": false
+    "useWorker": false,
+    "autoReconnect": true,
+    "useLocalStorage": false,
+    "cursorPolicy": "auto"
   },
   "ingest": {
     "targetTransferHz": 60,
