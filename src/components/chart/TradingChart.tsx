@@ -313,6 +313,23 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
             setTimeWindowPresets(config.ui.timeWindowPresets);
           }
         }
+        
+        // Load transport/connection settings from config
+        if (config.transport && mounted) {
+          if (config.transport.wsUrl) {
+            setWsUrl(config.transport.wsUrl);
+          }
+          if (typeof config.transport.autoReconnect === 'boolean') {
+            setAutoReconnect(config.transport.autoReconnect);
+          }
+          if (typeof config.transport.useLocalStorage === 'boolean') {
+            setUseLocalStorage(config.transport.useLocalStorage);
+          }
+          if (config.transport.cursorPolicy && ['auto', 'resume', 'from_start'].includes(config.transport.cursorPolicy)) {
+            setCursorPolicy(config.transport.cursorPolicy as CursorPolicy);
+            wsSetCursorPolicy(config.transport.cursorPolicy as any);
+          }
+        }
 
         // Check for defaultLayoutPath
         if (config.defaultLayoutPath && mounted) {
