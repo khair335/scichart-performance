@@ -135,7 +135,6 @@ export function useWebSocketFeed({
   }, []);
 
   const handleRegistry = useCallback((rows: RegistryRow[]) => {
-    console.log(`[useWebSocketFeed] 📋 Registry updated: ${rows.length} series`, rows.map(r => r.id).slice(0, 5));
     setRegistry(rows);
   }, []);
 

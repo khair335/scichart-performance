@@ -46,7 +46,6 @@ export function DynamicPlotGrid({
 
     // Detect if min_height actually changed
     if (lastMinHeightRef.current !== minHeightValue) {
-      console.log('[DynamicPlotGrid] min_height changed:', lastMinHeightRef.current, '->', minHeightValue);
       lastMinHeightRef.current = minHeightValue;
     }
 
@@ -134,7 +133,6 @@ export function DynamicPlotGrid({
     // Apply min-height to parent container (also done in separate useEffect for reliability)
     if (parentRef.current) {
       if (hasMinHeight && minHeight) {
-        console.log('[DynamicPlotGrid] Setting min-height in main effect:', minHeight);
         parentRef.current.style.minHeight = `${minHeight}px`;
         parentRef.current.style.height = 'auto';
         parentRef.current.style.overflow = 'visible'; // Allow scrolling when min_height > page height
@@ -297,13 +295,11 @@ export function DynamicPlotGrid({
   useEffect(() => {
     if (parentRef.current && layout) {
       if (hasMinHeight && minHeight) {
-        console.log('[DynamicPlotGrid] Setting min-height (layout effect):', minHeight);
         parentRef.current.style.minHeight = `${minHeight}px`;
         parentRef.current.style.height = 'auto';
         parentRef.current.style.overflow = 'visible'; // Allow scrolling when min_height > page height
         parentRef.current.style.overflowX = 'hidden'; // Prevent horizontal scroll
       } else {
-        console.log('[DynamicPlotGrid] Clearing min-height (layout effect)');
         parentRef.current.style.minHeight = '';
         parentRef.current.style.height = '';
         parentRef.current.style.overflow = '';

@@ -5530,29 +5530,6 @@ export function useMultiPaneChart({
     const autoScrollEnabled = isLiveRef.current && !userInteractedRef.current && !settingTimeWindowRef.current &&
       (minimapStickyRef.current || (hasSelectedWindow && (isLive || isLiveRef.current)));
     
-    // DEBUG: Log why auto-scroll is enabled/disabled (throttled to avoid spam)
-    const logNow = performance.now();
-    const lastLogTime = (window as any).__lastAutoScrollLogTime || 0;
-    const shouldLog = logNow - lastLogTime > 2000; // Log every 2 seconds max
-    
-    if (shouldLog) {
-      (window as any).__lastAutoScrollLogTime = logNow;
-    }
-    
-    if (shouldLog && (hasSelectedWindow || minimapStickyRef.current)) {
-      if (!autoScrollEnabled) {
-        console.log(`[Auto-scroll] ❌ DISABLED - Flags:`, {
-          ...debugFlags,
-          reason: !isLiveRef.current ? 'isLiveRef=false' :
-                  userInteractedRef.current ? 'userInteracted=true' :
-                  settingTimeWindowRef.current ? 'settingTimeWindow=true' :
-                  !minimapStickyRef.current && !hasSelectedWindow ? 'no sticky/minimap' :
-                  'unknown'
-        });
-      } else {
-        console.log(`[Auto-scroll] ✅ ENABLED - Flags:`, debugFlags);
-      }
-    }
     
     // CRITICAL: Allow auto-scroll if either feedStage is 'live' OR user explicitly enabled live mode
     // This ensures auto-scroll works immediately when live mode is toggled, even if feedStage hasn't reached 'live' yet
@@ -5564,18 +5541,6 @@ export function useMultiPaneChart({
       onAutoScrollChange(shouldRunAutoScroll);
     }
     
-    if (shouldLog && !shouldRunAutoScroll && (hasSelectedWindow || minimapStickyRef.current)) {
-      console.log(`[Auto-scroll] ⏸️ NOT RUNNING - Conditions:`, {
-        isLive,
-        isLiveRef: isLiveRef.current,
-        autoScrollEnabled,
-        latestTime,
-        reason: !(isLive || isLiveRef.current) ? 'not in live mode' :
-                !autoScrollEnabled ? 'autoScrollEnabled=false (see above)' :
-                latestTime <= 0 ? 'no latestTime' :
-                'unknown'
-      });
-    }
     
     if (shouldRunAutoScroll) {
       const now = performance.now();
