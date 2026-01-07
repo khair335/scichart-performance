@@ -2680,39 +2680,18 @@ export function useMultiPaneChart({
     }
     prevRegistryLengthRef.current = registry.length;
     
-    // Log when effect runs to debug state updates
-    console.log(`[MultiPaneChart] 🔄 Preallocation effect triggered: registry=${registry.length}, panes=${refs.paneSurfaces.size}, isReady=${isReady}, panesReadyCount=${panesReadyCount}, hasPlotLayout=${!!plotLayout}`);
+    // Preallocation effect - only log warnings for issues
     
     // Check if we have either legacy surfaces OR dynamic panes
     const hasLegacySurfaces = refs.tickSurface && refs.ohlcSurface && refs.tickWasm && refs.ohlcWasm;
     const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
     
     if (!hasLegacySurfaces && !hasDynamicPanes) {
-      console.log('[MultiPaneChart] ⏸️ Preallocation skipped: no surfaces ready', {
-        hasLegacySurfaces,
-        hasDynamicPanes: plotLayout && refs.paneSurfaces.size > 0,
-        paneSurfacesCount: refs.paneSurfaces.size
-      });
       return;
     }
     if (!registry || registry.length === 0) {
-      console.log('[MultiPaneChart] ⏸️ Preallocation skipped: registry empty', {
-        registry: registry?.length || 0,
-        panesReady: refs.paneSurfaces.size > 0,
-        isReady,
-        hasPlotLayout: !!plotLayout
-      });
-      
-      // CRITICAL: The effect will automatically re-run when registry changes (it's in dependency array)
-      // But log this so we can track when registry arrives
-      if (hasDynamicPanes && isReady && plotLayout) {
-        console.log('[MultiPaneChart] ⏳ Waiting for registry to populate (effect will re-run when registry changes)');
-      }
-      
       return;
     }
-    
-    console.log(`[MultiPaneChart] 🔄 Preallocation check: registry=${registry.length}, panes=${refs.paneSurfaces.size}, isReady=${isReady}`);
 
     // CRITICAL: For dynamic panes, ensure panes are created AND match the current layout
     if (plotLayout) {
@@ -2721,49 +2700,23 @@ export function useMultiPaneChart({
       
       // Check if we have the right number of panes
       if (refs.paneSurfaces.size === 0) {
-        console.warn('[MultiPaneChart] ⚠️ Preallocation skipped: dynamic panes not created yet', {
-          registryLength: registry.length,
-          plotLayoutPanes: layoutPanes.size,
-          paneSurfacesCount: refs.paneSurfaces.size,
-          isReady
-        });
         return;
       }
       
       // CRITICAL: Check if existing panes match the current layout
-      // This prevents trying to create series for new layout using old panes
       const panesMatch = layoutPanes.size === existingPanes.size && 
         Array.from(layoutPanes).every(paneId => existingPanes.has(paneId));
       
       if (!panesMatch) {
-        console.warn('[MultiPaneChart] ⚠️ Preallocation skipped: panes don\'t match current layout', {
-          registryLength: registry.length,
-          layoutPanes: Array.from(layoutPanes),
-          existingPanes: Array.from(existingPanes),
-          paneSurfacesCount: refs.paneSurfaces.size,
-          isReady
-        });
         return;
       }
     }
     if (!isReady) {
-      console.log('[MultiPaneChart] ⏸️ Preallocation skipped: chart not ready');
       return; // Wait for charts to be initialized
     }
     
-    // Log registry vs layout comparison for debugging
     const layoutSeriesIds = plotLayout?.layout?.series?.map(s => s.series_id) || [];
     const registrySeriesIdsArray = registry.map(r => r.id);
-    const inLayout = registrySeriesIdsArray.filter(id => layoutSeriesIds.includes(id));
-    const notInLayout = registrySeriesIdsArray.filter(id => !layoutSeriesIds.includes(id));
-    
-    console.log(`[MultiPaneChart] 🔄 Starting preallocation: ${registry.length} in registry, ${layoutSeriesIds.length} in layout`);
-    if (inLayout.length > 0) {
-      console.log(`[MultiPaneChart] ✅ Series in layout (will be created): ${inLayout.join(', ')}`);
-    }
-    if (notInLayout.length > 0) {
-      console.log(`[MultiPaneChart] ⏭️ Series NOT in layout (will be skipped): ${notInLayout.slice(0, 10).join(', ')}${notInLayout.length > 10 ? ` ... (+${notInLayout.length - 10} more)` : ''}`);
-    }
     
     // Early return: Check if all series IN THE CURRENT LAYOUT are already preallocated
     // CRITICAL: Only check series that are in the current layout, not all registry series
@@ -2788,21 +2741,11 @@ export function useMultiPaneChart({
     
     const missingSeries = chartableSeriesInLayout.filter(regEntry => !preallocatedSeriesIds.has(regEntry.id));
     
-    console.log(`[MultiPaneChart] 📊 Preallocation status: ${preallocatedSeriesIds.size} preallocated, ${missingSeries.length} missing from ${chartableSeriesInLayout.length} chartable in layout (${registry.length} total in registry)`);
-    
     if (missingSeries.length === 0 && chartableSeriesInLayout.length > 0) {
-      // All chartable series IN THE CURRENT LAYOUT are already preallocated, skip this run
-      console.log(`[MultiPaneChart] ✅ All ${chartableSeriesInLayout.length} chartable series in layout already preallocated (dataSeriesStore has ${refs.dataSeriesStore.size} entries, ${preallocatedSeriesIds.size} fully created)`);
-      return;
-    } else if (missingSeries.length > 0) {
-      console.log(`[MultiPaneChart] 📋 Preallocation needed: ${missingSeries.length} missing, ${preallocatedSeriesIds.size} already created. Missing: ${missingSeries.slice(0, 5).map(r => r.id).join(', ')}${missingSeries.length > 5 ? ` ... (+${missingSeries.length - 5} more)` : ''}`);
+      return; // All chartable series already preallocated
     }
     
-    // CRITICAL: Only count missing series that are in the CURRENT layout
-    // This ensures we create series for the new layout when layout changes
     const missingCount = missingSeries.length;
-    
-    console.log(`[MultiPaneChart] 📊 Preallocation status: ${preallocatedSeriesIds.size} preallocated, ${missingCount} missing from ${chartableSeriesInLayout.length} chartable in layout (${registry.length} total in registry)`);
     
     const capacity = getSeriesCapacity();
     
