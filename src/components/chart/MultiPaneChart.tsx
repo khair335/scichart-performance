@@ -286,10 +286,16 @@ interface UIConfig {
     maxAutoTicks: number;
     fifoEnabled?: boolean;
     fifoSweepSize?: number;
+    updateIntervalMs?: number; // Min ms between RAF triggers (default: 16 = 60fps)
     // Resampling settings: "None" | "Auto" | "MinMax" | "MinMaxWithUnevenSpacing" | "Mid" | "Max" | "Min"
     resamplingMode?: string;
     // Resampling precision: higher = better quality, lower = better performance (1-10)
     resamplingPrecision?: number;
+  };
+  // UI drain settings for chunk processing
+  uiDrain?: {
+    maxBatchesPerFrame?: number; // Max chunks per animation frame (default: 16)
+    maxMsPerFrame?: number; // Delay between chunks in ms (default: 0 = immediate)
   };
   chart: {
     separateXAxes: boolean;
@@ -5057,9 +5063,15 @@ export function useMultiPaneChart({
 
   // CHUNKED batch processing to prevent UI freezes
   // Processes samples in smaller chunks, yielding to browser between chunks
-  const CHUNK_SIZE = 5000; // Process 5000 samples per frame to prevent blocking
+  // Now config-driven via ui-config.json performance.batchSize
+  const getChunkSize = useCallback(() => config?.performance?.batchSize ?? 5000, [config]);
+  const getChunkDelay = useCallback(() => config?.uiDrain?.maxMsPerFrame ?? 0, [config]);
+  const getMaxBatchesPerFrame = useCallback(() => config?.uiDrain?.maxBatchesPerFrame ?? 16, [config]);
+  const getUpdateInterval = useCallback(() => config?.performance?.updateIntervalMs ?? 16, [config]);
+  
   const processingQueueRef = useRef<Sample[]>([]);
   const isProcessingRef = useRef(false);
+  const batchCountRef = useRef(0);
   
   // Buffer for samples that were skipped because series didn't exist yet
   // These will be reprocessed after series are created
@@ -5892,24 +5904,43 @@ export function useMultiPaneChart({
     // Start chunked processing
     isProcessingRef.current = true;
     
+    // Reset batch counter for this frame
+    batchCountRef.current = 0;
+    const maxBatches = getMaxBatchesPerFrame();
+    const chunkSize = getChunkSize();
+    const chunkDelay = getChunkDelay();
+    
     const processNextChunk = () => {
-      if (processingQueueRef.current.length === 0) {
+      // Stop if queue empty or hit max batches per frame
+      if (processingQueueRef.current.length === 0 || batchCountRef.current >= maxBatches) {
         isProcessingRef.current = false;
+        
+        // If more data remains, schedule next frame
+        if (processingQueueRef.current.length > 0) {
+          requestAnimationFrame(() => processBatchedSamples());
+        }
         return;
       }
       
-      // Take next chunk
-      const chunk = processingQueueRef.current.splice(0, CHUNK_SIZE);
+      batchCountRef.current++;
+      
+      // Take next chunk (config-driven size)
+      const chunk = processingQueueRef.current.splice(0, chunkSize);
       
       // Process this chunk
       processChunk(chunk);
       
-      // If more samples in queue, schedule next chunk with setTimeout(0)
-      // This yields to the browser, preventing UI freeze
-      if (processingQueueRef.current.length > 0) {
-        setTimeout(processNextChunk, 0);
+      // If more samples in queue, schedule next chunk with configurable delay
+      // chunkDelay=0 for max speed, higher values for smoother UI responsiveness
+      if (processingQueueRef.current.length > 0 && batchCountRef.current < maxBatches) {
+        setTimeout(processNextChunk, chunkDelay);
       } else {
         isProcessingRef.current = false;
+        
+        // If more data remains after hitting batch limit, schedule next frame
+        if (processingQueueRef.current.length > 0) {
+          requestAnimationFrame(() => processBatchedSamples());
+        }
       }
     };
     
@@ -6884,12 +6915,31 @@ export function useMultiPaneChart({
     // Only schedule processing if we have series ready to receive data
     // Otherwise, samples will stay in sampleBufferRef until series are created
     if (pendingUpdateRef.current === null && (hasSeries || isReady)) {
-      // Use requestAnimationFrame for smooth 60fps rendering
-      // Unlike the previous complex scheduling, just use RAF consistently
-      pendingUpdateRef.current = requestAnimationFrame(() => {
-        pendingUpdateRef.current = null;
-        processBatchedSamples();
-      });
+      // Config-driven frame throttling via performance.updateIntervalMs
+      const now = performance.now();
+      const updateInterval = getUpdateInterval();
+      const timeSinceLastRender = now - lastRenderTimeRef.current;
+      
+      // Only schedule if enough time has passed since last render
+      if (timeSinceLastRender >= updateInterval) {
+        lastRenderTimeRef.current = now;
+        pendingUpdateRef.current = requestAnimationFrame(() => {
+          pendingUpdateRef.current = null;
+          processBatchedSamples();
+        });
+      } else {
+        // Schedule for later based on remaining time
+        const delay = updateInterval - timeSinceLastRender;
+        setTimeout(() => {
+          if (pendingUpdateRef.current === null) {
+            lastRenderTimeRef.current = performance.now();
+            pendingUpdateRef.current = requestAnimationFrame(() => {
+              pendingUpdateRef.current = null;
+              processBatchedSamples();
+            });
+          }
+        }, delay);
+      }
     } else if (!hasSeries && !isReady) {
       // Chart not ready yet - samples are buffered and will be processed when series are created
       // Log only occasionally to avoid spam
