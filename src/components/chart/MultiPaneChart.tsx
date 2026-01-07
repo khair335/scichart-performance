@@ -5008,7 +5008,6 @@ export function useMultiPaneChart({
   // Processes samples in smaller chunks, yielding to browser between chunks
   // Now config-driven via ui-config.json performance.batchSize
   const getChunkSize = useCallback(() => config?.performance?.batchSize ?? 5000, [config]);
-  const getChunkDelay = useCallback(() => config?.uiDrain?.maxMsPerFrame ?? 0, [config]);
   const getMaxBatchesPerFrame = useCallback(() => config?.uiDrain?.maxBatchesPerFrame ?? 16, [config]);
   const getUpdateInterval = useCallback(() => config?.performance?.updateIntervalMs ?? 16, [config]);
   
@@ -5791,6 +5790,7 @@ export function useMultiPaneChart({
   }, [onDataClockUpdate, config, feedStage, plotLayout, layoutManager]);
   
   // Main processBatchedSamples - handles chunking to prevent UI freezes
+  // OPTIMIZED: Uses true async yielding to prevent main thread blocking during history load
   const processBatchedSamples = useCallback(() => {
     // Move samples from buffer to processing queue
     // Use concat instead of spread to avoid "Maximum call stack size exceeded" with large arrays
@@ -5816,44 +5816,42 @@ export function useMultiPaneChart({
     batchCountRef.current = 0;
     const maxBatches = getMaxBatchesPerFrame();
     const chunkSize = getChunkSize();
-    const chunkDelay = getChunkDelay();
     
-    const processNextChunk = () => {
-      // Stop if queue empty or hit max batches per frame
-      if (processingQueueRef.current.length === 0 || batchCountRef.current >= maxBatches) {
-        isProcessingRef.current = false;
+    // OPTIMIZED: Use async processing with true yielding to prevent UI freezes
+    // This ensures the browser can process events (pointermove, etc.) between chunks
+    const processChunksAsync = async () => {
+      const startTime = performance.now();
+      const MAX_MS_PER_FRAME = 16; // Target 60fps - yield if we exceed this
+      
+      while (processingQueueRef.current.length > 0 && batchCountRef.current < maxBatches) {
+        batchCountRef.current++;
         
-        // If more data remains, schedule next frame
-        if (processingQueueRef.current.length > 0) {
-          requestAnimationFrame(() => processBatchedSamples());
+        // Take next chunk (config-driven size)
+        const chunk = processingQueueRef.current.splice(0, chunkSize);
+        
+        // Process this chunk
+        processChunk(chunk);
+        
+        // CRITICAL: Yield to the browser after each chunk to prevent UI freezes
+        // This is what prevents 'pointermove' and 'message' handler violations
+        const elapsed = performance.now() - startTime;
+        if (elapsed > MAX_MS_PER_FRAME || processingQueueRef.current.length > 0) {
+          // True yield using Promise + setTimeout(0)
+          // This allows the browser to process pending events
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
         }
-        return;
       }
       
-      batchCountRef.current++;
+      isProcessingRef.current = false;
       
-      // Take next chunk (config-driven size)
-      const chunk = processingQueueRef.current.splice(0, chunkSize);
-      
-      // Process this chunk
-      processChunk(chunk);
-      
-      // If more samples in queue, schedule next chunk with configurable delay
-      // chunkDelay=0 for max speed, higher values for smoother UI responsiveness
-      if (processingQueueRef.current.length > 0 && batchCountRef.current < maxBatches) {
-        setTimeout(processNextChunk, chunkDelay);
-      } else {
-        isProcessingRef.current = false;
-        
-        // If more data remains after hitting batch limit, schedule next frame
-        if (processingQueueRef.current.length > 0) {
-          requestAnimationFrame(() => processBatchedSamples());
-        }
+      // If more data remains after hitting batch limit, schedule next frame
+      if (processingQueueRef.current.length > 0) {
+        requestAnimationFrame(() => processBatchedSamples());
       }
     };
     
-    // Start processing first chunk
-    processNextChunk();
+    // Start async processing
+    processChunksAsync();
   }, [processChunk]);
   
   // CRITICAL: Continuously monitor and remove ZoomExtentsModifier from all surfaces
