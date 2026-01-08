@@ -59,6 +59,7 @@ import {
   type MarkerScatterGroup 
 } from '@/lib/strategy-marker-scatter';
 import { sharedDataSeriesPool, type PooledDataSeries } from '@/lib/shared-data-series-pool';
+import { chartLogger, safeChartOperation } from '@/lib/chart-logger';
 
 /**
  * Formats a timestamp value to date string with time and milliseconds
@@ -5179,6 +5180,11 @@ export function useMultiPaneChart({
       // CRITICAL: Use dataSeries directly from pool - this persists across layout changes
       for (const [seriesId, batch] of xyBatches) {
         try {
+          // CRITICAL: Check WASM health before appending to prevent cascading failures
+          if (!chartLogger.isWasmHealthy()) {
+            chartLogger.warn('DataAppend', `Skipping XY append for ${seriesId} - WASM unhealthy`);
+            continue;
+          }
           batch.dataSeries.appendRange(batch.x, batch.y);
           // Mark series as having data
           if (batch.x.length > 0) {
@@ -5186,11 +5192,27 @@ export function useMultiPaneChart({
             // Also mark in pool
             sharedDataSeriesPool.markDataReceived(seriesId);
           }
-        } catch (e) {}
+        } catch (e) {
+          // Log WASM errors with full context for debugging
+          const errorStr = String((e as any)?.message || e);
+          if (errorStr.includes('Aborted') || errorStr.includes('memory') || errorStr.includes('wasm')) {
+            chartLogger.critical('DataAppend', `WASM error appending XY data to ${seriesId}`, e, {
+              batchSize: batch.x.length,
+              seriesCount: batch.dataSeries.count(),
+            });
+          } else {
+            chartLogger.error('DataAppend', `Error appending XY data to ${seriesId}`, e);
+          }
+        }
       }
       
       for (const [seriesId, batch] of ohlcBatches) {
         try {
+          // CRITICAL: Check WASM health before appending
+          if (!chartLogger.isWasmHealthy()) {
+            chartLogger.warn('DataAppend', `Skipping OHLC append for ${seriesId} - WASM unhealthy`);
+            continue;
+          }
           batch.dataSeries.appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
           // Mark series as having data
           if (batch.x.length > 0) {
@@ -5198,12 +5220,30 @@ export function useMultiPaneChart({
             // Also mark in pool
             sharedDataSeriesPool.markDataReceived(seriesId);
           }
-        } catch (e) {}
+        } catch (e) {
+          // Log WASM errors with full context for debugging
+          const errorStr = String((e as any)?.message || e);
+          if (errorStr.includes('Aborted') || errorStr.includes('memory') || errorStr.includes('wasm')) {
+            chartLogger.critical('DataAppend', `WASM error appending OHLC data to ${seriesId}`, e, {
+              batchSize: batch.x.length,
+              seriesCount: batch.dataSeries.count(),
+            });
+          } else {
+            chartLogger.error('DataAppend', `Error appending OHLC data to ${seriesId}`, e);
+          }
+        }
       }
     } finally {
       // Resume all surfaces - this triggers a single batched redraw instead of N redraws
       for (const surface of suspendedSurfaces) {
-        try { surface.resumeUpdates(); } catch (e) {}
+        try { 
+          // CRITICAL: Validate surface before resuming
+          if (!(surface as any).isDeleted) {
+            surface.resumeUpdates(); 
+          }
+        } catch (e) {
+          chartLogger.error('SurfaceResume', 'Error resuming surface updates', e);
+        }
       }
       
       // Update waiting annotations after data is appended
@@ -5211,7 +5251,7 @@ export function useMultiPaneChart({
       try {
         updateWaitingAnnotations();
       } catch (e) {
-        console.warn('[MultiPaneChart] Error updating waiting annotations:', e);
+        chartLogger.warn('Annotations', 'Error updating waiting annotations', e);
       }
     }
     
@@ -5685,6 +5725,11 @@ export function useMultiPaneChart({
                     // This ensures the modifier reads the updated axis range when calculating overlay
                     setTimeout(() => {
                       try {
+                        // CRITICAL: Validate surface is still valid before updating
+                        if (!minimapSurface || (minimapSurface as any).isDeleted) {
+                          chartLogger.warn('Minimap', 'Surface deleted before selectedArea update (with axis)');
+                          return;
+                        }
                         // Set re-entry guard before updating selectedArea
                         if (setUpdatingFlag) setUpdatingFlag(true);
                         
@@ -5698,20 +5743,31 @@ export function useMultiPaneChart({
                         
                         if (setUpdatingFlag) setUpdatingFlag(false);
                       } catch (e) {
-                        console.warn('[MultiPaneChart] Error updating minimap selectedArea after delay:', e);
-                        minimapSurface.resumeUpdates();
+                        chartLogger.error('Minimap', 'Error updating minimap selectedArea after delay', e);
+                        try { minimapSurface?.resumeUpdates(); } catch {}
                         if (setUpdatingFlag) setUpdatingFlag(false);
                       }
                     }, 0);
                   } else {
                     // Axis range is already correct, just update selectedArea with delay
                     setTimeout(() => {
-                      if (setUpdatingFlag) setUpdatingFlag(true);
-                      rangeSelectionModifier.selectedArea = newRange;
-                      if (minimapSurface) {
-                        minimapSurface.invalidateElement();
+                      try {
+                        // CRITICAL: Validate surface is still valid before updating
+                        // This prevents "Cannot read properties of undefined (reading 'seriesViewRect')" errors
+                        if (!minimapSurface || (minimapSurface as any).isDeleted) {
+                          chartLogger.warn('Minimap', 'Surface deleted before selectedArea update');
+                          return;
+                        }
+                        if (setUpdatingFlag) setUpdatingFlag(true);
+                        rangeSelectionModifier.selectedArea = newRange;
+                        if (minimapSurface) {
+                          minimapSurface.invalidateElement();
+                        }
+                        if (setUpdatingFlag) setUpdatingFlag(false);
+                      } catch (e) {
+                        chartLogger.error('Minimap', 'Error updating selectedArea', e);
+                        if (setUpdatingFlag) setUpdatingFlag(false);
                       }
-                      if (setUpdatingFlag) setUpdatingFlag(false);
                     }, 0);
                   }
                 }
@@ -5723,12 +5779,22 @@ export function useMultiPaneChart({
               }
             } else {
               // No minimap data yet, just update selectedArea
-              if (setUpdatingFlag) setUpdatingFlag(true);
-              rangeSelectionModifier.selectedArea = newRange;
-              if (minimapSurface) {
-                minimapSurface.invalidateElement();
+              try {
+                // CRITICAL: Validate surface is still valid before updating
+                if (!minimapSurface || (minimapSurface as any).isDeleted) {
+                  chartLogger.warn('Minimap', 'Surface deleted before selectedArea update (no data)');
+                } else {
+                  if (setUpdatingFlag) setUpdatingFlag(true);
+                  rangeSelectionModifier.selectedArea = newRange;
+                  if (minimapSurface) {
+                    minimapSurface.invalidateElement();
+                  }
+                  if (setUpdatingFlag) setUpdatingFlag(false);
+                }
+              } catch (e) {
+                chartLogger.error('Minimap', 'Error updating selectedArea (no data path)', e);
+                if (setUpdatingFlag) setUpdatingFlag(false);
               }
-              if (setUpdatingFlag) setUpdatingFlag(false);
             }
           } catch (e) {
             console.warn('[MultiPaneChart] Error in minimap auto-scroll update:', e);
@@ -7026,11 +7092,15 @@ export function useMultiPaneChart({
         // Update minimap range selection (OverviewRangeSelectionModifier) if it exists
         if (rangeSelectionModifier) {
           try {
-            rangeSelectionModifier.selectedArea = xRange;
-            
+            // CRITICAL: Validate surface before updating selectedArea
+            const minimapSurfaceForUpdate = (chartRefs.current as any).minimapSurface as SciChartSurface | null;
+            if (minimapSurfaceForUpdate && !(minimapSurfaceForUpdate as any).isDeleted) {
+              rangeSelectionModifier.selectedArea = xRange;
+            } else {
+              chartLogger.warn('Minimap', 'Surface not valid in setTimeWindow, skipping selectedArea update');
+            }
             // CRITICAL: Ensure minimap X-axis always shows full data range for correct overlay
             const minimapXAxis = (chartRefs.current as any).minimapXAxis as DateTimeNumericAxis | null;
-            const minimapSurface = (chartRefs.current as any).minimapSurface as SciChartSurface | null;
             const minimapDataSeries = (chartRefs.current as any).minimapDataSeries as XyDataSeries | null;
             if (minimapXAxis && minimapDataSeries && minimapDataSeries.count() > 0) {
               try {
@@ -7041,16 +7111,18 @@ export function useMultiPaneChart({
                       Math.abs(currentAxisRange.min - fullDataRange.min) > 0.001 ||
                       Math.abs(currentAxisRange.max - fullDataRange.max) > 0.001) {
                     minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
-                    if (minimapSurface) {
-                      minimapSurface.invalidateElement();
+                    if (minimapSurfaceForUpdate) {
+                      minimapSurfaceForUpdate.invalidateElement();
                     }
                   }
                 }
               } catch (e) {
-                console.warn('[jumpToLive] Error ensuring minimap X-axis range:', e);
+                chartLogger.warn('Minimap', 'Error ensuring minimap X-axis range in jumpToLive', e);
               }
             }
-          } catch (e) {}
+          } catch (e) {
+            chartLogger.error('Minimap', 'Error in setTimeWindow minimap update', e);
+          }
         }
       }
     } finally {
@@ -7319,11 +7391,16 @@ export function useMultiPaneChart({
     const rangeSelectionModifier = (refs as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
     if (rangeSelectionModifier) {
       try {
-        rangeSelectionModifier.selectedArea = newRange;
+        // CRITICAL: Validate surface before updating selectedArea
+        const minimapSurface = (refs as any).minimapSurface as SciChartSurface | null;
+        if (minimapSurface && !(minimapSurface as any).isDeleted) {
+          rangeSelectionModifier.selectedArea = newRange;
+        } else {
+          chartLogger.warn('Minimap', 'Surface not valid in setTimeWindow, skipping selectedArea update');
+        }
         
         // CRITICAL: Ensure minimap X-axis always shows full data range for correct overlay
         const minimapXAxis = (refs as any).minimapXAxis as DateTimeNumericAxis | null;
-        const minimapSurface = (refs as any).minimapSurface as SciChartSurface | null;
         const minimapDataSeries = (refs as any).minimapDataSeries as XyDataSeries | null;
         if (minimapXAxis && minimapDataSeries && minimapDataSeries.count() > 0) {
           try {
@@ -7340,11 +7417,11 @@ export function useMultiPaneChart({
               }
             }
           } catch (e) {
-            console.warn('[MultiPaneChart] Error ensuring minimap X-axis range in setTimeWindow:', e);
+            chartLogger.warn('Minimap', 'Error ensuring minimap X-axis range in setTimeWindow', e);
           }
         }
       } catch (e) {
-        console.warn('[setTimeWindow] Error updating minimap range selection:', e);
+        chartLogger.error('Minimap', 'Error updating minimap range selection in setTimeWindow', e);
       }
     }
     
