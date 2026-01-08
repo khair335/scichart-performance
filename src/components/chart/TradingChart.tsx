@@ -18,6 +18,30 @@ import { parseSeriesType } from '@/lib/series-namespace';
 import { parsePlotLayout, getDefaultLayout, type ParsedLayout } from '@/types/plot-layout';
 import { DynamicPlotGrid } from './DynamicPlotGrid';
 import { sharedDataSeriesPool } from '@/lib/shared-data-series-pool';
+import { chartLogger } from '@/lib/chart-logger';
+
+// Expose chartLogger on window for debugging in console
+if (typeof window !== 'undefined') {
+  (window as any).chartLogger = chartLogger;
+  
+  // Add global error handler for uncaught errors
+  window.addEventListener('error', (event) => {
+    const errorStr = String(event.error?.message || event.message || '');
+    if (errorStr.includes('Aborted') || 
+        errorStr.includes('memory access out of bounds') ||
+        errorStr.includes('function signature mismatch') ||
+        errorStr.includes('seriesViewRect')) {
+      chartLogger.critical('GlobalError', 'Uncaught WASM/Chart error', event.error, {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+      });
+    }
+  });
+  
+  // Log that the debugger is available
+  console.info('[ChartLogger] Available on window.chartLogger - use chartLogger.downloadLogs() to export');
+}
 
 interface NoConnectionOverlayProps {
   wsUrl: string;
