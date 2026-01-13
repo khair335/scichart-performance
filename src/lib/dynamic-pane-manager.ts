@@ -608,6 +608,35 @@ export class DynamicPaneManager {
         labelStyle: { color: "#9fb2c9" },
       });
 
+      // Custom Y-axis label formatting with adaptive decimal precision
+      // This prevents repeated labels like "1.5, 1.5, 1.5" for narrow data ranges
+      yAxis.labelProvider.formatLabel = (dataValue: number): string => {
+        const visibleRange = yAxis.visibleRange;
+        const rangeSpan = Math.abs(visibleRange.max - visibleRange.min);
+        
+        // Calculate appropriate decimal places based on range span
+        let decimals: number;
+        if (rangeSpan === 0) {
+          decimals = 2;
+        } else if (rangeSpan < 0.001) {
+          decimals = 6;
+        } else if (rangeSpan < 0.01) {
+          decimals = 5;
+        } else if (rangeSpan < 0.1) {
+          decimals = 4;
+        } else if (rangeSpan < 1) {
+          decimals = 3;
+        } else if (rangeSpan < 10) {
+          decimals = 2;
+        } else if (rangeSpan < 100) {
+          decimals = 1;
+        } else {
+          decimals = 0;
+        }
+        
+        return dataValue.toFixed(decimals);
+      };
+
       surface.xAxes.add(xAxis);
       surface.yAxes.add(yAxis);
       
