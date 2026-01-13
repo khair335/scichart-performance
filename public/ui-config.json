@@ -5,7 +5,7 @@
     "useWorker": false,
     "autoReconnect": true,
     "useLocalStorage": false,
-    "cursorPolicy": "auto"
+    "cursorPolicy": "from_start"
   },
   "ingest": {
     "targetTransferHz": 60,
@@ -33,14 +33,14 @@
     "fifoEnabled": true,
     "fifoSweepSize": 100000,
     "updateIntervalMs": 16,
-    "resamplingMode": "Auto",
+    "resamplingMode": "None",
     "resamplingPrecision": 1
   },
   "chart": {
     "separateXAxes": false,
     "autoScroll": true,
     "autoScrollThreshold": 200,
-    "timezone": "UTC"
+    "timezone": "America/Chicago"
   },
   "dataCollection": {
     "continueWhenPaused": true,
