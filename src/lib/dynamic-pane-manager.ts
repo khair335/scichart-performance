@@ -29,6 +29,7 @@ import {
   EExecuteOn,
 } from 'scichart';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
+import { chartLogger } from '@/lib/chart-logger';
 
 export interface PaneSurface {
   surface: SciChartSurface;
@@ -186,35 +187,61 @@ export class DynamicPaneManager {
    */
   setTheme(theme: ChartTheme): void {
     this.theme = theme;
+
+    // If WASM has entered an error state, avoid triggering additional renders.
+    // Many SciChart APIs ultimately cross the WASM boundary; once it aborts,
+    // extra invalidations can cascade failures.
+    if (!chartLogger.isWasmHealthy()) {
+      chartLogger.warn('Theme', 'Skipping DynamicPaneManager.setTheme - WASM unhealthy', {
+        panes: this.paneSurfaces.size,
+      });
+      return;
+    }
     
     // Update parent surface background
     if (this.parentSurface) {
-      this.parentSurface.background = theme.sciChartBackground;
+      try {
+        if (!(this.parentSurface as any).isDeleted) {
+          this.parentSurface.background = theme.sciChartBackground;
+        }
+      } catch (e) {
+        chartLogger.error('Theme', 'Failed to apply theme to parent surface', e);
+      }
     }
     
     // Update all pane surfaces
     for (const [paneId, paneSurface] of this.paneSurfaces) {
       const surface = paneSurface.surface;
-      
-      // Update surface background
-      surface.background = theme.sciChartBackground;
-      
-      // Update X-axis styles
-      const xAxis = paneSurface.xAxis;
-      xAxis.axisTitleStyle = { ...xAxis.axisTitleStyle, color: theme.axisTitleColor };
-      xAxis.labelStyle = { ...xAxis.labelStyle, color: theme.tickTextBrush };
-      xAxis.majorGridLineStyle = { ...xAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
-      xAxis.minorGridLineStyle = { ...xAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
-      
-      // Update Y-axis styles
-      const yAxis = paneSurface.yAxis;
-      yAxis.axisTitleStyle = { ...yAxis.axisTitleStyle, color: theme.axisTitleColor };
-      yAxis.labelStyle = { ...yAxis.labelStyle, color: theme.tickTextBrush };
-      yAxis.majorGridLineStyle = { ...yAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
-      yAxis.minorGridLineStyle = { ...yAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
-      
-      // Invalidate surface to trigger redraw
-      surface.invalidateElement();
+      if (!surface) continue;
+
+      try {
+        if ((surface as any).isDeleted) {
+          chartLogger.warn('Theme', `Skipping theme update for deleted pane surface ${paneId}`);
+          continue;
+        }
+
+        // Update surface background
+        surface.background = theme.sciChartBackground;
+
+        // Update X-axis styles
+        const xAxis = paneSurface.xAxis;
+        xAxis.axisTitleStyle = { ...xAxis.axisTitleStyle, color: theme.axisTitleColor };
+        xAxis.labelStyle = { ...xAxis.labelStyle, color: theme.tickTextBrush };
+        xAxis.majorGridLineStyle = { ...xAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
+        xAxis.minorGridLineStyle = { ...xAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
+
+        // Update Y-axis styles
+        const yAxis = paneSurface.yAxis;
+        yAxis.axisTitleStyle = { ...yAxis.axisTitleStyle, color: theme.axisTitleColor };
+        yAxis.labelStyle = { ...yAxis.labelStyle, color: theme.tickTextBrush };
+        yAxis.majorGridLineStyle = { ...yAxis.majorGridLineStyle, color: theme.majorGridLineBrush };
+        yAxis.minorGridLineStyle = { ...yAxis.minorGridLineStyle, color: theme.minorGridLineBrush };
+
+        // Invalidate surface to trigger redraw
+        surface.invalidateElement();
+      } catch (e) {
+        chartLogger.error('Theme', `Failed to apply theme to pane ${paneId}`, e);
+      }
     }
   }
 

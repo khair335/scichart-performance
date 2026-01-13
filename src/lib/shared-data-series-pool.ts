@@ -14,8 +14,9 @@ import {
   XyDataSeries,
   OhlcDataSeries,
   TSciChart,
-  EResamplingMode,
 } from 'scichart';
+
+import { chartLogger } from '@/lib/chart-logger';
 
 export interface PooledDataSeries {
   dataSeries: XyDataSeries | OhlcDataSeries;
@@ -224,7 +225,13 @@ class SharedDataSeriesPool {
           capacity: this.config.ohlcCapacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: true,
+          // IMPORTANT:
+          // Do NOT set dataEvenlySpacedInX=true for real-time market data.
+          // Tick/indicator timestamps are almost always unevenly spaced.
+          // Incorrectly enabling evenly-spaced optimizations can cause SciChart's
+          // native resamplers to compute invalid indices, which may surface as
+          // "RuntimeError: memory access out of bounds" inside scichart2d.wasm.
+          dataEvenlySpacedInX: false,
         });
       } else {
         dataSeries = new XyDataSeries(this.wasmContext, {
@@ -233,7 +240,9 @@ class SharedDataSeriesPool {
           capacity: this.config.xyCapacity,
           containsNaN: false,
           dataIsSortedInX: true,
-          dataEvenlySpacedInX: true,
+          // IMPORTANT: see comment above (OHLC). Real-time market data is rarely
+          // evenly spaced in X. Keep this false to avoid resampler assumptions.
+          dataEvenlySpacedInX: false,
         });
       }
       
@@ -248,6 +257,19 @@ class SharedDataSeriesPool {
       
       this.pool.set(seriesId, entry);
       console.log(`[SharedDataSeriesPool] Created ${type} series: ${seriesId}`);
+
+      // Record in ChartLogger for crash forensics (low volume: creation happens rarely)
+      chartLogger.info('DataSeriesPool', `Created ${type} series`, {
+        seriesId,
+        seriesType: type,
+        fifoEnabled: this.config.fifoEnabled,
+        fifoCapacity: this.config.fifoEnabled
+          ? (type === 'ohlc' ? this.config.ohlcCapacity : this.config.xyCapacity)
+          : undefined,
+        capacity: type === 'ohlc' ? this.config.ohlcCapacity : this.config.xyCapacity,
+        dataIsSortedInX: true,
+        dataEvenlySpacedInX: false,
+      });
       
       return entry;
     } catch (e) {

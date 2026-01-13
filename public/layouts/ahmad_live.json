@@ -1,0 +1,55 @@
+{
+  "layout_mode": "multi_surface",
+  "grid": [2, 1],
+  "min_height": 1000,
+  "xAxis": {
+    "defaultRange": {
+      "mode": "session"
+    }
+  },
+  "minimap": {
+    "source": {
+      "series_id": "MESH6:ticks",
+      "yField": "y"
+    }
+  },
+  "panes": [
+    {
+      "id": "top",
+      "row": 0,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "Tick Price & Indicators"
+    },
+    {
+      "id": "bottom",
+      "row": 1,
+      "col": 0,
+      "height": 1,
+      "width": 1,
+      "title": "OHLC Bars"
+    }
+  ],
+  "series": [
+    {
+      "series_id": "MESH6:ticks",
+      "pane": "top",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESH6:vwap",
+      "pane": "top",
+      "type": "FastLineRenderableSeries"
+    },
+    {
+      "series_id": "MESH6:ybar",
+      "pane": "bottom",
+      "type": "FastLineRenderableSeries"
+    }
+  ],
+  "meta": {
+    "version": "1.0",
+    "description": "1x2 vertical layout - stacked panes"
+  }
+}

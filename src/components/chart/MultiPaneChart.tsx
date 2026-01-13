@@ -145,6 +145,266 @@ function restoreOriginalLabelProvider(labelProvider: any) {
   }
 }
 
+type BatchSanitizationStats = {
+  seriesId: string;
+  type: 'xy' | 'ohlc';
+  inCount: number;
+  outCount: number;
+  droppedNonFinite: number;
+  droppedOutOfOrder: number;
+  prevX?: number;
+  firstX?: number;
+  lastX?: number;
+  minDx?: number;
+  maxDx?: number;
+};
+
+function sanitizeSortedXyBatch(
+  seriesId: string,
+  x: number[],
+  y: number[],
+  prevX: number | undefined
+): {
+  x: number[];
+  y: number[];
+  stats: BatchSanitizationStats;
+  nextX: number | undefined;
+  changed: boolean;
+} {
+  const n = x.length;
+  let droppedNonFinite = 0;
+  let droppedOutOfOrder = 0;
+  let needsFilter = false;
+
+  // First pass: detect if we need filtering while computing stats
+  let last = prevX ?? -Infinity;
+  let minDx = Infinity;
+  let maxDx = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const xi = x[i];
+    const yi = y[i];
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) {
+      droppedNonFinite++;
+      needsFilter = true;
+      continue;
+    }
+    if (xi < last) {
+      droppedOutOfOrder++;
+      needsFilter = true;
+      continue;
+    }
+    if (Number.isFinite(last) && last !== -Infinity) {
+      const dx = xi - last;
+      if (dx < minDx) minDx = dx;
+      if (dx > maxDx) maxDx = dx;
+    }
+    last = xi;
+  }
+
+  if (!needsFilter) {
+    const firstX = n > 0 ? x[0] : undefined;
+    const lastX = n > 0 ? x[n - 1] : undefined;
+    const stats: BatchSanitizationStats = {
+      seriesId,
+      type: 'xy',
+      inCount: n,
+      outCount: n,
+      droppedNonFinite: 0,
+      droppedOutOfOrder: 0,
+      prevX,
+      firstX,
+      lastX,
+      minDx: Number.isFinite(minDx) ? minDx : undefined,
+      maxDx: Number.isFinite(maxDx) ? maxDx : undefined,
+    };
+    return { x, y, stats, nextX: lastX ?? prevX, changed: false };
+  }
+
+  // Second pass: filter to monotonic + finite
+  const x2: number[] = [];
+  const y2: number[] = [];
+  last = prevX ?? -Infinity;
+  minDx = Infinity;
+  maxDx = -Infinity;
+  let firstKept: number | undefined;
+  let lastKept: number | undefined;
+
+  for (let i = 0; i < n; i++) {
+    const xi = x[i];
+    const yi = y[i];
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
+    if (xi < last) continue;
+
+    if (Number.isFinite(last) && last !== -Infinity) {
+      const dx = xi - last;
+      if (dx < minDx) minDx = dx;
+      if (dx > maxDx) maxDx = dx;
+    }
+
+    if (firstKept === undefined) firstKept = xi;
+    x2.push(xi);
+    y2.push(yi);
+    last = xi;
+    lastKept = xi;
+  }
+
+  const stats: BatchSanitizationStats = {
+    seriesId,
+    type: 'xy',
+    inCount: n,
+    outCount: x2.length,
+    droppedNonFinite,
+    droppedOutOfOrder,
+    prevX,
+    firstX: firstKept,
+    lastX: lastKept,
+    minDx: Number.isFinite(minDx) ? minDx : undefined,
+    maxDx: Number.isFinite(maxDx) ? maxDx : undefined,
+  };
+
+  return { x: x2, y: y2, stats, nextX: lastKept ?? prevX, changed: true };
+}
+
+function sanitizeSortedOhlcBatch(
+  seriesId: string,
+  x: number[],
+  o: number[],
+  h: number[],
+  l: number[],
+  c: number[],
+  prevX: number | undefined
+): {
+  x: number[];
+  o: number[];
+  h: number[];
+  l: number[];
+  c: number[];
+  stats: BatchSanitizationStats;
+  nextX: number | undefined;
+  changed: boolean;
+} {
+  const n = x.length;
+  let droppedNonFinite = 0;
+  let droppedOutOfOrder = 0;
+  let needsFilter = false;
+
+  let last = prevX ?? -Infinity;
+  let minDx = Infinity;
+  let maxDx = -Infinity;
+
+  for (let i = 0; i < n; i++) {
+    const xi = x[i];
+    const oi = o[i];
+    const hi = h[i];
+    const li = l[i];
+    const ci = c[i];
+
+    if (
+      !Number.isFinite(xi) ||
+      !Number.isFinite(oi) ||
+      !Number.isFinite(hi) ||
+      !Number.isFinite(li) ||
+      !Number.isFinite(ci)
+    ) {
+      droppedNonFinite++;
+      needsFilter = true;
+      continue;
+    }
+    if (xi < last) {
+      droppedOutOfOrder++;
+      needsFilter = true;
+      continue;
+    }
+    if (Number.isFinite(last) && last !== -Infinity) {
+      const dx = xi - last;
+      if (dx < minDx) minDx = dx;
+      if (dx > maxDx) maxDx = dx;
+    }
+    last = xi;
+  }
+
+  if (!needsFilter) {
+    const firstX = n > 0 ? x[0] : undefined;
+    const lastX = n > 0 ? x[n - 1] : undefined;
+    const stats: BatchSanitizationStats = {
+      seriesId,
+      type: 'ohlc',
+      inCount: n,
+      outCount: n,
+      droppedNonFinite: 0,
+      droppedOutOfOrder: 0,
+      prevX,
+      firstX,
+      lastX,
+      minDx: Number.isFinite(minDx) ? minDx : undefined,
+      maxDx: Number.isFinite(maxDx) ? maxDx : undefined,
+    };
+    return { x, o, h, l, c, stats, nextX: lastX ?? prevX, changed: false };
+  }
+
+  const x2: number[] = [];
+  const o2: number[] = [];
+  const h2: number[] = [];
+  const l2: number[] = [];
+  const c2: number[] = [];
+
+  last = prevX ?? -Infinity;
+  minDx = Infinity;
+  maxDx = -Infinity;
+  let firstKept: number | undefined;
+  let lastKept: number | undefined;
+
+  for (let i = 0; i < n; i++) {
+    const xi = x[i];
+    const oi = o[i];
+    const hi = h[i];
+    const li = l[i];
+    const ci = c[i];
+
+    if (
+      !Number.isFinite(xi) ||
+      !Number.isFinite(oi) ||
+      !Number.isFinite(hi) ||
+      !Number.isFinite(li) ||
+      !Number.isFinite(ci)
+    ) {
+      continue;
+    }
+    if (xi < last) continue;
+
+    if (Number.isFinite(last) && last !== -Infinity) {
+      const dx = xi - last;
+      if (dx < minDx) minDx = dx;
+      if (dx > maxDx) maxDx = dx;
+    }
+
+    if (firstKept === undefined) firstKept = xi;
+    x2.push(xi);
+    o2.push(oi);
+    h2.push(hi);
+    l2.push(li);
+    c2.push(ci);
+    last = xi;
+    lastKept = xi;
+  }
+
+  const stats: BatchSanitizationStats = {
+    seriesId,
+    type: 'ohlc',
+    inCount: n,
+    outCount: x2.length,
+    droppedNonFinite,
+    droppedOutOfOrder,
+    prevX,
+    firstX: firstKept,
+    lastX: lastKept,
+    minDx: Number.isFinite(minDx) ? minDx : undefined,
+    maxDx: Number.isFinite(maxDx) ? maxDx : undefined,
+  };
+
+  return { x: x2, o: o2, h: h2, l: l2, c: c2, stats, nextX: lastKept ?? prevX, changed: true };
+}
+
 /**
  * Zoom Y-axis to fit data AND hlines for a pane
  * This extends the standard zoomExtentsY behavior to include hline Y values
@@ -471,6 +731,17 @@ export function useMultiPaneChart({
   
   // Track which series we've already warned about (to avoid spam)
   const warnedSeriesRef = useRef<Set<string>>(new Set());
+
+  // Track last appended X per series to enforce sortedness safely.
+  // This helps avoid undefined behaviour when DataSeries is created with dataIsSortedInX=true.
+  const lastXBySeriesRef = useRef<Map<string, number>>(new Map());
+
+  // Throttle warnings for out-of-order/non-finite data per series
+  const lastBatchWarnTimeRef = useRef<Map<string, number>>(new Map());
+
+  // Cancelable timer for minimap selectedArea updates (prevents stale async updates
+  // from touching a deleted surface/axis during layout/theme transitions)
+  const minimapSelectedAreaUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // CRITICAL: Preserve DataSeries data during layout changes (for static data feeds)
   // This ensures data isn't lost when layout changes and new series are created
@@ -1123,6 +1394,16 @@ export function useMultiPaneChart({
   // Store the setter in a ref so it can be accessed from processBatchedSamples
   useEffect(() => {
     overviewNeedsRefreshSetterRef.current = setOverviewNeedsRefresh;
+  }, []);
+
+  // Cleanup any pending minimap selectedArea updates on unmount
+  useEffect(() => {
+    return () => {
+      if (minimapSelectedAreaUpdateTimeoutRef.current) {
+        clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
+        minimapSelectedAreaUpdateTimeoutRef.current = null;
+      }
+    };
   }, []);
   const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
   
@@ -5185,7 +5466,53 @@ export function useMultiPaneChart({
             chartLogger.warn('DataAppend', `Skipping XY append for ${seriesId} - WASM unhealthy`);
             continue;
           }
-          batch.dataSeries.appendRange(batch.x, batch.y);
+          // Enforce monotonic, finite X/Y before appending. The shared pool creates DataSeries
+          // with dataIsSortedInX=true, so out-of-order data can cause undefined behavior.
+          let prevX = lastXBySeriesRef.current.get(seriesId);
+          if (prevX === undefined) {
+            // Initialize prevX from existing data (if any). This avoids allowing out-of-order
+            // appends after layout changes where we may have lost local lastX tracking.
+            try {
+              const existingCount = batch.dataSeries.count();
+              if (existingCount > 0) {
+                const nativeX = batch.dataSeries.getNativeXValues();
+                if (nativeX && nativeX.size() > 0) {
+                  const lastVal = nativeX.get(existingCount - 1);
+                  if (Number.isFinite(lastVal)) {
+                    prevX = lastVal;
+                    lastXBySeriesRef.current.set(seriesId, lastVal);
+                  }
+                }
+              }
+            } catch {
+              // Ignore - if WASM is unstable this might throw; we'll let append fail and be logged.
+            }
+          }
+
+          const sanitized = sanitizeSortedXyBatch(seriesId, batch.x, batch.y, prevX);
+
+          // Breadcrumb keeps a lightweight trace of recent operations for post-mortem debugging
+          chartLogger.breadcrumb('AppendRange', `XY ${seriesId}`, sanitized.stats);
+
+          // Throttle noisy validation warnings
+          if (sanitized.stats.droppedNonFinite > 0 || sanitized.stats.droppedOutOfOrder > 0) {
+            const nowMs = Date.now();
+            const lastWarn = lastBatchWarnTimeRef.current.get(seriesId) ?? 0;
+            if (nowMs - lastWarn > 5000) {
+              lastBatchWarnTimeRef.current.set(seriesId, nowMs);
+              chartLogger.warn('DataValidation', `Dropped invalid XY points for ${seriesId}`, sanitized.stats);
+            }
+          }
+
+          if (sanitized.x.length === 0) {
+            continue;
+          }
+
+          batch.dataSeries.appendRange(sanitized.x, sanitized.y);
+
+          if (sanitized.nextX !== undefined && Number.isFinite(sanitized.nextX)) {
+            lastXBySeriesRef.current.set(seriesId, sanitized.nextX);
+          }
           // Mark series as having data
           if (batch.x.length > 0) {
             refs.seriesHasData.set(seriesId, true);
@@ -5196,9 +5523,16 @@ export function useMultiPaneChart({
           // Log WASM errors with full context for debugging
           const errorStr = String((e as any)?.message || e);
           if (errorStr.includes('Aborted') || errorStr.includes('memory') || errorStr.includes('wasm')) {
+            let seriesCount: number | undefined;
+            try {
+              seriesCount = batch.dataSeries.count();
+            } catch {
+              seriesCount = undefined;
+            }
             chartLogger.critical('DataAppend', `WASM error appending XY data to ${seriesId}`, e, {
               batchSize: batch.x.length,
-              seriesCount: batch.dataSeries.count(),
+              seriesCount,
+              lastBreadcrumbs: chartLogger.getBreadcrumbs().slice(-20),
             });
           } else {
             chartLogger.error('DataAppend', `Error appending XY data to ${seriesId}`, e);
@@ -5213,7 +5547,56 @@ export function useMultiPaneChart({
             chartLogger.warn('DataAppend', `Skipping OHLC append for ${seriesId} - WASM unhealthy`);
             continue;
           }
-          batch.dataSeries.appendRange(batch.x, batch.o, batch.h, batch.l, batch.c);
+          // Enforce monotonic, finite X/OHLC before appending.
+          let prevX = lastXBySeriesRef.current.get(seriesId);
+          if (prevX === undefined) {
+            try {
+              const existingCount = batch.dataSeries.count();
+              if (existingCount > 0) {
+                const nativeX = batch.dataSeries.getNativeXValues();
+                if (nativeX && nativeX.size() > 0) {
+                  const lastVal = nativeX.get(existingCount - 1);
+                  if (Number.isFinite(lastVal)) {
+                    prevX = lastVal;
+                    lastXBySeriesRef.current.set(seriesId, lastVal);
+                  }
+                }
+              }
+            } catch {
+              // Ignore
+            }
+          }
+
+          const sanitized = sanitizeSortedOhlcBatch(
+            seriesId,
+            batch.x,
+            batch.o,
+            batch.h,
+            batch.l,
+            batch.c,
+            prevX
+          );
+
+          chartLogger.breadcrumb('AppendRange', `OHLC ${seriesId}`, sanitized.stats);
+
+          if (sanitized.stats.droppedNonFinite > 0 || sanitized.stats.droppedOutOfOrder > 0) {
+            const nowMs = Date.now();
+            const lastWarn = lastBatchWarnTimeRef.current.get(seriesId) ?? 0;
+            if (nowMs - lastWarn > 5000) {
+              lastBatchWarnTimeRef.current.set(seriesId, nowMs);
+              chartLogger.warn('DataValidation', `Dropped invalid OHLC points for ${seriesId}`, sanitized.stats);
+            }
+          }
+
+          if (sanitized.x.length === 0) {
+            continue;
+          }
+
+          batch.dataSeries.appendRange(sanitized.x, sanitized.o, sanitized.h, sanitized.l, sanitized.c);
+
+          if (sanitized.nextX !== undefined && Number.isFinite(sanitized.nextX)) {
+            lastXBySeriesRef.current.set(seriesId, sanitized.nextX);
+          }
           // Mark series as having data
           if (batch.x.length > 0) {
             refs.seriesHasData.set(seriesId, true);
@@ -5224,9 +5607,16 @@ export function useMultiPaneChart({
           // Log WASM errors with full context for debugging
           const errorStr = String((e as any)?.message || e);
           if (errorStr.includes('Aborted') || errorStr.includes('memory') || errorStr.includes('wasm')) {
+            let seriesCount: number | undefined;
+            try {
+              seriesCount = batch.dataSeries.count();
+            } catch {
+              seriesCount = undefined;
+            }
             chartLogger.critical('DataAppend', `WASM error appending OHLC data to ${seriesId}`, e, {
               batchSize: batch.x.length,
-              seriesCount: batch.dataSeries.count(),
+              seriesCount,
+              lastBreadcrumbs: chartLogger.getBreadcrumbs().slice(-20),
             });
           } else {
             chartLogger.error('DataAppend', `Error appending OHLC data to ${seriesId}`, e);
@@ -5281,7 +5671,46 @@ export function useMultiPaneChart({
                   }
                 }
                 if (validX.length > 0) {
-                  minimapDataSeries.appendRange(validX, validY);
+                  // Enforce monotonic order for the minimap data series as well.
+                  // Minimap XyDataSeries is created with isSorted=true.
+                  const minimapKey = `__minimap__:${minimapSourceSeriesId}`;
+                  let prevX = lastXBySeriesRef.current.get(minimapKey);
+                  if (prevX === undefined) {
+                    try {
+                      const existingCount = minimapDataSeries.count();
+                      if (existingCount > 0) {
+                        const nativeX = minimapDataSeries.getNativeXValues();
+                        if (nativeX && nativeX.size() > 0) {
+                          const lastVal = nativeX.get(existingCount - 1);
+                          if (Number.isFinite(lastVal)) {
+                            prevX = lastVal;
+                            lastXBySeriesRef.current.set(minimapKey, lastVal);
+                          }
+                        }
+                      }
+                    } catch {
+                      // ignore
+                    }
+                  }
+
+                  const sanitized = sanitizeSortedXyBatch(minimapKey, validX, validY, prevX);
+                  chartLogger.breadcrumb('AppendRange', `MINIMAP ${minimapSourceSeriesId}`, sanitized.stats);
+
+                  if (sanitized.stats.droppedNonFinite > 0 || sanitized.stats.droppedOutOfOrder > 0) {
+                    const nowMs = Date.now();
+                    const lastWarn = lastBatchWarnTimeRef.current.get(minimapKey) ?? 0;
+                    if (nowMs - lastWarn > 5000) {
+                      lastBatchWarnTimeRef.current.set(minimapKey, nowMs);
+                      chartLogger.warn('DataValidation', `Dropped invalid MINIMAP points for ${minimapSourceSeriesId}`, sanitized.stats);
+                    }
+                  }
+
+                  if (sanitized.x.length > 0) {
+                    minimapDataSeries.appendRange(sanitized.x, sanitized.y);
+                    if (sanitized.nextX !== undefined && Number.isFinite(sanitized.nextX)) {
+                      lastXBySeriesRef.current.set(minimapKey, sanitized.nextX);
+                    }
+                  }
                   
                   // CRITICAL: Update minimap X-axis to show full data range after new data arrives
                   // The minimap should always show all data, not just the current selection
@@ -5316,20 +5745,25 @@ export function useMultiPaneChart({
                         }
                       }
                     } catch (e) {
-                      console.warn('[MultiPaneChart] Error updating minimap X-axis range:', e);
+                      chartLogger.warn('Minimap', 'Error updating minimap X-axis range', e);
                     }
                   }
                 }
               }
             } catch (e) {
-              console.error('[MultiPaneChart] Error updating minimap data:', e);
+              chartLogger.error('Minimap', 'Error updating minimap data', e, {
+                sourceSeriesId: minimapSourceSeriesId,
+                lastBreadcrumbs: chartLogger.getBreadcrumbs().slice(-20),
+              });
               // Don't throw - just log the error
             } finally {
               minimapSurface.resumeUpdates();
             }
           }
         } catch (e) {
-          console.error('[MultiPaneChart] Error accessing minimap surface:', e);
+          chartLogger.error('Minimap', 'Error accessing minimap surface', e, {
+            sourceSeriesId: minimapSourceSeriesId,
+          });
         }
       }
     } else if (minimapSourceSeriesId && !minimapDataSeries && overviewNeedsRefreshSetterRef.current) {
@@ -5720,53 +6154,102 @@ export function useMultiPaneChart({
                     (minimapXAxis as any).autoRange = EAutoRange.Never;
                     minimapXAxis.growBy = new NumberRange(0, 0);
                     minimapXAxis.visibleRange = new NumberRange(fullDataRange.min, fullDataRange.max);
-                    
-                    // CRITICAL: Small delay to ensure axis range is applied before selectedArea update
-                    // This ensures the modifier reads the updated axis range when calculating overlay
-                    setTimeout(() => {
+
+                    // Resume now - don't keep the surface suspended across an async boundary.
+                    minimapSurface.resumeUpdates();
+                    minimapSurface.invalidateElement();
+
+                    // Schedule selectedArea update (cancel any pending update to avoid stale refs)
+                    if (minimapSelectedAreaUpdateTimeoutRef.current) {
+                      clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
+                    }
+                    minimapSelectedAreaUpdateTimeoutRef.current = setTimeout(() => {
+                      minimapSelectedAreaUpdateTimeoutRef.current = null;
                       try {
-                        // CRITICAL: Validate surface is still valid before updating
-                        if (!minimapSurface || (minimapSurface as any).isDeleted) {
+                        const refsNow = chartRefs.current;
+                        const minimapSurfaceNow = (refsNow as any).minimapSurface as SciChartSurface | null;
+                        const rangeSelectionModifierNow = (refsNow as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+                        const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                        const minimapXAxisNow = (refsNow as any).minimapXAxis as DateTimeNumericAxis | null;
+
+                        if (!minimapSurfaceNow || (minimapSurfaceNow as any).isDeleted) {
                           chartLogger.warn('Minimap', 'Surface deleted before selectedArea update (with axis)');
                           return;
                         }
-                        // Set re-entry guard before updating selectedArea
-                        if (setUpdatingFlag) setUpdatingFlag(true);
-                        
-                        // Use the same range that we're applying to main charts
-                        // This ensures the indicator right edge = latest data timestamp
-                        rangeSelectionModifier.selectedArea = newRange;
-                        
-                        // Resume updates and invalidate to force overlay recalculation
-                        minimapSurface.resumeUpdates();
-                        minimapSurface.invalidateElement();
-                        
-                        if (setUpdatingFlag) setUpdatingFlag(false);
+                        if (!rangeSelectionModifierNow || (rangeSelectionModifierNow as any).isDeleted) {
+                          chartLogger.warn('Minimap', 'RangeSelectionModifier missing/deleted before selectedArea update (with axis)');
+                          return;
+                        }
+                        // Guard: modifier/axis must be attached to a surface before setting selectedArea
+                        if (!(rangeSelectionModifierNow as any).parentSurface) {
+                          chartLogger.warn('Minimap', 'RangeSelectionModifier has no parentSurface - skipping selectedArea update (with axis)');
+                          return;
+                        }
+                        if (minimapXAxisNow && !(minimapXAxisNow as any).parentSurface) {
+                          chartLogger.warn('Minimap', 'Minimap XAxis has no parentSurface - skipping selectedArea update (with axis)');
+                          return;
+                        }
+
+                        if (setUpdatingFlagNow) setUpdatingFlagNow(true);
+                        rangeSelectionModifierNow.selectedArea = newRange;
+                        minimapSurfaceNow.invalidateElement();
+                        if (setUpdatingFlagNow) setUpdatingFlagNow(false);
                       } catch (e) {
                         chartLogger.error('Minimap', 'Error updating minimap selectedArea after delay', e);
-                        try { minimapSurface?.resumeUpdates(); } catch {}
-                        if (setUpdatingFlag) setUpdatingFlag(false);
+                        try {
+                          const refsNow = chartRefs.current;
+                          const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                          if (setUpdatingFlagNow) setUpdatingFlagNow(false);
+                        } catch {
+                          // ignore
+                        }
                       }
                     }, 0);
                   } else {
                     // Axis range is already correct, just update selectedArea with delay
-                    setTimeout(() => {
+                    if (minimapSelectedAreaUpdateTimeoutRef.current) {
+                      clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
+                    }
+                    minimapSelectedAreaUpdateTimeoutRef.current = setTimeout(() => {
+                      minimapSelectedAreaUpdateTimeoutRef.current = null;
                       try {
+                        const refsNow = chartRefs.current;
+                        const minimapSurfaceNow = (refsNow as any).minimapSurface as SciChartSurface | null;
+                        const rangeSelectionModifierNow = (refsNow as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+                        const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                        const minimapXAxisNow = (refsNow as any).minimapXAxis as DateTimeNumericAxis | null;
+
                         // CRITICAL: Validate surface is still valid before updating
-                        // This prevents "Cannot read properties of undefined (reading 'seriesViewRect')" errors
-                        if (!minimapSurface || (minimapSurface as any).isDeleted) {
+                        if (!minimapSurfaceNow || (minimapSurfaceNow as any).isDeleted) {
                           chartLogger.warn('Minimap', 'Surface deleted before selectedArea update');
                           return;
                         }
-                        if (setUpdatingFlag) setUpdatingFlag(true);
-                        rangeSelectionModifier.selectedArea = newRange;
-                        if (minimapSurface) {
-                          minimapSurface.invalidateElement();
+                        if (!rangeSelectionModifierNow || (rangeSelectionModifierNow as any).isDeleted) {
+                          chartLogger.warn('Minimap', 'RangeSelectionModifier missing/deleted before selectedArea update');
+                          return;
                         }
-                        if (setUpdatingFlag) setUpdatingFlag(false);
+                        if (!(rangeSelectionModifierNow as any).parentSurface) {
+                          chartLogger.warn('Minimap', 'RangeSelectionModifier has no parentSurface - skipping selectedArea update');
+                          return;
+                        }
+                        if (minimapXAxisNow && !(minimapXAxisNow as any).parentSurface) {
+                          chartLogger.warn('Minimap', 'Minimap XAxis has no parentSurface - skipping selectedArea update');
+                          return;
+                        }
+
+                        if (setUpdatingFlagNow) setUpdatingFlagNow(true);
+                        rangeSelectionModifierNow.selectedArea = newRange;
+                        minimapSurfaceNow.invalidateElement();
+                        if (setUpdatingFlagNow) setUpdatingFlagNow(false);
                       } catch (e) {
                         chartLogger.error('Minimap', 'Error updating selectedArea', e);
-                        if (setUpdatingFlag) setUpdatingFlag(false);
+                        try {
+                          const refsNow = chartRefs.current;
+                          const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                          if (setUpdatingFlagNow) setUpdatingFlagNow(false);
+                        } catch {
+                          // ignore
+                        }
                       }
                     }, 0);
                   }
@@ -5779,22 +6262,50 @@ export function useMultiPaneChart({
               }
             } else {
               // No minimap data yet, just update selectedArea
-              try {
-                // CRITICAL: Validate surface is still valid before updating
-                if (!minimapSurface || (minimapSurface as any).isDeleted) {
-                  chartLogger.warn('Minimap', 'Surface deleted before selectedArea update (no data)');
-                } else {
-                  if (setUpdatingFlag) setUpdatingFlag(true);
-                  rangeSelectionModifier.selectedArea = newRange;
-                  if (minimapSurface) {
-                    minimapSurface.invalidateElement();
-                  }
-                  if (setUpdatingFlag) setUpdatingFlag(false);
-                }
-              } catch (e) {
-                chartLogger.error('Minimap', 'Error updating selectedArea (no data path)', e);
-                if (setUpdatingFlag) setUpdatingFlag(false);
+              if (minimapSelectedAreaUpdateTimeoutRef.current) {
+                clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
               }
+              minimapSelectedAreaUpdateTimeoutRef.current = setTimeout(() => {
+                minimapSelectedAreaUpdateTimeoutRef.current = null;
+                try {
+                  const refsNow = chartRefs.current;
+                  const minimapSurfaceNow = (refsNow as any).minimapSurface as SciChartSurface | null;
+                  const rangeSelectionModifierNow = (refsNow as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
+                  const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                  const minimapXAxisNow = (refsNow as any).minimapXAxis as DateTimeNumericAxis | null;
+
+                  if (!minimapSurfaceNow || (minimapSurfaceNow as any).isDeleted) {
+                    chartLogger.warn('Minimap', 'Surface deleted before selectedArea update (no data)');
+                    return;
+                  }
+                  if (!rangeSelectionModifierNow || (rangeSelectionModifierNow as any).isDeleted) {
+                    chartLogger.warn('Minimap', 'RangeSelectionModifier missing/deleted before selectedArea update (no data)');
+                    return;
+                  }
+                  if (!(rangeSelectionModifierNow as any).parentSurface) {
+                    chartLogger.warn('Minimap', 'RangeSelectionModifier has no parentSurface - skipping selectedArea update (no data)');
+                    return;
+                  }
+                  if (minimapXAxisNow && !(minimapXAxisNow as any).parentSurface) {
+                    chartLogger.warn('Minimap', 'Minimap XAxis has no parentSurface - skipping selectedArea update (no data)');
+                    return;
+                  }
+
+                  if (setUpdatingFlagNow) setUpdatingFlagNow(true);
+                  rangeSelectionModifierNow.selectedArea = newRange;
+                  minimapSurfaceNow.invalidateElement();
+                  if (setUpdatingFlagNow) setUpdatingFlagNow(false);
+                } catch (e) {
+                  chartLogger.error('Minimap', 'Error updating selectedArea (no data path)', e);
+                  try {
+                    const refsNow = chartRefs.current;
+                    const setUpdatingFlagNow = (refsNow as any).setUpdatingMinimapProgrammatically as ((val: boolean) => void) | undefined;
+                    if (setUpdatingFlagNow) setUpdatingFlagNow(false);
+                  } catch {
+                    // ignore
+                  }
+                }
+              }, 0);
             }
           } catch (e) {
             console.warn('[MultiPaneChart] Error in minimap auto-scroll update:', e);

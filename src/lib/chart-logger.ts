@@ -20,6 +20,13 @@ export interface LogEntry {
   stack?: string;
 }
 
+export interface BreadcrumbEntry {
+  timestamp: number;
+  category: string;
+  message: string;
+  data?: any;
+}
+
 interface ChartLoggerConfig {
   /** Maximum number of log entries to keep in memory */
   maxEntries: number;
@@ -51,6 +58,8 @@ const DEFAULT_CONFIG: ChartLoggerConfig = {
 
 class ChartLogger {
   private logs: LogEntry[] = [];
+  private breadcrumbs: BreadcrumbEntry[] = [];
+  private readonly breadcrumbMaxEntries = 250;
   private config: ChartLoggerConfig = { ...DEFAULT_CONFIG };
   private errorCounts: Map<string, number> = new Map();
   private lastErrorTime: Map<string, number> = new Map();
@@ -62,6 +71,9 @@ class ChartLogger {
   private wasmHealthy = true;
   private wasmErrorCount = 0;
   private lastWasmError: string | null = null;
+
+  /** Throttle crash snapshot persistence */
+  private lastCrashSnapshotTime = 0;
 
   configure(config: Partial<ChartLoggerConfig>): void {
     this.config = { ...this.config, ...config };
@@ -214,7 +226,33 @@ class ChartLogger {
         message: `WASM error detected (total: ${this.wasmErrorCount}): ${message}`,
         data: { wasmErrorCount: this.wasmErrorCount },
       });
+
+      // Persist a crash snapshot for post-mortem debugging.
+      // Throttled to avoid spamming localStorage when errors cascade.
+      this.saveCrashSnapshotThrottled(`wasm-error: ${message}`);
     }
+  }
+
+  /**
+   * Add a low-volume breadcrumb for "what happened just before the crash" debugging.
+   * Breadcrumbs are kept in a small ring-buffer separate from logs.
+   */
+  breadcrumb(category: string, message: string, data?: any): void {
+    const entry: BreadcrumbEntry = {
+      timestamp: Date.now(),
+      category,
+      message,
+      data: data ? this.sanitizeData(data) : undefined,
+    };
+
+    this.breadcrumbs.push(entry);
+    if (this.breadcrumbs.length > this.breadcrumbMaxEntries) {
+      this.breadcrumbs = this.breadcrumbs.slice(-this.breadcrumbMaxEntries);
+    }
+  }
+
+  getBreadcrumbs(): BreadcrumbEntry[] {
+    return [...this.breadcrumbs];
   }
 
   /**
@@ -316,14 +354,98 @@ class ChartLogger {
   exportLogs(): string {
     return JSON.stringify({
       exportedAt: new Date().toISOString(),
+      environment: typeof window !== 'undefined' ? {
+        href: window.location?.href,
+        userAgent: navigator.userAgent,
+        devicePixelRatio: window.devicePixelRatio,
+      } : undefined,
       wasmHealth: {
         healthy: this.wasmHealthy,
         errorCount: this.wasmErrorCount,
         lastError: this.lastWasmError,
       },
       errorFrequency: Object.fromEntries(this.errorCounts),
+      breadcrumbs: this.breadcrumbs,
       logs: this.logs,
     }, null, 2);
+  }
+
+  /**
+   * Export a smaller snapshot designed to survive crashes (for localStorage persistence).
+   */
+  exportCrashSnapshot(options?: {
+    reason?: string;
+    maxLogs?: number;
+    maxBreadcrumbs?: number;
+  }): string {
+    const maxLogs = options?.maxLogs ?? 750;
+    const maxBreadcrumbs = options?.maxBreadcrumbs ?? this.breadcrumbMaxEntries;
+
+    return JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      reason: options?.reason,
+      environment: typeof window !== 'undefined' ? {
+        href: window.location?.href,
+        userAgent: navigator.userAgent,
+        devicePixelRatio: window.devicePixelRatio,
+      } : undefined,
+      wasmHealth: {
+        healthy: this.wasmHealthy,
+        errorCount: this.wasmErrorCount,
+        lastError: this.lastWasmError,
+      },
+      errorFrequency: Object.fromEntries(this.errorCounts),
+      breadcrumbs: this.breadcrumbs.slice(-maxBreadcrumbs),
+      logs: this.logs.slice(-maxLogs),
+    }, null, 2);
+  }
+
+  /**
+   * Persist crash snapshot to localStorage so it survives page reloads.
+   */
+  saveCrashSnapshot(key: string = 'chart-logs:lastCrash', reason?: string): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const snapshot = this.exportCrashSnapshot({ reason });
+      window.localStorage?.setItem(key, snapshot);
+    } catch (e) {
+      // Ignore persistence errors (quota/private-mode)
+    }
+  }
+
+  /**
+   * Download the last persisted crash snapshot from localStorage.
+   */
+  downloadLastCrashSnapshot(
+    key: string = 'chart-logs:lastCrash',
+    filename: string = `chart-last-crash-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+  ): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const content = window.localStorage?.getItem(key);
+      if (!content) {
+        console.warn('[ChartLogger] No crash snapshot found in localStorage');
+        return;
+      }
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.warn('[ChartLogger] Failed to download crash snapshot:', e);
+    }
+  }
+
+  private saveCrashSnapshotThrottled(reason: string): void {
+    const now = Date.now();
+    if (now - this.lastCrashSnapshotTime < 2000) return;
+    this.lastCrashSnapshotTime = now;
+    this.saveCrashSnapshot('chart-logs:lastCrash', reason);
   }
 
   /**
@@ -347,6 +469,7 @@ class ChartLogger {
    */
   clear(): void {
     this.logs = [];
+    this.breadcrumbs = [];
     this.errorCounts.clear();
     this.lastErrorTime.clear();
     this.info('Logger', 'Logs cleared');
