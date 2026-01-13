@@ -61,10 +61,11 @@ import {
 import { sharedDataSeriesPool, type PooledDataSeries } from '@/lib/shared-data-series-pool';
 import { chartLogger, safeChartOperation } from '@/lib/chart-logger';
 
+import { formatInTimeZone } from 'date-fns-tz';
+
 /**
- * Formats a timestamp value to date string with time and milliseconds
- * Handles both milliseconds and seconds (DateTimeNumericAxis uses milliseconds internally)
- * Uses UTC methods when timezone is 'UTC', otherwise uses local time
+ * Formats a timestamp value to date string with time and milliseconds in a specific timezone
+ * Uses date-fns-tz for proper IANA timezone support (e.g., 'America/Chicago')
  */
 function formatDateTimeWithMilliseconds(dataValue: number, timezone: string = 'UTC'): string {
   // DateTimeNumericAxis uses milliseconds internally, but check if we need to convert
@@ -76,19 +77,9 @@ function formatDateTimeWithMilliseconds(dataValue: number, timezone: string = 'U
   
   const date = new Date(timestamp);
   
-  // Use UTC methods when timezone is UTC, otherwise use local methods
-  const isUTC = timezone === 'UTC';
-  
+  // Use date-fns-tz for proper timezone conversion
   // Format as: YYYY-MM-DD HH:mm:ss.SSS
-  const year = isUTC ? date.getUTCFullYear() : date.getFullYear();
-  const month = String(isUTC ? date.getUTCMonth() + 1 : date.getMonth() + 1).padStart(2, '0');
-  const day = String(isUTC ? date.getUTCDate() : date.getDate()).padStart(2, '0');
-  const hours = String(isUTC ? date.getUTCHours() : date.getHours()).padStart(2, '0');
-  const minutes = String(isUTC ? date.getUTCMinutes() : date.getMinutes()).padStart(2, '0');
-  const seconds = String(isUTC ? date.getUTCSeconds() : date.getSeconds()).padStart(2, '0');
-  const milliseconds = String(isUTC ? date.getUTCMilliseconds() : date.getMilliseconds()).padStart(3, '0');
-  
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+  return formatInTimeZone(date, timezone, 'yyyy-MM-dd HH:mm:ss.SSS');
 }
 
 /**

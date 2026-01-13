@@ -28,6 +28,7 @@ import {
   DpiHelper,
   EExecuteOn,
 } from 'scichart';
+import { formatInTimeZone } from 'date-fns-tz';
 import type { ParsedLayout, PaneConfig } from '@/types/plot-layout';
 import { chartLogger } from '@/lib/chart-logger';
 
@@ -254,12 +255,48 @@ export class DynamicPaneManager {
 
   /**
    * Update DateTime axis with timezone-aware formatting
-   * Note: Currently disabled - letting SciChart use its default intelligent formatting
-   * which automatically adapts based on zoom level (e.g., "08:25" when zoomed in, "12/08" when zoomed out)
+   * Uses date-fns-tz for proper IANA timezone support (e.g., 'America/Chicago')
    */
   private updateAxisTimezone(xAxis: DateTimeNumericAxis): void {
-    // No-op: Let SciChart handle datetime formatting automatically
-    // SciChart's DateTimeNumericAxis automatically adjusts format based on visible range
+    const timezone = this.timezone;
+    
+    // Create a custom label provider that formats dates in the specified timezone
+    xAxis.labelProvider.formatLabel = (dataValue: number): string => {
+      // Convert from Unix seconds to milliseconds if needed
+      let timestamp = dataValue;
+      if (dataValue < 946684800000) { // Less than 2000-01-01 in milliseconds
+        timestamp = dataValue * 1000;
+      }
+      
+      const date = new Date(timestamp);
+      
+      // Get visible range to determine appropriate format
+      const visibleRange = xAxis.visibleRange;
+      const rangeSpanMs = (visibleRange.max - visibleRange.min) * 
+        (visibleRange.max < 946684800000 ? 1000 : 1);
+      
+      // Adaptive formatting based on zoom level
+      const ONE_HOUR = 3600000;
+      const ONE_DAY = 86400000;
+      const ONE_WEEK = 604800000;
+      
+      let format: string;
+      if (rangeSpanMs < ONE_HOUR) {
+        // Very zoomed in: show HH:mm:ss
+        format = 'HH:mm:ss';
+      } else if (rangeSpanMs < ONE_DAY) {
+        // Show HH:mm
+        format = 'HH:mm';
+      } else if (rangeSpanMs < ONE_WEEK) {
+        // Show MM/dd HH:mm
+        format = 'MM/dd HH:mm';
+      } else {
+        // Show MM/dd
+        format = 'MM/dd';
+      }
+      
+      return formatInTimeZone(date, timezone, format);
+    };
   }
 
   /**
@@ -573,6 +610,9 @@ export class DynamicPaneManager {
 
       surface.xAxes.add(xAxis);
       surface.yAxes.add(yAxis);
+      
+      // Apply timezone-aware formatting to the X-axis
+      this.updateAxisTimezone(xAxis);
       
       // Give one more frame for axes to be fully configured
       await new Promise(resolve => requestAnimationFrame(resolve));
