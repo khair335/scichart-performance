@@ -1181,6 +1181,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           initGap={gapMetrics.initGap}
           seriesGaps={gapMetrics.seriesGaps}
           visible={true}
+          timezone={loadedUiConfig?.chart?.timezone ?? 'America/Chicago'}
           className="shrink-0 border-b border-border animate-in slide-in-from-top-2 duration-200"
         />
       )}
