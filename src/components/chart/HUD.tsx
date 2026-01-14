@@ -1,4 +1,6 @@
 import { cn } from '@/lib/utils';
+import { toZonedTime } from 'date-fns-tz';
+import { format } from 'date-fns';
 
 interface SeriesGapInfo {
   id: string;
@@ -34,6 +36,7 @@ interface HUDProps {
   initGap?: number;
   seriesGaps?: SeriesGapInfo[];
   visible?: boolean;
+  timezone?: string;
 }
 
 export function HUD({
@@ -53,18 +56,18 @@ export function HUD({
   initGap = 0,
   seriesGaps = [],
   visible = true,
+  timezone = 'UTC',
 }: HUDProps) {
   if (!visible) return null;
-  const formatTime = (ms: number) => {
-    if (!ms || !Number.isFinite(ms)) return '--:--:--';
-    const d = new Date(ms);
-    return d.toISOString().replace('T', ' ').slice(11, 19);
-  };
 
   const formatDataClock = (ms: number) => {
     if (!ms || !Number.isFinite(ms)) return '----/--/-- --:--:--';
-    const d = new Date(ms);
-    return d.toISOString().replace('T', ' ').slice(0, 19);
+    try {
+      const zonedDate = toZonedTime(new Date(ms), timezone);
+      return format(zonedDate, 'yyyy-MM-dd HH:mm:ss');
+    } catch {
+      return '----/--/-- --:--:--';
+    }
   };
 
   const getStatusPill = () => {
