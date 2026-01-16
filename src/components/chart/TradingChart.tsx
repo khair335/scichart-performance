@@ -247,11 +247,27 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const handleSamplesRef = useRef<((samples: Sample[]) => void) | null>(null);
   // Buffer for samples received before handler is ready
   const pendingSamplesRef = useRef<Sample[]>([]);
+  // Ref for forceChartUpdate - needed because useWebSocketFeed is called before useMultiPaneChart
+  const forceChartUpdateRef = useRef<(() => void) | null>(null);
   
   // Session complete handler - auto-pause when server finishes
   const handleSessionComplete = useCallback(() => {
     console.log('[TradingChart] Session complete - auto-pausing for manual exploration');
     setIsLive(false);
+  }, []);
+
+  // Init complete handler - triggers chart update to render historical data
+  // CRITICAL: This ensures historical data is plotted even when no new samples arrive
+  const handleInitComplete = useCallback(() => {
+    console.log('[TradingChart] Init complete received - triggering chart update');
+    // Use a small delay to ensure chart is ready
+    setTimeout(() => {
+      if (forceChartUpdateRef.current) {
+        forceChartUpdateRef.current();
+      } else {
+        console.warn('[TradingChart] forceChartUpdate not available yet');
+      }
+    }, 100);
   }, []);
   
   // WebSocket feed - must be called before useMultiPaneChart to get feedState
@@ -275,6 +291,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
       }
     },
     onSessionComplete: handleSessionComplete,
+    onInitComplete: handleInitComplete,
     autoConnect: !demoMode,
     cursorPolicy: cursorPolicy as any,
     useLocalStorage,
@@ -443,6 +460,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     setTimeWindow,
     handleGridReady,
     resetDataState,
+    forceChartUpdate,
   } = useMultiPaneChart({
     tickContainerId: 'tick-chart',
     ohlcContainerId: 'ohlc-chart',
@@ -547,6 +565,11 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
       pendingSamplesRef.current = [];
     }
   }, [handleSamples]);
+
+  // Update forceChartUpdateRef so onInitComplete can use it
+  useEffect(() => {
+    forceChartUpdateRef.current = forceChartUpdate;
+  }, [forceChartUpdate]);
 
   // Performance monitoring
   useEffect(() => {

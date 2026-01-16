@@ -7,6 +7,8 @@ interface UseWebSocketFeedOptions {
   url: string;
   onSamples: (samples: Sample[]) => void;
   onSessionComplete?: () => void;
+  /** Called when init_complete is received - use to trigger chart updates for historical data */
+  onInitComplete?: () => void;
   autoConnect?: boolean;
   cursorPolicy?: CursorPolicy;
   useLocalStorage?: boolean;
@@ -37,7 +39,8 @@ export interface FeedState {
 export function useWebSocketFeed({ 
   url, 
   onSamples, 
-  onSessionComplete, 
+  onSessionComplete,
+  onInitComplete,
   autoConnect = true,
   cursorPolicy = 'auto',
   useLocalStorage = true,
@@ -46,6 +49,7 @@ export function useWebSocketFeed({
   const clientRef = useRef<WsFeedClient | null>(null);
   const onSamplesRef = useRef(onSamples);
   const onSessionCompleteRef = useRef(onSessionComplete);
+  const onInitCompleteRef = useRef(onInitComplete);
   
   // Config refs to track latest values without triggering reconnect
   const cursorPolicyRef = useRef(cursorPolicy);
@@ -90,6 +94,10 @@ export function useWebSocketFeed({
   useEffect(() => {
     onSessionCompleteRef.current = onSessionComplete;
   }, [onSessionComplete]);
+
+  useEffect(() => {
+    onInitCompleteRef.current = onInitComplete;
+  }, [onInitComplete]);
 
   useEffect(() => {
     cursorPolicyRef.current = cursorPolicy;
@@ -153,6 +161,13 @@ export function useWebSocketFeed({
       if (clientRef.current) {
         clientRef.current.setAutoReconnect(false);
       }
+    }
+    
+    // Handle init_complete - trigger chart update to render historical data
+    // CRITICAL: This ensures historical data is rendered even if no new samples arrive
+    if (evt.type === 'init_complete') {
+      console.log('[WebSocket] ✅ Init complete - triggering chart update for historical data');
+      onInitCompleteRef.current?.();
     }
   }, []);
 
