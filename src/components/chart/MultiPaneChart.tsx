@@ -8125,6 +8125,94 @@ export function useMultiPaneChart({
     console.log('[MultiPaneChart] Data state reset complete');
   }, []);
 
+  /**
+   * Force a chart update to render any data that's already in the DataSeries
+   * CRITICAL: This is needed when init_complete fires but no new samples arrive
+   * (e.g., when market is slow and historical data is already loaded)
+   */
+  const forceChartUpdate = useCallback(() => {
+    const refs = chartRefs.current;
+    console.log('[MultiPaneChart] 🔄 forceChartUpdate called - forcing chart render');
+    
+    // Check if any DataSeries have data that should be rendered
+    let hasData = false;
+    for (const [seriesId, entry] of refs.dataSeriesStore) {
+      if (entry.dataSeries && entry.dataSeries.count() > 0) {
+        hasData = true;
+        // Mark series as having data
+        refs.seriesHasData.set(seriesId, true);
+        console.log(`[MultiPaneChart] Series ${seriesId} has ${entry.dataSeries.count()} points`);
+      }
+    }
+    
+    // Also check SharedDataSeriesPool for data
+    const poolStats = sharedDataSeriesPool.getStats();
+    if (poolStats.totalPoints > 0) {
+      console.log(`[MultiPaneChart] SharedDataSeriesPool has ${poolStats.totalPoints} total points`);
+      hasData = true;
+    }
+    
+    if (!hasData) {
+      console.log('[MultiPaneChart] No data found in DataSeries or pool - nothing to render');
+      return;
+    }
+    
+    // Set anyPaneHasDataRef to allow auto-scroll updates
+    anyPaneHasDataRef.current = true;
+    
+    // Update waiting overlays for all panes that have data
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      // Check if any series on this pane have data
+      let paneHasData = false;
+      for (const [seriesId, entry] of refs.dataSeriesStore) {
+        if (entry.paneId === paneId && entry.dataSeries && entry.dataSeries.count() > 0) {
+          paneHasData = true;
+          break;
+        }
+      }
+      
+      if (paneHasData) {
+        paneSurface.hasData = true;
+        
+        // Remove waiting annotation if present
+        const waitingAnnotation = refs.waitingAnnotations.get(paneId);
+        if (waitingAnnotation) {
+          try {
+            paneSurface.surface.annotations.remove(waitingAnnotation);
+            waitingAnnotation.delete();
+            refs.waitingAnnotations.delete(paneId);
+            console.log(`[MultiPaneChart] Removed waiting annotation from pane: ${paneId}`);
+          } catch (e) {
+            // Ignore deletion errors
+          }
+        }
+        
+        // Force Y-axis to auto-range based on visible data
+        try {
+          paneSurface.yAxis.autoRange = EAutoRange.Once;
+          paneSurface.surface.zoomExtents();
+        } catch (e) {
+          // Ignore zoom errors
+        }
+      }
+      
+      // Invalidate surface to force redraw
+      try {
+        paneSurface.surface.invalidateElement();
+      } catch (e) {
+        // Ignore invalidation errors
+      }
+    }
+    
+    // Process any buffered samples that might be waiting
+    if (sampleBufferRef.current.length > 0) {
+      console.log(`[MultiPaneChart] Processing ${sampleBufferRef.current.length} buffered samples`);
+      processBatchedSamples();
+    }
+    
+    console.log('[MultiPaneChart] ✅ forceChartUpdate complete');
+  }, [processBatchedSamples]);
+
   return {
     isReady,
     appendSamples,
@@ -8135,5 +8223,6 @@ export function useMultiPaneChart({
     chartRefs,
     handleGridReady,
     resetDataState,
+    forceChartUpdate,
   };
 }
