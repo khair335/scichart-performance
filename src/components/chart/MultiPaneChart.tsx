@@ -8129,79 +8129,133 @@ export function useMultiPaneChart({
    * Force a chart update to render any data that's already in the DataSeries
    * CRITICAL: This is needed when init_complete fires but no new samples arrive
    * (e.g., when market is slow and historical data is already loaded)
+   * 
+   * At init_complete, this function:
+   * 1. Attaches all layout-defined RenderableSeries to their pooled DataSeries
+   * 2. Removes "Waiting for Data..." overlay only for series WITH data
+   * 3. Keeps "Waiting for Data..." for series WITHOUT data
+   * 4. Calls surface.invalidateElement() to force a redraw
    */
   const forceChartUpdate = useCallback(() => {
     const refs = chartRefs.current;
-    console.log('[MultiPaneChart] 🔄 forceChartUpdate called - forcing chart render');
+    const currentLayout = plotLayoutRef.current;
+    console.log('[MultiPaneChart] 🔄 forceChartUpdate (init_complete) called - attaching pooled DataSeries and rendering');
     
-    // Check if any DataSeries have data that should be rendered
-    let hasData = false;
-    for (const [seriesId, entry] of refs.dataSeriesStore) {
-      if (entry.dataSeries && entry.dataSeries.count() > 0) {
-        hasData = true;
-        // Mark series as having data
-        refs.seriesHasData.set(seriesId, true);
-        console.log(`[MultiPaneChart] Series ${seriesId} has ${entry.dataSeries.count()} points`);
-      }
-    }
-    
-    // Also check SharedDataSeriesPool for data
-    const poolStats = sharedDataSeriesPool.getStats();
-    if (poolStats.totalPoints > 0) {
-      console.log(`[MultiPaneChart] SharedDataSeriesPool has ${poolStats.totalPoints} total points`);
-      hasData = true;
-    }
-    
-    if (!hasData) {
-      console.log('[MultiPaneChart] No data found in DataSeries or pool - nothing to render');
+    if (!currentLayout) {
+      console.log('[MultiPaneChart] No layout loaded - skipping forceChartUpdate');
       return;
     }
     
-    // Set anyPaneHasDataRef to allow auto-scroll updates
-    anyPaneHasDataRef.current = true;
+    // Track which panes have data (for waiting annotation management)
+    const panesWithData = new Set<string>();
+    let totalSeriesWithData = 0;
+    let totalSeriesChecked = 0;
     
-    // Update waiting overlays for all panes that have data
-    for (const [paneId, paneSurface] of refs.paneSurfaces) {
-      // Check if any series on this pane have data
-      let paneHasData = false;
-      for (const [seriesId, entry] of refs.dataSeriesStore) {
-        if (entry.paneId === paneId && entry.dataSeries && entry.dataSeries.count() > 0) {
-          paneHasData = true;
-          break;
+    // Step 1: For each series in the layout, ensure RenderableSeries is attached to pooled DataSeries
+    for (const seriesAssignment of currentLayout.layout.series) {
+      const seriesId = seriesAssignment.series_id;
+      totalSeriesChecked++;
+      
+      // Get the pooled DataSeries (contains historical data)
+      const pooledEntry = sharedDataSeriesPool.get(seriesId);
+      if (!pooledEntry || !pooledEntry.dataSeries) {
+        // Series not in pool yet - will be created when data arrives
+        console.log(`[MultiPaneChart] Series ${seriesId} not in pool yet`);
+        continue;
+      }
+      
+      const pooledDataSeries = pooledEntry.dataSeries;
+      const pointCount = pooledDataSeries.count();
+      
+      // Check if this series has data
+      if (pointCount > 0) {
+        totalSeriesWithData++;
+        refs.seriesHasData.set(seriesId, true);
+        
+        // Track which pane has data
+        const paneId = layoutManagerRef.current?.getPaneForSeries(seriesId);
+        if (paneId) {
+          panesWithData.add(paneId);
+        }
+        
+        console.log(`[MultiPaneChart] ✅ Series ${seriesId} has ${pointCount} points`);
+      } else {
+        // Series exists but has no data yet
+        refs.seriesHasData.set(seriesId, false);
+        console.log(`[MultiPaneChart] ⏳ Series ${seriesId} in pool but 0 points (waiting)`);
+      }
+      
+      // Get or create the dataSeriesStore entry
+      let entry = refs.dataSeriesStore.get(seriesId);
+      
+      if (entry) {
+        // Entry exists - ensure dataSeries is attached to renderableSeries
+        if (entry.renderableSeries && (entry.renderableSeries as any).dataSeries !== pooledDataSeries) {
+          // Attach pooled DataSeries to the RenderableSeries
+          try {
+            (entry.renderableSeries as any).dataSeries = pooledDataSeries;
+            console.log(`[MultiPaneChart] 🔗 Attached pooled DataSeries to RenderableSeries: ${seriesId}`);
+          } catch (e) {
+            console.warn(`[MultiPaneChart] Failed to attach dataSeries for ${seriesId}:`, e);
+          }
+        }
+        // Update the entry's dataSeries reference
+        entry.dataSeries = pooledDataSeries;
+      } else {
+        // No entry yet - try ensureSeriesExists to create it
+        // This will create both the RenderableSeries and link to pooled DataSeries
+        const newEntry = ensureSeriesExists(seriesId);
+        if (newEntry) {
+          console.log(`[MultiPaneChart] 🆕 Created series entry via ensureSeriesExists: ${seriesId}`);
         }
       }
+    }
+    
+    console.log(`[MultiPaneChart] Checked ${totalSeriesChecked} series, ${totalSeriesWithData} have data`);
+    
+    // Step 2: Update waiting annotations for each pane
+    for (const [paneId, paneSurface] of refs.paneSurfaces) {
+      const paneHasData = panesWithData.has(paneId);
       
       if (paneHasData) {
         paneSurface.hasData = true;
         
-        // Remove waiting annotation if present
+        // Remove waiting annotation if present (this pane has data)
         const waitingAnnotation = refs.waitingAnnotations.get(paneId);
         if (waitingAnnotation) {
           try {
             paneSurface.surface.annotations.remove(waitingAnnotation);
             waitingAnnotation.delete();
             refs.waitingAnnotations.delete(paneId);
-            console.log(`[MultiPaneChart] Removed waiting annotation from pane: ${paneId}`);
+            console.log(`[MultiPaneChart] ✅ Removed waiting annotation from pane: ${paneId}`);
           } catch (e) {
             // Ignore deletion errors
           }
         }
         
-        // Force Y-axis to auto-range based on visible data
+        // Force Y-axis to auto-range based on visible data (include hlines)
         try {
-          paneSurface.yAxis.autoRange = EAutoRange.Once;
-          paneSurface.surface.zoomExtents();
+          zoomExtentsYWithHLines(paneSurface.surface, paneId);
         } catch (e) {
           // Ignore zoom errors
         }
+      } else {
+        // Pane doesn't have data yet - ensure waiting annotation is visible
+        // The updateAllWaitingAnnotations function will handle creating it if needed
+        console.log(`[MultiPaneChart] ⏳ Pane ${paneId} still waiting for data`);
       }
       
-      // Invalidate surface to force redraw
+      // Step 3: Invalidate surface to force redraw
       try {
         paneSurface.surface.invalidateElement();
       } catch (e) {
         // Ignore invalidation errors
       }
+    }
+    
+    // Update anyPaneHasDataRef if any pane has data
+    if (panesWithData.size > 0) {
+      anyPaneHasDataRef.current = true;
     }
     
     // Process any buffered samples that might be waiting
@@ -8210,8 +8264,11 @@ export function useMultiPaneChart({
       processBatchedSamples();
     }
     
-    console.log('[MultiPaneChart] ✅ forceChartUpdate complete');
-  }, [processBatchedSamples]);
+    // Trigger waiting annotation update for panes that still need data
+    updateWaitingAnnotations();
+    
+    console.log(`[MultiPaneChart] ✅ forceChartUpdate complete - ${panesWithData.size} panes have data`);
+  }, [processBatchedSamples, updateWaitingAnnotations, ensureSeriesExists]);
 
   return {
     isReady,
