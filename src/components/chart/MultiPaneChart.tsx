@@ -8131,10 +8131,12 @@ export function useMultiPaneChart({
    * (e.g., when market is slow and historical data is already loaded)
    * 
    * At init_complete, this function:
-   * 1. Attaches all layout-defined RenderableSeries to their pooled DataSeries
-   * 2. Removes "Waiting for Data..." overlay only for series WITH data
-   * 3. Keeps "Waiting for Data..." for series WITHOUT data
-   * 4. Calls surface.invalidateElement() to force a redraw
+   * 1. First ensures all layout-defined series have RenderableSeries (via ensureSeriesExists)
+   * 2. Attaches RenderableSeries to their pooled DataSeries
+   * 3. Computes which panes have data
+   * 4. Removes "Waiting for Data..." overlay only for panes WITH data
+   * 5. Keeps "Waiting for Data..." for panes WITHOUT data
+   * 6. Calls surface.invalidateElement() to force a redraw
    */
   const forceChartUpdate = useCallback(() => {
     const refs = chartRefs.current;
@@ -8146,12 +8148,18 @@ export function useMultiPaneChart({
       return;
     }
     
-    // Track which panes have data (for waiting annotation management)
-    const panesWithData = new Set<string>();
-    let totalSeriesWithData = 0;
-    let totalSeriesChecked = 0;
+    // Check if chart surfaces are ready
+    if (refs.paneSurfaces.size === 0) {
+      console.log('[MultiPaneChart] No pane surfaces ready yet - deferring forceChartUpdate');
+      return;
+    }
     
-    // Step 1: For each series in the layout, ensure RenderableSeries is attached to pooled DataSeries
+    let totalSeriesChecked = 0;
+    let seriesCreated = 0;
+    let seriesAttached = 0;
+    
+    // Step 1: FIRST ensure all series have RenderableSeries attached
+    // This must happen before we compute panesWithData
     for (const seriesAssignment of currentLayout.layout.series) {
       const seriesId = seriesAssignment.series_id;
       totalSeriesChecked++;
@@ -8165,55 +8173,87 @@ export function useMultiPaneChart({
       }
       
       const pooledDataSeries = pooledEntry.dataSeries;
-      const pointCount = pooledDataSeries.count();
-      
-      // Check if this series has data
-      if (pointCount > 0) {
-        totalSeriesWithData++;
-        refs.seriesHasData.set(seriesId, true);
-        
-        // Track which pane has data
-        const paneId = layoutManagerRef.current?.getPaneForSeries(seriesId);
-        if (paneId) {
-          panesWithData.add(paneId);
-        }
-        
-        console.log(`[MultiPaneChart] ✅ Series ${seriesId} has ${pointCount} points`);
-      } else {
-        // Series exists but has no data yet
-        refs.seriesHasData.set(seriesId, false);
-        console.log(`[MultiPaneChart] ⏳ Series ${seriesId} in pool but 0 points (waiting)`);
-      }
       
       // Get or create the dataSeriesStore entry
       let entry = refs.dataSeriesStore.get(seriesId);
       
-      if (entry) {
-        // Entry exists - ensure dataSeries is attached to renderableSeries
-        if (entry.renderableSeries && (entry.renderableSeries as any).dataSeries !== pooledDataSeries) {
+      if (!entry) {
+        // No entry yet - create it via ensureSeriesExists
+        entry = ensureSeriesExists(seriesId);
+        if (entry) {
+          seriesCreated++;
+          console.log(`[MultiPaneChart] 🆕 Created series entry via ensureSeriesExists: ${seriesId}`);
+        } else {
+          console.log(`[MultiPaneChart] ⚠️ Could not create series entry for ${seriesId}`);
+          continue;
+        }
+      }
+      
+      // Entry exists - ensure dataSeries is attached to renderableSeries
+      if (entry && entry.renderableSeries) {
+        if ((entry.renderableSeries as any).dataSeries !== pooledDataSeries) {
           // Attach pooled DataSeries to the RenderableSeries
           try {
             (entry.renderableSeries as any).dataSeries = pooledDataSeries;
-            console.log(`[MultiPaneChart] 🔗 Attached pooled DataSeries to RenderableSeries: ${seriesId}`);
+            seriesAttached++;
+            console.log(`[MultiPaneChart] 🔗 Attached pooled DataSeries to RenderableSeries: ${seriesId} (${pooledDataSeries.count()} points)`);
           } catch (e) {
             console.warn(`[MultiPaneChart] Failed to attach dataSeries for ${seriesId}:`, e);
           }
         }
         // Update the entry's dataSeries reference
         entry.dataSeries = pooledDataSeries;
+      }
+    }
+    
+    console.log(`[MultiPaneChart] Step 1 complete: checked ${totalSeriesChecked} series, created ${seriesCreated}, attached ${seriesAttached}`);
+    
+    // Step 2: NOW compute which panes have data (after all series are created/attached)
+    const panesWithData = new Set<string>();
+    let totalSeriesWithData = 0;
+    
+    for (const seriesAssignment of currentLayout.layout.series) {
+      const seriesId = seriesAssignment.series_id;
+      
+      // Check the entry in dataSeriesStore (which now should exist if pool had data)
+      const entry = refs.dataSeriesStore.get(seriesId);
+      if (entry && entry.dataSeries) {
+        const pointCount = entry.dataSeries.count();
+        
+        if (pointCount > 0) {
+          totalSeriesWithData++;
+          refs.seriesHasData.set(seriesId, true);
+          
+          // Track which pane has data
+          const paneId = entry.paneId || layoutManagerRef.current?.getPaneForSeries(seriesId);
+          if (paneId) {
+            panesWithData.add(paneId);
+          }
+          
+          console.log(`[MultiPaneChart] ✅ Series ${seriesId} in dataSeriesStore with ${pointCount} points (pane: ${paneId})`);
+        } else {
+          refs.seriesHasData.set(seriesId, false);
+        }
       } else {
-        // No entry yet - try ensureSeriesExists to create it
-        // This will create both the RenderableSeries and link to pooled DataSeries
-        const newEntry = ensureSeriesExists(seriesId);
-        if (newEntry) {
-          console.log(`[MultiPaneChart] 🆕 Created series entry via ensureSeriesExists: ${seriesId}`);
+        // Also check pool directly for any series not in dataSeriesStore
+        const pooledEntry = sharedDataSeriesPool.get(seriesId);
+        if (pooledEntry && pooledEntry.dataSeries && pooledEntry.dataSeries.count() > 0) {
+          totalSeriesWithData++;
+          refs.seriesHasData.set(seriesId, true);
+          const paneId = layoutManagerRef.current?.getPaneForSeries(seriesId);
+          if (paneId) {
+            panesWithData.add(paneId);
+          }
+          console.log(`[MultiPaneChart] ✅ Series ${seriesId} in pool with ${pooledEntry.dataSeries.count()} points (pane: ${paneId}) but NOT in dataSeriesStore`);
+        } else {
+          refs.seriesHasData.set(seriesId, false);
         }
       }
     }
     
-    console.log(`[MultiPaneChart] Checked ${totalSeriesChecked} series, ${totalSeriesWithData} have data`);
+    console.log(`[MultiPaneChart] Step 2 complete: ${totalSeriesWithData} series have data, ${panesWithData.size} panes have data`);
     
-    // Step 2: Update waiting annotations for each pane
+    // Step 3: Update waiting annotations and invalidate surfaces for each pane
     for (const [paneId, paneSurface] of refs.paneSurfaces) {
       const paneHasData = panesWithData.has(paneId);
       
@@ -8241,11 +8281,10 @@ export function useMultiPaneChart({
         }
       } else {
         // Pane doesn't have data yet - ensure waiting annotation is visible
-        // The updateAllWaitingAnnotations function will handle creating it if needed
         console.log(`[MultiPaneChart] ⏳ Pane ${paneId} still waiting for data`);
       }
       
-      // Step 3: Invalidate surface to force redraw
+      // Step 4: Invalidate surface to force redraw
       try {
         paneSurface.surface.invalidateElement();
       } catch (e) {
@@ -8267,7 +8306,7 @@ export function useMultiPaneChart({
     // Trigger waiting annotation update for panes that still need data
     updateWaitingAnnotations();
     
-    console.log(`[MultiPaneChart] ✅ forceChartUpdate complete - ${panesWithData.size} panes have data`);
+    console.log(`[MultiPaneChart] ✅ forceChartUpdate complete - ${panesWithData.size} panes have data, ${totalSeriesWithData} series with data`);
   }, [processBatchedSamples, updateWaitingAnnotations, ensureSeriesExists]);
 
   return {
