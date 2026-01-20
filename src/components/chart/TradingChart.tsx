@@ -259,16 +259,25 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   // Init complete handler - triggers chart update to render historical data
   // CRITICAL: This ensures historical data is plotted even when no new samples arrive
   const handleInitComplete = useCallback(() => {
-    console.log('[TradingChart] Init complete received - triggering chart update');
+    console.log('[TradingChart] 📡 INIT_COMPLETE received from WebSocket');
+    console.log('[TradingChart] 📊 Current state:', {
+      hasPlotLayout: !!plotLayout,
+      isLive,
+      hasForceChartUpdate: !!forceChartUpdateRef.current,
+    });
+    
     // Use a small delay to ensure chart is ready
     setTimeout(() => {
+      console.log('[TradingChart] ⏰ Delayed forceChartUpdate trigger (100ms after init_complete)');
       if (forceChartUpdateRef.current) {
+        console.log('[TradingChart] ✅ Calling forceChartUpdate...');
         forceChartUpdateRef.current();
+        console.log('[TradingChart] ✅ forceChartUpdate called successfully');
       } else {
-        console.warn('[TradingChart] forceChartUpdate not available yet');
+        console.warn('[TradingChart] ⚠️ forceChartUpdate not available yet - chart may not render historical data');
       }
     }, 100);
-  }, []);
+  }, [plotLayout, isLive]);
   
   // WebSocket feed - must be called before useMultiPaneChart to get feedState
   const { 

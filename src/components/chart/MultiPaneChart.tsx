@@ -1159,20 +1159,34 @@ export function useMultiPaneChart({
     
     // Check if already exists
     if (refs.dataSeriesStore.has(seriesId)) {
-      return refs.dataSeriesStore.get(seriesId)!;
+      const existing = refs.dataSeriesStore.get(seriesId)!;
+      console.log(`[ensureSeriesExists] ✅ Series ${seriesId} already exists in dataSeriesStore (${existing.dataSeries?.count() || 0} points)`);
+      return existing;
     }
+    
+    console.log(`[ensureSeriesExists] 🔍 Checking conditions for creating ${seriesId}...`);
     
     // Only create on-demand if:
     // 1. Panes are ready
     // 2. Series is in layout (don't create series not meant to be plotted)
     // 3. We have valid WASM context
-    if (!plotLayout || refs.paneSurfaces.size === 0 || !isReady) {
-      return null; // Not ready for on-demand creation
+    if (!plotLayout) {
+      console.log(`[ensureSeriesExists] ❌ No plotLayout - cannot create ${seriesId}`);
+      return null;
+    }
+    if (refs.paneSurfaces.size === 0) {
+      console.log(`[ensureSeriesExists] ❌ No pane surfaces - cannot create ${seriesId}`);
+      return null;
+    }
+    if (!isReady) {
+      console.log(`[ensureSeriesExists] ❌ Chart not ready (isReady=false) - cannot create ${seriesId}`);
+      return null;
     }
     
     // Check if series is in layout
     if (!isSeriesInLayout(seriesId)) {
-      return null; // Series not in layout, don't create
+      console.log(`[ensureSeriesExists] ⚠️ Series ${seriesId} not in layout - skipping`);
+      return null;
     }
     
     // Can't create if charts aren't ready
@@ -1181,7 +1195,7 @@ export function useMultiPaneChart({
     const hasDynamicPanes = plotLayout && refs.paneSurfaces.size > 0;
     
     if (!hasLegacySurfaces && !hasDynamicPanes) {
-      // Cannot create series: no surfaces available
+      console.log(`[ensureSeriesExists] ❌ No surfaces available (legacy: ${hasLegacySurfaces}, dynamic: ${hasDynamicPanes})`);
       return null;
     }
     
@@ -1189,14 +1203,14 @@ export function useMultiPaneChart({
     // This prevents WASM abort errors
     const { paneId, surface, wasm } = getPaneForSeries(seriesId);
     if (!wasm || !surface || !paneId) {
-      // Cannot create series: invalid pane/surface/WASM
+      console.log(`[ensureSeriesExists] ❌ Invalid pane/surface/WASM for ${seriesId} (paneId: ${paneId}, surface: ${!!surface}, wasm: ${!!wasm})`);
       return null;
     }
     
     // CRITICAL: Ensure sharedWasm is available for DataSeries creation
     // DataSeries must use sharedWasm to prevent sharing issues
     if (!refs.sharedWasm && !wasm) {
-      // Cannot create series: no WASM context
+      console.log(`[ensureSeriesExists] ❌ No WASM context for ${seriesId}`);
       return null;
     }
     
@@ -1204,8 +1218,12 @@ export function useMultiPaneChart({
     
     // Only create series that should be plotted on charts
     if (seriesInfo.chartTarget === 'none') {
+      console.log(`[ensureSeriesExists] ⚠️ Series ${seriesId} has chartTarget=none - skipping`);
       return null;
     }
+    
+    console.log(`[ensureSeriesExists] ✅ All conditions met for ${seriesId}, creating series...`);
+    console.log(`[ensureSeriesExists] 📋 Series info: paneId=${paneId}, type=${seriesInfo.type}, chartTarget=${seriesInfo.chartTarget}`);
     
     try {
       // ON-DEMAND SERIES CREATION (fallback path):
@@ -1322,8 +1340,17 @@ export function useMultiPaneChart({
       };
       refs.dataSeriesStore.set(seriesId, entry);
       
+      console.log(`[ensureSeriesExists] ✅ Created entry for ${seriesId}:`, {
+        paneId,
+        seriesType: seriesInfo.type,
+        renderableSeriesType,
+        dataPoints: dataSeries.count(),
+        isVisible: renderableSeries.isVisible,
+      });
+      
       // Add to appropriate chart surface
       surface.renderableSeries.add(renderableSeries);
+      console.log(`[ensureSeriesExists] ✅ Added renderableSeries to surface for pane ${paneId}`);
       
       // Set initial visibility based on visibleSeries prop
       // CRITICAL: If series is in layout, make it visible by default (even if not in visibleSeries yet)
@@ -1343,6 +1370,7 @@ export function useMultiPaneChart({
         const paneSurface = refs.paneSurfaces.get(paneId);
         if (paneSurface) {
           paneSurface.surface.invalidateElement();
+          console.log(`[ensureSeriesExists] 🔄 Invalidated pane surface: ${paneId}`);
         }
       } else {
         // Legacy surface - invalidate tick or ohlc
@@ -1353,9 +1381,10 @@ export function useMultiPaneChart({
         }
       }
       
+      console.log(`[ensureSeriesExists] 🎉 Successfully created series ${seriesId} with ${dataSeries.count()} points`);
       return entry;
     } catch (e) {
-      // Failed to create DataSeries on-demand
+      console.error(`[ensureSeriesExists] ❌ Failed to create series ${seriesId}:`, e);
       return null;
     }
   };
