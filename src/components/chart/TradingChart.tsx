@@ -580,6 +580,44 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     forceChartUpdateRef.current = forceChartUpdate;
   }, [forceChartUpdate]);
 
+  // CRITICAL: Call forceChartUpdate when layout changes and chart is ready
+  // This ensures that when switching layouts, pooled data is attached to new RenderableSeries
+  // Without this, data only renders on init_complete (WebSocket event), but layout changes
+  // happen without re-connecting, so we need to manually trigger the data attachment
+  const prevLayoutIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!plotLayout || !isReady || !forceChartUpdate) return;
+    
+    // Create a stable layout ID to detect changes
+    const layoutId = JSON.stringify(plotLayout.layout);
+    
+    // Skip if this is the same layout
+    if (prevLayoutIdRef.current === layoutId) return;
+    
+    // First load or layout change detected
+    const isLayoutChange = prevLayoutIdRef.current !== null;
+    prevLayoutIdRef.current = layoutId;
+    
+    if (isLayoutChange) {
+      console.log('[TradingChart] 🔄 Layout changed while connected - calling forceChartUpdate to attach pooled data');
+      // Small delay to ensure surfaces are fully initialized after layout change
+      setTimeout(() => {
+        if (forceChartUpdateRef.current) {
+          console.log('[TradingChart] ⏰ Delayed forceChartUpdate for layout change');
+          forceChartUpdateRef.current();
+        }
+      }, 200);
+    } else {
+      // First load - also call forceChartUpdate in case data is already in pool
+      console.log('[TradingChart] 📊 Initial layout load - calling forceChartUpdate to render any pooled data');
+      setTimeout(() => {
+        if (forceChartUpdateRef.current) {
+          forceChartUpdateRef.current();
+        }
+      }, 200);
+    }
+  }, [plotLayout, isReady, forceChartUpdate]);
+
   // Performance monitoring
   useEffect(() => {
     const updatePerformanceMetrics = () => {
