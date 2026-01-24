@@ -8240,6 +8240,13 @@ export function useMultiPaneChart({
     // Step 2: NOW compute which panes have data (after all series are created/attached)
     const panesWithData = new Set<string>();
     let totalSeriesWithData = 0;
+
+    // Also compute a global X range from the data itself.
+    // This is critical for cases where the server preloads historical samples and then
+    // delays live ticks (e.g., --live-start-delay-sec 60). In that window, we still want
+    // the chart to SHOW the historical line immediately.
+    let globalXMin = Infinity;
+    let globalXMax = -Infinity;
     
     for (const seriesAssignment of currentLayout.layout.series) {
       const seriesId = seriesAssignment.series_id;
@@ -8252,6 +8259,17 @@ export function useMultiPaneChart({
         if (pointCount > 0) {
           totalSeriesWithData++;
           refs.seriesHasData.set(seriesId, true);
+
+          // Track global X extents (DateTimeNumericAxis uses seconds in this project)
+          try {
+            const xRange = entry.dataSeries.getXRange();
+            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+              globalXMin = Math.min(globalXMin, xRange.min);
+              globalXMax = Math.max(globalXMax, xRange.max);
+            }
+          } catch {
+            // Ignore range errors
+          }
           
           // Track which pane has data
           const paneId = entry.paneId || layoutManagerRef.current?.getPaneForSeries(seriesId);
@@ -8269,6 +8287,18 @@ export function useMultiPaneChart({
         if (pooledEntry && pooledEntry.dataSeries && pooledEntry.dataSeries.count() > 0) {
           totalSeriesWithData++;
           refs.seriesHasData.set(seriesId, true);
+
+          // Track global X extents from pooled series too
+          try {
+            const xRange = pooledEntry.dataSeries.getXRange();
+            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+              globalXMin = Math.min(globalXMin, xRange.min);
+              globalXMax = Math.max(globalXMax, xRange.max);
+            }
+          } catch {
+            // Ignore range errors
+          }
+
           const paneId = layoutManagerRef.current?.getPaneForSeries(seriesId);
           if (paneId) {
             panesWithData.add(paneId);
@@ -8282,7 +8312,65 @@ export function useMultiPaneChart({
     
     console.log(`[MultiPaneChart] Step 2 complete: ${totalSeriesWithData} series have data, ${panesWithData.size} panes have data`);
     
-    // Step 3: Update waiting annotations and invalidate surfaces for each pane
+    // Step 3: If data exists but the X-axis range is still on a default "now" window,
+    // force a linked X visibleRange that actually contains the historical data.
+    // IMPORTANT: Only do this if the user hasn't explicitly selected a time window
+    // and hasn't interacted (pan/zoom). We don't want to override user intent.
+    if (
+      panesWithData.size > 0 &&
+      isFinite(globalXMin) &&
+      isFinite(globalXMax) &&
+      globalXMax > globalXMin &&
+      !timeWindowSelectedRef.current &&
+      !userInteractedRef.current
+    ) {
+      try {
+        // Use configured/stored window size when available; fallback to full-range with small padding.
+        const windowSec = minimapTimeWindowRef.current > 0 ? minimapTimeWindowRef.current / 1000 : (globalXMax - globalXMin);
+        const paddingSec = Math.max(windowSec * 0.02, 0.5);
+        const start = Math.max(globalXMin, globalXMax - windowSec);
+        const xRange = new NumberRange(start, globalXMax + paddingSec);
+
+        // Apply to all dynamic panes (linked X-axes requirement)
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          if (paneSurface?.xAxis) {
+            if ((paneSurface.xAxis as any).autoRange !== undefined) {
+              (paneSurface.xAxis as any).autoRange = EAutoRange.Never;
+            }
+            try {
+              paneSurface.xAxis.growBy = new NumberRange(0, 0);
+            } catch {
+              (paneSurface.xAxis as any).growBy = new NumberRange(0, 0);
+            }
+            paneSurface.xAxis.visibleRange = xRange;
+          }
+        }
+
+        // Also apply to legacy surfaces (feature parity)
+        if (refs.tickSurface?.xAxes.get(0)) {
+          const axis = refs.tickSurface.xAxes.get(0);
+          if ((axis as any).autoRange !== undefined) {
+            (axis as any).autoRange = EAutoRange.Never;
+          }
+          if (axis.growBy) axis.growBy = new NumberRange(0, 0);
+          axis.visibleRange = xRange;
+        }
+        if (refs.ohlcSurface?.xAxes.get(0)) {
+          const axis = refs.ohlcSurface.xAxes.get(0);
+          if ((axis as any).autoRange !== undefined) {
+            (axis as any).autoRange = EAutoRange.Never;
+          }
+          if (axis.growBy) axis.growBy = new NumberRange(0, 0);
+          axis.visibleRange = xRange;
+        }
+
+        console.log(`[MultiPaneChart] 🧭 forceChartUpdate applied linked X-axis range from data: ${xRange.min} to ${xRange.max}`);
+      } catch (e) {
+        console.warn('[MultiPaneChart] Failed to apply X-axis range from data in forceChartUpdate:', e);
+      }
+    }
+
+    // Step 4: Update waiting annotations and invalidate surfaces for each pane
     for (const [paneId, paneSurface] of refs.paneSurfaces) {
       const paneHasData = panesWithData.has(paneId);
       
@@ -8313,7 +8401,7 @@ export function useMultiPaneChart({
         console.log(`[MultiPaneChart] ⏳ Pane ${paneId} still waiting for data`);
       }
       
-      // Step 4: Invalidate surface to force redraw
+      // Step 5: Invalidate surface to force redraw
       try {
         paneSurface.surface.invalidateElement();
       } catch (e) {
