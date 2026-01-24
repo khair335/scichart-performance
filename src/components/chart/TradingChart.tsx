@@ -585,36 +585,57 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   // Without this, data only renders on init_complete (WebSocket event), but layout changes
   // happen without re-connecting, so we need to manually trigger the data attachment
   const prevLayoutIdRef = useRef<string | null>(null);
+  const prevIsReadyRef = useRef<boolean>(false);
   useEffect(() => {
-    if (!plotLayout || !isReady || !forceChartUpdate) return;
+    // Track isReady transitions
+    const wasReady = prevIsReadyRef.current;
+    prevIsReadyRef.current = isReady;
+    
+    if (!plotLayout || !forceChartUpdate) return;
     
     // Create a stable layout ID to detect changes
     const layoutId = JSON.stringify(plotLayout.layout);
     
-    // Skip if this is the same layout
-    if (prevLayoutIdRef.current === layoutId) return;
-    
-    // First load or layout change detected
-    const isLayoutChange = prevLayoutIdRef.current !== null;
-    prevLayoutIdRef.current = layoutId;
-    
-    if (isLayoutChange) {
-      console.log('[TradingChart] 🔄 Layout changed while connected - calling forceChartUpdate to attach pooled data');
-      // Small delay to ensure surfaces are fully initialized after layout change
+    // Case 1: isReady just became true (surfaces recreated or first mount)
+    // This is critical for layout switches where isReady goes false->true
+    if (isReady && !wasReady) {
+      console.log('[TradingChart] 🟢 isReady became TRUE - calling forceChartUpdate to attach pooled data');
+      prevLayoutIdRef.current = layoutId; // Update layout ID since we're calling forceChartUpdate
+      // Delay to ensure all surfaces are fully initialized
       setTimeout(() => {
         if (forceChartUpdateRef.current) {
-          console.log('[TradingChart] ⏰ Delayed forceChartUpdate for layout change');
+          console.log('[TradingChart] ⏰ Delayed forceChartUpdate after isReady became true');
           forceChartUpdateRef.current();
         }
-      }, 200);
-    } else {
-      // First load - also call forceChartUpdate in case data is already in pool
-      console.log('[TradingChart] 📊 Initial layout load - calling forceChartUpdate to render any pooled data');
-      setTimeout(() => {
-        if (forceChartUpdateRef.current) {
-          forceChartUpdateRef.current();
-        }
-      }, 200);
+      }, 300);
+      return;
+    }
+    
+    if (!isReady) return;
+    
+    // Case 2: Layout JSON changed while already ready
+    if (prevLayoutIdRef.current !== layoutId) {
+      const isLayoutChange = prevLayoutIdRef.current !== null;
+      prevLayoutIdRef.current = layoutId;
+      
+      if (isLayoutChange) {
+        console.log('[TradingChart] 🔄 Layout changed while connected - calling forceChartUpdate to attach pooled data');
+        // Small delay to ensure surfaces are fully initialized after layout change
+        setTimeout(() => {
+          if (forceChartUpdateRef.current) {
+            console.log('[TradingChart] ⏰ Delayed forceChartUpdate for layout change');
+            forceChartUpdateRef.current();
+          }
+        }, 200);
+      } else {
+        // First load - also call forceChartUpdate in case data is already in pool
+        console.log('[TradingChart] 📊 Initial layout load - calling forceChartUpdate to render any pooled data');
+        setTimeout(() => {
+          if (forceChartUpdateRef.current) {
+            forceChartUpdateRef.current();
+          }
+        }, 200);
+      }
     }
   }, [plotLayout, isReady, forceChartUpdate]);
 
