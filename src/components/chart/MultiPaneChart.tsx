@@ -5384,22 +5384,27 @@ export function useMultiPaneChart({
       // Also check refs.dataSeriesStore for paneId tracking (but don't require it for data append)
       const storeEntry = refs.dataSeriesStore.get(series_id);
       
-      // If we have neither pool nor store entry, buffer the sample
+      // If we don't have a pooled DataSeries yet (most commonly because the pool isn't initialized
+      // during early startup), we MUST buffer samples so that server preloaded history is not lost.
+      // This is required for cases like:
+      //   --init-preload-samples 1000
+      //   --live-start-delay-sec 60
+      // where we expect to see plots immediately after init_complete.
       if (!pooledEntry) {
-        // Only buffer if series is in layout (don't buffer samples for series we'll never create)
-        if (plotLayout && isSeriesInLayout(series_id)) {
-          if (skippedSamplesBufferRef.current.length < MAX_SKIPPED_BUFFER) {
-            skippedSamplesBufferRef.current.push(sample);
-          } else {
-            skippedSamplesBufferRef.current.shift();
-            skippedSamplesBufferRef.current.push(sample);
-          }
+        // Buffer ALL samples (bounded) so history can be replayed once pool/surfaces are ready.
+        // We intentionally do NOT gate this on layout membership; the product requirement is to
+        // keep collecting data even when layouts are missing/mismatched.
+        if (skippedSamplesBufferRef.current.length < MAX_SKIPPED_BUFFER) {
+          skippedSamplesBufferRef.current.push(sample);
+        } else {
+          skippedSamplesBufferRef.current.shift();
+          skippedSamplesBufferRef.current.push(sample);
         }
-        
+
         // DEBUG: Log missing series (throttled)
         if (i === 0) {
           const bufferedCount = skippedSamplesBufferRef.current.length;
-          console.warn(`[MultiPaneChart] ⚠️ Series not in pool, buffering: ${series_id} (${bufferedCount} buffered)`);
+          console.warn(`[MultiPaneChart] ⚠️ Pool not ready for series, buffering: ${series_id} (${bufferedCount} buffered)`);
         }
         continue;
       }
