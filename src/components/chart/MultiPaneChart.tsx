@@ -8188,6 +8188,32 @@ export function useMultiPaneChart({
       return;
     }
     
+    // CRITICAL FIX: Drain skippedSamplesBufferRef FIRST, before any pool lookups.
+    // History samples arriving before pool initialization are stored here.
+    // We must move them to the processing queue and process them NOW so that
+    // the pool contains the data when we do the series attach + X-axis calculation.
+    const skippedCount = skippedSamplesBufferRef.current.length;
+    const bufferedInQueue = sampleBufferRef.current.length + processingQueueRef.current.length;
+    
+    if (skippedCount > 0 || bufferedInQueue > 0) {
+      console.log(`[MultiPaneChart] 🔄 forceChartUpdate: draining ${skippedCount} skipped + ${bufferedInQueue} queued samples BEFORE pool lookup`);
+      
+      if (skippedCount > 0) {
+        processingQueueRef.current = processingQueueRef.current.concat(skippedSamplesBufferRef.current);
+        skippedSamplesBufferRef.current = [];
+      }
+      
+      // Process all buffered samples synchronously (multiple passes if needed)
+      // This ensures pool has data before we calculate X-axis ranges
+      let iterations = 0;
+      const maxIterations = 20; // Safety limit
+      while ((sampleBufferRef.current.length > 0 || processingQueueRef.current.length > 0) && iterations < maxIterations) {
+        processBatchedSamples();
+        iterations++;
+      }
+      console.log(`[MultiPaneChart] 🔄 Processed buffered samples in ${iterations} iterations`);
+    }
+    
     let totalSeriesChecked = 0;
     let seriesCreated = 0;
     let seriesAttached = 0;
@@ -8315,7 +8341,7 @@ export function useMultiPaneChart({
       }
     }
     
-    console.log(`[MultiPaneChart] Step 2 complete: ${totalSeriesWithData} series have data, ${panesWithData.size} panes have data`);
+    console.log(`[MultiPaneChart] Step 2 complete: ${totalSeriesWithData} series have data, ${panesWithData.size} panes have data, X range: ${globalXMin} to ${globalXMax}`);
     
     // Step 3: If data exists but the X-axis range is still on a default "now" window,
     // force a linked X visibleRange that actually contains the historical data.
@@ -8417,12 +8443,6 @@ export function useMultiPaneChart({
     // Update anyPaneHasDataRef if any pane has data
     if (panesWithData.size > 0) {
       anyPaneHasDataRef.current = true;
-    }
-    
-    // Process any buffered samples that might be waiting
-    if (sampleBufferRef.current.length > 0) {
-      console.log(`[MultiPaneChart] Processing ${sampleBufferRef.current.length} buffered samples`);
-      processBatchedSamples();
     }
     
     // Trigger waiting annotation update for panes that still need data
