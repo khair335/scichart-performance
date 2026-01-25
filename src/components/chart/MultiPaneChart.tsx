@@ -1034,8 +1034,19 @@ export function useMultiPaneChart({
         continue;
       }
 
-      // Check if all series for this pane have received data
+      // Check if all CHARTABLE series for this pane have received data.
+      // Skip series with type: strategy_markers or strategy_signals since they are rendered
+      // as annotations, not as chart lines. They should NOT block the "Waiting for Data..." status.
       const allSeriesHaveData = seriesForPane.every(seriesId => {
+        // Check if this series has chartTarget: 'none' (strategy markers/signals)
+        // These are rendered as annotations and should not block waiting status
+        const seriesAssignment = plotLayout?.layout.series.find(s => s.series_id === seriesId);
+        if (seriesAssignment) {
+          // Series with these types are rendered as annotations, not chart lines
+          if (seriesAssignment.type === 'strategy_markers' || seriesAssignment.type === 'strategy_signals') {
+            return true; // Skip this check - consider it "has data" for waiting purposes
+          }
+        }
         return refs.seriesHasData.get(seriesId) === true;
       });
 
