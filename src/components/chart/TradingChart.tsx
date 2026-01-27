@@ -83,54 +83,19 @@ const NoConnectionOverlay = ({ wsUrl, onStartDemo, autoReloadEnabled, onCancelAu
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const reloadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Auto-reload disabled - user must manually refresh or reconnect
+  // This prevents losing the selected layout JSON file
   useEffect(() => {
-    if (!autoReloadEnabled) {
-      // Clear any pending reloads if auto-reload is disabled
-      if (reloadTimeoutRef.current) {
-        clearTimeout(reloadTimeoutRef.current);
-        reloadTimeoutRef.current = null;
-      }
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
-      return;
+    // Clear any legacy pending reloads
+    if (reloadTimeoutRef.current) {
+      clearTimeout(reloadTimeoutRef.current);
+      reloadTimeoutRef.current = null;
     }
-
-    // Reset countdown
-    setCountdown(3);
-
-    // Start countdown
-    countdownRef.current = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          if (countdownRef.current) {
-            clearInterval(countdownRef.current);
-            countdownRef.current = null;
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    // Schedule reload after 3 seconds
-    reloadTimeoutRef.current = setTimeout(() => {
-      window.location.reload();
-    }, 3000);
-
-    // Cleanup
-    return () => {
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
-      if (reloadTimeoutRef.current) {
-        clearTimeout(reloadTimeoutRef.current);
-        reloadTimeoutRef.current = null;
-      }
-    };
-  }, [autoReloadEnabled]);
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+  }, []);
 
   return (
     <div className="absolute inset-0 flex items-start justify-center z-30">
