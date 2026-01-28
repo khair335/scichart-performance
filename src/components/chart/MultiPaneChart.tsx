@@ -4260,6 +4260,15 @@ export function useMultiPaneChart({
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
       console.log('[MultiPaneChart] Layout changed, resetting state');
 
+      // CRITICAL: Mark chart as not-ready during teardown so callers (TradingChart)
+      // can reliably detect the transition and re-run forceChartUpdate AFTER panes
+      // are recreated. Without this, forceChartUpdate may run while paneSurfaces
+      // is empty and then never re-run until the next live tick arrives.
+      if (isReady) {
+        setIsReady(false);
+        onReadyChange?.(false);
+      }
+
       // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current && !cleanupInProgressRef.current) {
         // Store reference to old manager and set to null immediately
