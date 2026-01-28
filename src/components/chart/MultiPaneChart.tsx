@@ -477,20 +477,21 @@ function updatePaneWaitingOverlay(
   const seriesStatus: string[] = [];
 
   for (const seriesId of assignedSeries) {
-    // IMPORTANT: The shared pool may already contain historical data even if this
-    // series didn't exist in the *previous* layout. Use the pool as source of truth.
     const seriesEntry = refs.dataSeriesStore.get(seriesId);
-    const pooledEntry = sharedDataSeriesPool.get(seriesId);
-
-    const ds: any | undefined = seriesEntry?.dataSeries ?? pooledEntry?.dataSeries;
-    const count = ds ? ds.count() : 0;
-
-    if (count > 0) {
-      hasAnyData = true;
-      seriesStatus.push(`${seriesId}: ${count} points`);
+    if (seriesEntry && seriesEntry.dataSeries) {
+      // Check if series has data
+      const count = seriesEntry.dataSeries.count();
+      if (count > 0) {
+        hasAnyData = true;
+        seriesStatus.push(`${seriesId}: ${count} points`);
+      } else {
+        pendingCount++;
+        seriesStatus.push(`${seriesId}: 0 points (waiting)`);
+      }
     } else {
+      // Series not created yet or not in store
       pendingCount++;
-      seriesStatus.push(`${seriesId}: ${ds ? '0 points (waiting)' : 'not created yet'}`);
+      seriesStatus.push(`${seriesId}: not created yet`);
     }
   }
 
@@ -4259,12 +4260,12 @@ export function useMultiPaneChart({
     if (currentLayoutIdRef.current && currentLayoutIdRef.current !== layoutId) {
       console.log('[MultiPaneChart] Layout changed, resetting state');
 
-      // CRITICAL: On layout change, DO NOT delete the parent surface/WASM context.
-      // Deleting it invalidates pooled DataSeries, causing already-received history
-      // (e.g., the 250 init-preload ticks) to disappear until new live ticks arrive.
-      // Instead, destroy only the sub-panes and keep the parent surface alive.
+      // Clean up the pane manager (this will properly cleanup all panes and parent surface)
       if (paneManagerRef.current && !cleanupInProgressRef.current) {
-        const manager = paneManagerRef.current;
+        // Store reference to old manager and set to null immediately
+        // This ensures the next render creates a NEW manager
+        const oldManager = paneManagerRef.current;
+        paneManagerRef.current = null;
         cleanupInProgressRef.current = true;
 
         // CRITICAL: Detach dataSeries from all renderableSeries BEFORE cleanup
@@ -4279,56 +4280,85 @@ export function useMultiPaneChart({
           }
         }
 
-        // Best-effort: destroy only panes/subcharts (parent surface stays alive)
-        try {
-          manager.destroyAllPanes();
-        } catch {
-          // Ignore
-        }
+        // CRITICAL: Cleanup FIRST, then clear references
+        // This ensures cleanup completes before we clear our tracking maps
+        // NOTE: DataSeries persist in sharedDataSeriesPool - we only clear renderableSeries
+        oldManager.cleanup().then(() => {
+          console.log('[MultiPaneChart] Layout change cleanup complete - dataSeries preserved in pool');
 
-        // Clear local references immediately
-        refs.paneSurfaces.clear();
-        refs.seriesHasData.clear();
-        refs.markerScatterSeries.clear();
-        for (const [, entry] of refs.dataSeriesStore.entries()) {
-          entry.renderableSeries = null as any;
-          entry.paneId = undefined;
-        }
-        preallocatedSeriesRef.current.clear();
+          // NOW clear our local references after cleanup is done
+          refs.paneSurfaces.clear();
+          
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          // This prevents old series data status from affecting new layout
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
+          // DataSeries persist in sharedDataSeriesPool across layout changes
+          // This ensures all historical data is preserved when layout changes
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            // Just mark as needing new renderableSeries, keep dataSeries reference
+            entry.renderableSeries = null as any;
+            entry.paneId = undefined;
+          }
 
-        // Reset state flags but keep parent surface ready
-        dynamicPanesInitializedRef.current = false;
-        pendingPaneCreationRef.current = false;
-        currentLayoutIdRef.current = null;
-        anyPaneHasDataRef.current = false;
+          // Clear preallocated series tracking so series can be re-attached to new panes
+          preallocatedSeriesRef.current.clear();
 
-        // Trigger re-run to recreate panes for the new layout
-        setPanesReadyCount(0);
+          // Wait additional time before allowing new surface creation
+          // WASM module needs extra time to fully process deletions
+          setTimeout(() => {
+            // Clear cleanup flag and trigger re-render to proceed with new layout
+            cleanupInProgressRef.current = false;
+            setParentSurfaceReady(false); // Trigger effect re-run
+            setPanesReadyCount(0); // Reset panes ready count to trigger preallocation when new panes are created
+          }, 600);
+        }).catch((e) => {
+          // Silently handle cleanup errors (expected during layout transitions)
+          console.log('[MultiPaneChart] Layout change cleanup error (expected) - dataSeries preserved in pool');
 
-        // Small delay to allow SciChart to finish internal deletions before recreating panes
-        // CRITICAL: After cleanup, we need to force the effect to re-run to create new panes
-        // Since refs don't trigger re-renders, we use a state change that IS in the dependency array
-        // Wait longer than DynamicPlotGrid's 50ms delay to ensure DOM containers are ready
-        setTimeout(() => {
-          cleanupInProgressRef.current = false;
-          // Force effect re-run by changing a state in the dependency array
-          // This triggers createDynamicPanes to run with the new layout
-          // parentSurfaceReadyRef stays true (parent surface is reused), but state change triggers effect
-          setParentSurfaceReady(prev => !prev);
-          // Toggle back to ensure consistent state
-          requestAnimationFrame(() => {
-            setParentSurfaceReady(true);
-            // Also ensure the ref stays in sync
-            parentSurfaceReadyRef.current = true;
-          });
-        }, 100); // Wait 100ms to ensure DOM containers are ready (DynamicPlotGrid uses 50ms)
+          // Even on error, clear references to prevent memory leaks
+          refs.paneSurfaces.clear();
+          
+          // CRITICAL: Clear seriesHasData tracking when layout changes
+          refs.seriesHasData.clear();
+          
+          // CRITICAL: Clear strategy marker scatter series tracking
+          refs.markerScatterSeries.clear();
+          
+          // CRITICAL: Only clear renderableSeries references, NOT dataSeries
+          for (const [seriesId, entry] of refs.dataSeriesStore.entries()) {
+            if (entry.renderableSeries) {
+              try {
+                (entry.renderableSeries as any).dataSeries = null;
+              } catch (e) {
+                // Ignore
+              }
+              entry.renderableSeries = null as any;
+              entry.paneId = undefined;
+            }
+          }
+          preallocatedSeriesRef.current.clear();
+
+          // Wait additional time before allowing new surface creation
+          setTimeout(() => {
+            // Clear cleanup flag and trigger re-render
+            cleanupInProgressRef.current = false;
+            setParentSurfaceReady(false); // Trigger effect re-run
+            setPanesReadyCount(0); // Reset panes ready count to trigger preallocation when new panes are created
+          }, 400);
+        });
       }
 
-      // Reset all state flags (redundant but kept for safety)
+      // Reset all state flags
       dynamicPanesInitializedRef.current = false;
+      parentSurfaceReadyRef.current = false;
       pendingPaneCreationRef.current = false;
       currentLayoutIdRef.current = null;
-      anyPaneHasDataRef.current = false;
+      anyPaneHasDataRef.current = false; // CRITICAL: Reset data flag on layout change
+      setParentSurfaceReady(false);
+      setPanesReadyCount(0); // CRITICAL: Reset panesReadyCount so preallocation effect re-runs when new panes are created
 
       // CRITICAL: Return early and let the effect re-run on the next render cycle
       // This ensures cleanup is complete before we try to create new surfaces
