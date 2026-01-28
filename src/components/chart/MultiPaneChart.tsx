@@ -4306,17 +4306,29 @@ export function useMultiPaneChart({
         setPanesReadyCount(0);
 
         // Small delay to allow SciChart to finish internal deletions before recreating panes
+        // CRITICAL: After cleanup, we need to force the effect to re-run to create new panes
+        // Since refs don't trigger re-renders, we use a state change that IS in the dependency array
+        // Wait longer than DynamicPlotGrid's 50ms delay to ensure DOM containers are ready
         setTimeout(() => {
           cleanupInProgressRef.current = false;
-        }, 50);
+          // Force effect re-run by changing a state in the dependency array
+          // This triggers createDynamicPanes to run with the new layout
+          // parentSurfaceReadyRef stays true (parent surface is reused), but state change triggers effect
+          setParentSurfaceReady(prev => !prev);
+          // Toggle back to ensure consistent state
+          requestAnimationFrame(() => {
+            setParentSurfaceReady(true);
+            // Also ensure the ref stays in sync
+            parentSurfaceReadyRef.current = true;
+          });
+        }, 100); // Wait 100ms to ensure DOM containers are ready (DynamicPlotGrid uses 50ms)
       }
 
-      // Reset all state flags
+      // Reset all state flags (redundant but kept for safety)
       dynamicPanesInitializedRef.current = false;
       pendingPaneCreationRef.current = false;
       currentLayoutIdRef.current = null;
-      anyPaneHasDataRef.current = false; // CRITICAL: Reset data flag on layout change
-      setPanesReadyCount(0); // CRITICAL: Reset panesReadyCount so preallocation effect re-runs when new panes are created
+      anyPaneHasDataRef.current = false;
 
       // CRITICAL: Return early and let the effect re-run on the next render cycle
       // This ensures cleanup is complete before we try to create new surfaces
