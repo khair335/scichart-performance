@@ -4366,6 +4366,14 @@ export function useMultiPaneChart({
       pendingPaneCreationRef.current = false;
       currentLayoutIdRef.current = null;
       anyPaneHasDataRef.current = false; // CRITICAL: Reset data flag on layout change
+      
+      // CRITICAL: Reset user interaction flags on layout change
+      // This allows forceChartUpdate to properly align X-axis to historical data
+      // Without this, loading a new layout after interacting with a previous layout
+      // would prevent the X-axis from aligning to the data range
+      userInteractedRef.current = false;
+      timeWindowSelectedRef.current = false;
+      
       setParentSurfaceReady(false);
       setPanesReadyCount(0); // CRITICAL: Reset panesReadyCount so preallocation effect re-runs when new panes are created
 
