@@ -88,6 +88,10 @@ export class DynamicPaneManager {
   
   // Callback to notify parent component when X-axis is manually changed
   public onXAxisManualChange?: (range: NumberRange) => void;
+  
+  // Callback to notify parent component when user zooms (wheel or box zoom)
+  // Used to trigger pause mode
+  public onZoomInteraction?: () => void;
 
   constructor(theme: ChartTheme, timezone: string = 'UTC') {
     this.theme = theme;
@@ -338,23 +342,45 @@ export class DynamicPaneManager {
     switch (this.zoomMode) {
       case 'x-only':
         // X-only mode: wheel zooms X only, no box zoom, right-click drag pans
-        surface.chartModifiers.add(
-          new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection }),
-          new ZoomPanModifier({ 
-            executeCondition: { button: EExecuteOn.MouseRightButton }
-          })
-          // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
-        );
+        {
+          const xWheelModifier = new MouseWheelZoomModifier({ xyDirection: EXyDirection.XDirection });
+          // Hook into wheel zoom to trigger pause mode
+          const origXWheel = (xWheelModifier as any).modifierMouseWheel;
+          if (origXWheel) {
+            (xWheelModifier as any).modifierMouseWheel = (args: any) => {
+              this.onZoomInteraction?.();
+              return origXWheel.call(xWheelModifier, args);
+            };
+          }
+          surface.chartModifiers.add(
+            xWheelModifier,
+            new ZoomPanModifier({ 
+              executeCondition: { button: EExecuteOn.MouseRightButton }
+            })
+            // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
+          );
+        }
         break;
       case 'y-only':
         // Y-only mode: wheel zooms Y only, no box zoom, right-click drag pans
-        surface.chartModifiers.add(
-          new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection }),
-          new ZoomPanModifier({ 
-            executeCondition: { button: EExecuteOn.MouseRightButton }
-          })
-          // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
-        );
+        {
+          const yWheelModifier = new MouseWheelZoomModifier({ xyDirection: EXyDirection.YDirection });
+          // Hook into wheel zoom to trigger pause mode
+          const origYWheel = (yWheelModifier as any).modifierMouseWheel;
+          if (origYWheel) {
+            (yWheelModifier as any).modifierMouseWheel = (args: any) => {
+              this.onZoomInteraction?.();
+              return origYWheel.call(yWheelModifier, args);
+            };
+          }
+          surface.chartModifiers.add(
+            yWheelModifier,
+            new ZoomPanModifier({ 
+              executeCondition: { button: EExecuteOn.MouseRightButton }
+            })
+            // NOTE: ZoomExtentsModifier is NOT added - double-click is handled in MultiPaneChart
+          );
+        }
         break;
       case 'box':
       default:
@@ -367,10 +393,13 @@ export class DynamicPaneManager {
           xyDirection: EXyDirection.XDirection 
         });
         
-        // Override wheel handler for Shift+wheel Y zoom
+        // Override wheel handler for Shift+wheel Y zoom AND pause mode trigger
         const originalModifierMouseWheel = (wheelModifier as any).modifierMouseWheel;
         if (originalModifierMouseWheel) {
           (wheelModifier as any).modifierMouseWheel = (args: any) => {
+            // Trigger pause mode on wheel zoom
+            this.onZoomInteraction?.();
+            
             if (args.mouseArgs?.ctrlKey || args.mouseArgs?.shiftKey) {
               // Temporarily switch to Y direction for Shift/Ctrl+wheel
               const tempDirection = wheelModifier.xyDirection;
@@ -386,11 +415,24 @@ export class DynamicPaneManager {
           };
         }
         
+        // Create rubber band modifier with zoom interaction callback
+        const rubberBandModifier = new RubberBandXyZoomModifier({ 
+          isAnimated: false,
+          executeCondition: { button: EExecuteOn.MouseLeftButton }
+        });
+        
+        // Hook into rubber band zoom completion to trigger pause mode
+        const originalOnZoomComplete = (rubberBandModifier as any).performZoom;
+        if (originalOnZoomComplete) {
+          (rubberBandModifier as any).performZoom = (...args: any[]) => {
+            // Trigger pause mode on box zoom
+            this.onZoomInteraction?.();
+            return originalOnZoomComplete.apply(rubberBandModifier, args);
+          };
+        }
+        
         surface.chartModifiers.add(
-          new RubberBandXyZoomModifier({ 
-            isAnimated: false,
-            executeCondition: { button: EExecuteOn.MouseLeftButton }
-          }),
+          rubberBandModifier,
           new ZoomPanModifier({ 
             executeCondition: { button: EExecuteOn.MouseRightButton }
           }),
