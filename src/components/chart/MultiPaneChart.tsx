@@ -4413,6 +4413,18 @@ export function useMultiPaneChart({
     // We intentionally do NOT change live/session/sticky modes on manual pan/zoom here;
     // the toolbar (Pause/Live) and minimap interactions control those modes.
     paneManager.onXAxisManualChange = undefined;
+    
+    // Set up zoom interaction callback to trigger pause mode on wheel/box zoom
+    paneManager.onZoomInteraction = () => {
+      isLiveRef.current = false;
+      userInteractedRef.current = true;
+      minimapStickyRef.current = false;
+      // Clear any pending interaction timeout
+      if (interactionTimeoutRef.current) {
+        clearTimeout(interactionTimeoutRef.current);
+        interactionTimeoutRef.current = null;
+      }
+    };
 
     // For dynamic layouts, we don't need to wait for legacy isReady
     // We'll set isReady after creating the first pane
