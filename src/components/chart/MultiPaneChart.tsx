@@ -6496,6 +6496,44 @@ export function useMultiPaneChart({
     processChunksAsync();
   }, [processChunk]);
   
+  /**
+   * Synchronously flush ALL buffered samples in one shot.
+   * Used by forceChartUpdate at init_complete to instantly render historical data
+   * without async yielding. May briefly freeze UI for very large histories.
+   */
+  const flushAllSamplesSynchronously = useCallback(() => {
+    // Consolidate all buffers into processing queue
+    if (skippedSamplesBufferRef.current.length > 0) {
+      processingQueueRef.current = processingQueueRef.current.concat(skippedSamplesBufferRef.current);
+      skippedSamplesBufferRef.current = [];
+    }
+    if (sampleBufferRef.current.length > 0) {
+      processingQueueRef.current = processingQueueRef.current.concat(sampleBufferRef.current);
+      sampleBufferRef.current = [];
+    }
+    
+    const totalSamples = processingQueueRef.current.length;
+    if (totalSamples === 0) {
+      return 0;
+    }
+    
+    console.log(`[MultiPaneChart] ⚡ INSTANT FLUSH: Processing ${totalSamples} samples synchronously`);
+    
+    // Clear any pending async processing
+    pendingUpdateRef.current = null;
+    isProcessingRef.current = false;
+    
+    // Process ALL samples in one shot - no chunking, no yielding
+    // This is fast because processChunk uses suspendUpdates/resumeUpdates internally
+    const allSamples = processingQueueRef.current;
+    processingQueueRef.current = [];
+    
+    processChunk(allSamples);
+    
+    console.log(`[MultiPaneChart] ⚡ INSTANT FLUSH complete: ${totalSamples} samples processed`);
+    return totalSamples;
+  }, [processChunk]);
+  
   // CRITICAL: Continuously monitor and remove ZoomExtentsModifier from all surfaces
   // This ensures it's always removed, even if something re-adds it (e.g., when session completes)
   useEffect(() => {
@@ -8228,30 +8266,17 @@ export function useMultiPaneChart({
       return;
     }
     
-    // CRITICAL FIX: Drain skippedSamplesBufferRef FIRST, before any pool lookups.
-    // History samples arriving before pool initialization are stored here.
-    // We must move them to the processing queue and process them NOW so that
-    // the pool contains the data when we do the series attach + X-axis calculation.
+    // CRITICAL: Use synchronous flush to instantly render all historical data
+    // This replaces the old async loop that caused slow "replay" effect
     const skippedCount = skippedSamplesBufferRef.current.length;
     const bufferedInQueue = sampleBufferRef.current.length + processingQueueRef.current.length;
     
     if (skippedCount > 0 || bufferedInQueue > 0) {
-      console.log(`[MultiPaneChart] 🔄 forceChartUpdate: draining ${skippedCount} skipped + ${bufferedInQueue} queued samples BEFORE pool lookup`);
+      console.log(`[MultiPaneChart] ⚡ forceChartUpdate: INSTANT FLUSH of ${skippedCount} skipped + ${bufferedInQueue} queued samples`);
       
-      if (skippedCount > 0) {
-        processingQueueRef.current = processingQueueRef.current.concat(skippedSamplesBufferRef.current);
-        skippedSamplesBufferRef.current = [];
-      }
-      
-      // Process all buffered samples synchronously (multiple passes if needed)
-      // This ensures pool has data before we calculate X-axis ranges
-      let iterations = 0;
-      const maxIterations = 20; // Safety limit
-      while ((sampleBufferRef.current.length > 0 || processingQueueRef.current.length > 0) && iterations < maxIterations) {
-        processBatchedSamples();
-        iterations++;
-      }
-      console.log(`[MultiPaneChart] 🔄 Processed buffered samples in ${iterations} iterations`);
+      // Use synchronous flush - processes ALL samples in one shot
+      const flushedCount = flushAllSamplesSynchronously();
+      console.log(`[MultiPaneChart] ⚡ Flushed ${flushedCount} samples instantly`);
     }
     
     let totalSeriesChecked = 0;
@@ -8489,7 +8514,7 @@ export function useMultiPaneChart({
     updateWaitingAnnotations();
     
     console.log(`[MultiPaneChart] ✅ forceChartUpdate complete - ${panesWithData.size} panes have data, ${totalSeriesWithData} series with data`);
-  }, [processBatchedSamples, updateWaitingAnnotations, ensureSeriesExists]);
+  }, [flushAllSamplesSynchronously, updateWaitingAnnotations, ensureSeriesExists]);
 
   return {
     isReady,
