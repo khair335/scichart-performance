@@ -7326,30 +7326,12 @@ export function useMultiPaneChart({
                   // Wait a bit for the range to fully render before processing data
                   await new Promise(resolve => setTimeout(resolve, 100));
                   
-                  // Process data silently in background (skipChartRendering is still true)
-                  const processRemaining = async () => {
-                    let iterations = 0;
-                    const maxIterations = 10000; // Process all remaining data
-                    const chunkSize = 50; // Process 50 batches, then yield
-                    
-                    while (sampleBufferRef.current.length > 0 && iterations < maxIterations) {
-                      // Process a chunk of batches
-                      for (let i = 0; i < chunkSize && sampleBufferRef.current.length > 0 && iterations < maxIterations; i++) {
-                        processBatchedSamples(); // Will skip rendering during restoration
-                        iterations++;
-                      }
-                      
-                      // Yield to browser every chunk to prevent blocking
-                      if (sampleBufferRef.current.length > 0 && iterations < maxIterations) {
-                        await new Promise(resolve => setTimeout(resolve, 1)); // 1ms delay
-                      }
-                    }
-                    
-                
-                  };
-                  
-                  // Start background processing (don't await)
-                  processRemaining();
+                  // INSTANT FLUSH: Process all buffered data in ONE shot when tab becomes visible
+                  // This avoids the slow point-by-point replay caused by browser tab throttling
+                  // Use synchronous flush instead of chunked async processing
+                  console.log(`[MultiPaneChart] 🔄 Tab visible: Instant flush of ${remainingBufferSize} buffered samples`);
+                  const flushedCount = flushAllSamplesSynchronously();
+                  console.log(`[MultiPaneChart] ✅ Tab visible flush complete: ${flushedCount} samples rendered instantly`);
                 }
                 
                 // Verify the range after a delay (but don't re-apply aggressively to prevent shaking)
