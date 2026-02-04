@@ -8163,7 +8163,13 @@ export function useMultiPaneChart({
       // ignore
       pendingUpdateRef.current = null;
     }
+    // Clear ALL sample buffers - this is critical to prevent partial plotting
     sampleBufferRef.current = [];
+    skippedSamplesBufferRef.current = [];
+    processingQueueRef.current = [];
+    isProcessingRef.current = false;
+    
+    console.log('[MultiPaneChart] All sample buffers cleared (sampleBuffer, skippedSamples, processingQueue)');
 
     // 1) Clear all DataSeries currently bound to RenderableSeries (dynamic + legacy)
     for (const [, entry] of refs.dataSeriesStore) {
