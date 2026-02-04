@@ -704,6 +704,54 @@ export function useMultiPaneChart({
     },
   } : defaultUIConfig;
   
+  // ============================================================================
+  // CRITICAL: All useState and key useRef declarations MUST be at the top
+  // before any code that references them. This prevents HMR "Should have a queue"
+  // errors caused by hook order inconsistency.
+  // ============================================================================
+  
+  // Core chart refs - MUST be declared before any functions that use them
+  const chartRefs = useRef<ChartRefs>({
+    tickSurface: null, // Legacy - for backward compatibility
+    ohlcSurface: null, // Legacy - for backward compatibility
+    tickWasm: null, // Legacy
+    ohlcWasm: null, // Legacy
+    paneSurfaces: new Map<string, PaneSurface>(), // Dynamic pane registry
+    // Unified DataSeries Store: series_id → DataSeriesEntry
+    // All series (tick, OHLC, indicators) are stored here
+    dataSeriesStore: new Map<string, DataSeriesEntry>(),
+    verticalGroup: null,
+    overview: null,
+    sharedWasm: null, // Shared WASM context for all dynamic panes
+    markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(), // Strategy marker scatter series per pane
+    seriesHasData: new Map<string, boolean>(), // Track which series have received data
+    waitingAnnotations: new Map<string, TextAnnotation>(), // Track waiting annotations per pane
+  });
+
+  // Core state - MUST be declared before functions reference them
+  const [isReady, setIsReady] = useState(false);
+  const [parentSurfaceReady, setParentSurfaceReady] = useState(false);
+  const [overviewNeedsRefresh, setOverviewNeedsRefresh] = useState(0); // Counter to trigger overview refresh
+  const [panesReadyCount, setPanesReadyCount] = useState(0); // Track when panes are created (triggers preallocation)
+  const overviewNeedsRefreshSetterRef = useRef<((value: number) => void) | null>(null);
+  
+  // Store the setter in a ref so it can be accessed from processBatchedSamples
+  useEffect(() => {
+    overviewNeedsRefreshSetterRef.current = setOverviewNeedsRefresh;
+  }, []);
+
+  // Cleanup any pending minimap selectedArea updates on unmount
+  useEffect(() => {
+    return () => {
+      if (minimapSelectedAreaUpdateTimeoutRef.current) {
+        clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
+        minimapSelectedAreaUpdateTimeoutRef.current = null;
+      }
+    };
+  }, []);
+  
+  const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
+
   // Layout manager instance (created once)
   const layoutManagerRef = useRef<PlotLayoutManager | null>(null);
   if (!layoutManagerRef.current) {
@@ -1399,44 +1447,8 @@ export function useMultiPaneChart({
       return null;
     }
   };
-  const chartRefs = useRef<ChartRefs>({
-    tickSurface: null, // Legacy - for backward compatibility
-    ohlcSurface: null, // Legacy - for backward compatibility
-    tickWasm: null, // Legacy
-    ohlcWasm: null, // Legacy
-    paneSurfaces: new Map<string, PaneSurface>(), // Dynamic pane registry
-    // Unified DataSeries Store: series_id → DataSeriesEntry
-    // All series (tick, OHLC, indicators) are stored here
-    dataSeriesStore: new Map<string, DataSeriesEntry>(),
-    verticalGroup: null,
-    overview: null,
-    sharedWasm: null, // Shared WASM context for all dynamic panes
-    markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(), // Strategy marker scatter series per pane
-    seriesHasData: new Map<string, boolean>(), // Track which series have received data
-    waitingAnnotations: new Map<string, TextAnnotation>(), // Track waiting annotations per pane
-  });
-
-  const [isReady, setIsReady] = useState(false);
-  const [parentSurfaceReady, setParentSurfaceReady] = useState(false);
-  const [overviewNeedsRefresh, setOverviewNeedsRefresh] = useState(0); // Counter to trigger overview refresh
-  const [panesReadyCount, setPanesReadyCount] = useState(0); // Track when panes are created (triggers preallocation)
-  const overviewNeedsRefreshSetterRef = useRef<((value: number) => void) | null>(null);
-  
-  // Store the setter in a ref so it can be accessed from processBatchedSamples
-  useEffect(() => {
-    overviewNeedsRefreshSetterRef.current = setOverviewNeedsRefresh;
-  }, []);
-
-  // Cleanup any pending minimap selectedArea updates on unmount
-  useEffect(() => {
-    return () => {
-      if (minimapSelectedAreaUpdateTimeoutRef.current) {
-        clearTimeout(minimapSelectedAreaUpdateTimeoutRef.current);
-        minimapSelectedAreaUpdateTimeoutRef.current = null;
-      }
-    };
-  }, []);
-  const fpsCounter = useRef({ frameCount: 0, lastTime: performance.now() });
+  // NOTE: chartRefs, useState hooks (isReady, parentSurfaceReady, etc.), and fpsCounter
+  // are now declared at the top of the hook to prevent HMR "Should have a queue" errors
   
   // FPS tracking using requestAnimationFrame to count actual browser frames
   // This is more accurate than counting surface renders (which can fire multiple times per frame)
