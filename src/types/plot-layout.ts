@@ -108,9 +108,17 @@ export interface SeriesAssignment {
     stroke?: string; // Line color
     strokeThickness?: number; // Line width
     fill?: string; // Fill color (for mountain series)
-    pointMarker?: boolean; // Show point markers
+    opacity?: number; // Series opacity (0.0 - 1.0)
+    // Point marker options for line/mountain series
+    pointMarker?: boolean | {
+      enabled: boolean;
+      size?: number; // Marker size in pixels (default: 5)
+      color?: string; // Marker fill color (defaults to stroke color)
+      strokeColor?: string; // Marker stroke/outline color
+    };
   };
-  // Strategy-specific styling (used when type is strategy_*)
+  // Strategy-specific settings (used when type is strategy_*)
+  yvalue?: string; // Series ID to use for y-values (uses marker timestamp to lookup y from this series)
   markerStyle?: StrategyMarkerStyle;   // Used with strategy_markers
   pnlStyle?: StrategyPnLStyle;         // Used with strategy_pnl
   signalStyle?: StrategySignalStyle;   // Used with strategy_signals
