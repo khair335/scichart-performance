@@ -636,6 +636,14 @@ interface ChartRefs {
   waitingAnnotations: Map<string, TextAnnotation>;
 }
 
+/**
+ * Main chart hook for multi-pane SciChart visualization.
+ * 
+ * NOTE: This is a very large hook (~8500 lines). If you see a React error
+ * "Should have a queue" after editing this file, do a HARD PAGE REFRESH (Ctrl+Shift+R)
+ * to clear the corrupted HMR state. This error occurs during Vite HMR when React's
+ * fiber structure becomes desynchronized in large hooks.
+ */
 export function useMultiPaneChart({
   tickContainerId,
   ohlcContainerId,
