@@ -41,6 +41,8 @@ import {
   ECoordinateMode,
   EHorizontalAnchorPoint,
   EVerticalAnchorPoint,
+  EllipsePointMarker,
+  ESearchMode,
 } from 'scichart';
 import type { Sample } from '@/lib/wsfeed-client';
 import { defaultChartConfig } from '@/types/chart';
@@ -3401,8 +3403,25 @@ export function useMultiPaneChart({
           // Get fill color for mountain series from layout or use default
           const fill = seriesAssignment?.style?.fill ?? (stroke + '44'); // Add transparency for fill
           
-          // Get point marker setting from layout
-          const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined; // TODO: Implement point markers if needed
+          // Create point marker if configured in layout
+          let pointMarker: EllipsePointMarker | undefined;
+          const pmConfig = seriesAssignment?.style?.pointMarker;
+          if (pmConfig) {
+            // Support both boolean (true) and object configuration
+            const isEnabled = pmConfig === true || (typeof pmConfig === 'object' && pmConfig.enabled);
+            if (isEnabled) {
+              const pmSize = (typeof pmConfig === 'object' && pmConfig.size) ? pmConfig.size : 5;
+              const pmFill = (typeof pmConfig === 'object' && pmConfig.color) ? pmConfig.color : stroke;
+              const pmStroke = (typeof pmConfig === 'object' && pmConfig.strokeColor) ? pmConfig.strokeColor : stroke;
+              pointMarker = new EllipsePointMarker(wasm, {
+                width: pmSize,
+                height: pmSize,
+                fill: pmFill,
+                stroke: pmStroke,
+                strokeThickness: 1,
+              });
+            }
+          }
           
           if (renderableSeriesType === 'FastMountainRenderableSeries') {
             renderableSeries = new FastMountainRenderableSeries(wasm, {
@@ -5908,10 +5927,39 @@ export function useMultiPaneChart({
         // Skip if no target panes
         if (targetPanes.length === 0) continue;
         
-        // Parse marker data
+        // Get marker timestamp in seconds (for X-axis)
+        const markerXSeconds = t_ms / 1000;
+        
+        // Determine y-value: use yvalue series lookup OR payload price
+        let yValue = (payload.price as number) || (payload.value as number) || 0;
+        
+        // If yvalue is specified in the layout, lookup y-value from that series
+        if (strategyAssignment?.yvalue) {
+          const ySourceSeriesId = strategyAssignment.yvalue;
+          const ySourceEntry = refs.dataSeriesStore.get(ySourceSeriesId);
+          
+          if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+            try {
+              const xyData = ySourceEntry.dataSeries as XyDataSeries;
+              // Find the nearest data point at the marker's timestamp
+              const index = xyData.findIndex(markerXSeconds, ESearchMode.Nearest);
+              if (index >= 0 && index < xyData.count()) {
+                const yValues = xyData.getNativeYValues();
+                if (yValues && yValues.size() > index) {
+                  yValue = yValues.get(index);
+                }
+              }
+            } catch (e) {
+              // Fallback to original y-value if lookup fails
+              console.warn(`[MultiPaneChart] yvalue lookup failed for ${ySourceSeriesId}:`, e);
+            }
+          }
+        }
+        
+        // Parse marker data with the resolved y-value
         const markerData = parseMarkerFromSample({
           t_ms,
-          v: (payload.price as number) || (payload.value as number) || 0,
+          v: yValue,
           side: payload.side as string,
           tag: payload.tag as string,
           type: payload.type as string,
@@ -5919,8 +5967,9 @@ export function useMultiPaneChart({
           label: payload.label as string,
         }, series_id);
         
-        // Skip invalid markers
-        if (markerData.y === 0) continue;
+        // Skip invalid markers (y=0 is now valid if that's what the source series has)
+        // Only skip if both original and lookup returned 0
+        if (markerData.y === 0 && yValue === 0) continue;
         
         // Determine marker series type
         const markerType = getMarkerSeriesType(markerData);
