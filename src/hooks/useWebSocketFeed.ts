@@ -280,6 +280,28 @@ export function useWebSocketFeed({
     }
   }, []);
 
+  // CRITICAL: Clear localStorage cursor on mount (page refresh = F5)
+  // This ensures F5 always starts fresh from seq=1, avoiding partial data plotting.
+  // The in-memory data is wiped on refresh, so resuming from a high seq would
+  // result in only the "remaining" samples being fetched, not the full history.
+  useEffect(() => {
+    // Clear the persisted cursor in localStorage on every page load
+    // This prevents the "partial data" issue where F5 resumes from last_seq
+    // but in-memory DataSeries are empty, causing M < N samples to be plotted.
+    const storageKey = `wsfeed:last_seq:${url}`;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const existingSeq = window.localStorage.getItem(storageKey);
+        if (existingSeq) {
+          console.log(`[useWebSocketFeed] 🔄 Page load: Clearing localStorage cursor (was seq=${existingSeq}) to ensure fresh start`);
+          window.localStorage.removeItem(storageKey);
+        }
+      }
+    } catch (e) {
+      // Ignore localStorage errors (e.g., private browsing)
+    }
+  }, [url]); // Only on mount or URL change
+  
   // Auto-connect on mount
   useEffect(() => {
     if (autoConnect) {
