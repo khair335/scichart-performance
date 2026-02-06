@@ -4566,13 +4566,13 @@ export function useMultiPaneChart({
             // Check BOTH legacy global config AND explicit strategy series assignment
             const isLegacyMarkerPane = plotLayout?.strategyMarkerPanes?.has(paneConfig.id);
             const isExplicitMarkerPane = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).some(
-              sa => sa.pane === paneConfig.id && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
+              assignments => assignments.some(sa => sa.pane === paneConfig.id && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals'))
             ) : false;
             
             if (isLegacyMarkerPane || isExplicitMarkerPane) {
               const capacity = config.data?.buffers.pointsPerSeries ?? 100000;
               // Get markerStyle from the explicit assignment if available
-              const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).find(
+              const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).flat().find(
                 sa => sa.pane === paneConfig.id && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
               ) : undefined;
               const scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneConfig.id, paneStrategyAssignment?.markerStyle);
@@ -5929,16 +5929,15 @@ export function useMultiPaneChart({
         
         // Check if this strategy series is explicitly assigned in the layout
         const strategyAssignment = plotLayout.getStrategySeriesAssignment(series_id);
+        const allAssignments = plotLayout.getAllStrategySeriesAssignments(series_id);
         
         let targetPanes: string[] = [];
         
-        if (strategyAssignment) {
-          const assignedPane = strategyAssignment.pane;
-          if (refs.paneSurfaces.has(assignedPane)) {
-            targetPanes = [assignedPane];
-          } else {
-            continue;
-          }
+        if (allAssignments.length > 0) {
+          // Explicit assignment(s) - route to ALL assigned panes
+          targetPanes = allAssignments
+            .map(sa => sa.pane)
+            .filter(paneId => refs.paneSurfaces.has(paneId));
         } else {
           // Legacy fallback
           targetPanes = Array.from(plotLayout.strategyMarkerPanes);
@@ -6054,7 +6053,7 @@ export function useMultiPaneChart({
         if (!scatterSeriesMap && paneSurface.wasm) {
           const capacity = getSeriesCapacity();
           // Find the strategy assignment for this pane to get markerStyle
-          const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).find(
+          const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).flat().find(
             sa => sa.pane === paneId && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
           ) : undefined;
           scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId, paneStrategyAssignment?.markerStyle);
@@ -8631,12 +8630,13 @@ export function useMultiPaneChart({
       
       for (const { series_id, t_ms, payload } of markerHistory) {
         const strategyAssignment = currentLayout.getStrategySeriesAssignment(series_id);
+        const allAssignments = currentLayout.getAllStrategySeriesAssignments(series_id);
         let targetPanes: string[] = [];
         
-        if (strategyAssignment) {
-          if (refs.paneSurfaces.has(strategyAssignment.pane)) {
-            targetPanes = [strategyAssignment.pane];
-          }
+        if (allAssignments.length > 0) {
+          targetPanes = allAssignments
+            .map(sa => sa.pane)
+            .filter(paneId => refs.paneSurfaces.has(paneId));
         } else {
           targetPanes = Array.from(currentLayout.strategyMarkerPanes);
         }
