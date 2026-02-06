@@ -72,6 +72,9 @@ export type StrategySeriesType = 'strategy_markers' | 'strategy_pnl' | 'strategy
 // All supported series types
 export type SeriesAssignmentType = BaseSeriesType | StrategySeriesType;
 
+// Supported marker shapes
+export type MarkerShape = 'circle' | 'triangle-up' | 'triangle-down' | 'square' | 'cross' | 'x';
+
 // Strategy marker styling
 export interface StrategyMarkerStyle {
   entryLongColor?: string;   // Color for long entry markers (default: #4CAF50)
@@ -81,6 +84,12 @@ export interface StrategyMarkerStyle {
   signalColor?: string;      // Color for signal markers (default: #FF9800)
   markerSize?: number;       // Marker size in pixels (default: 12)
   showLabels?: boolean;      // Show marker labels (default: false)
+  // Marker shapes (defaults: entryLong=triangle-up, entryShort=triangle-down, exitLong=circle, exitShort=circle, signal=circle)
+  entryLongShape?: MarkerShape;
+  entryShortShape?: MarkerShape;
+  exitLongShape?: MarkerShape;
+  exitShortShape?: MarkerShape;
+  signalShape?: MarkerShape;
 }
 
 // Strategy PnL styling
