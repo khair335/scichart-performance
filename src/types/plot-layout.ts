@@ -153,11 +153,14 @@ export interface ParsedLayout {
   minimapSourceSeries?: string;
   xAxisDefaultRange?: PlotLayout['xAxis']['defaultRange']; // Default X-axis range from layout
   // Strategy series explicit assignments (per-strategy control)
-  strategySeriesMap: Map<string, SeriesAssignment>; // series_id (e.g., "ES:strategy:alpha:markers") -> SeriesAssignment
+  // Same series_id can be assigned to multiple panes, so we store arrays
+  strategySeriesMap: Map<string, SeriesAssignment[]>; // series_id -> SeriesAssignment[]
   // Helper to check if a strategy series is explicitly assigned
   isStrategySeriesAssigned: (seriesId: string) => boolean;
-  // Helper to get strategy series assignment
+  // Helper to get first strategy series assignment (for style/yvalue lookup)
   getStrategySeriesAssignment: (seriesId: string) => SeriesAssignment | undefined;
+  // Helper to get ALL strategy series assignments (for multi-pane routing)
+  getAllStrategySeriesAssignments: (seriesId: string) => SeriesAssignment[];
 }
 
 /**
@@ -381,14 +384,16 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
   }
   
   // Build strategy series map for per-strategy control
-  // This maps strategy series IDs (e.g., "ES:strategy:alpha:markers") to their SeriesAssignment
-  const strategySeriesMap = new Map<string, SeriesAssignment>();
+  // Same series_id can appear in multiple panes, so we accumulate arrays
+  const strategySeriesMap = new Map<string, SeriesAssignment[]>();
   for (const seriesAssignment of layout.series) {
     // Check if this is a strategy series type
     if (seriesAssignment.type === 'strategy_markers' || 
         seriesAssignment.type === 'strategy_pnl' || 
         seriesAssignment.type === 'strategy_signals') {
-      strategySeriesMap.set(seriesAssignment.series_id, seriesAssignment);
+      const existing = strategySeriesMap.get(seriesAssignment.series_id) || [];
+      existing.push(seriesAssignment);
+      strategySeriesMap.set(seriesAssignment.series_id, existing);
     }
   }
   
@@ -413,11 +418,6 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     }
   } else {
     // Default: NO strategy markers unless explicitly configured
-    // Strategy markers only appear when:
-    // 1. strategy_markers.include_panes is set, OR
-    // 2. strategy_markers.exclude_panes is set, OR
-    // 3. A strategy series (type: strategy_markers) is explicitly assigned in the series array
-    // This prevents unexpected markers from appearing on charts
   }
   
   // Helper functions for strategy series lookup
@@ -426,7 +426,12 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
   };
   
   const getStrategySeriesAssignment = (seriesId: string): SeriesAssignment | undefined => {
-    return strategySeriesMap.get(seriesId);
+    const assignments = strategySeriesMap.get(seriesId);
+    return assignments?.[0];
+  };
+  
+  const getAllStrategySeriesAssignments = (seriesId: string): SeriesAssignment[] => {
+    return strategySeriesMap.get(seriesId) || [];
   };
   
   return {
@@ -440,6 +445,7 @@ export function parsePlotLayout(json: any, collectErrors?: (errors: LayoutValida
     strategySeriesMap,
     isStrategySeriesAssigned,
     getStrategySeriesAssignment,
+    getAllStrategySeriesAssignments,
   };
 }
 
