@@ -5902,36 +5902,34 @@ export function useMultiPaneChart({
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
         
-        // NEW: Check if this strategy series is explicitly assigned in the layout
-        // If explicitly assigned, only render in the assigned pane
-        // If not assigned, fall back to legacy global config (strategyMarkerPanes)
+        // Check if this strategy series is explicitly assigned in the layout
         const strategyAssignment = plotLayout.getStrategySeriesAssignment(series_id);
         
         let targetPanes: string[] = [];
         
         if (strategyAssignment) {
-          // Explicitly assigned - only render in the assigned pane
           const assignedPane = strategyAssignment.pane;
           if (refs.paneSurfaces.has(assignedPane)) {
             targetPanes = [assignedPane];
           } else {
-            // Assigned pane doesn't exist - skip this marker
             continue;
           }
         } else {
-          // Not explicitly assigned - use legacy global config
-          // This maintains backward compatibility with layouts that use strategy_markers config
+          // Legacy fallback
           targetPanes = Array.from(plotLayout.strategyMarkerPanes);
         }
         
         // Skip if no target panes
-        if (targetPanes.length === 0) continue;
+        if (targetPanes.length === 0) {
+          if (i === 0) console.warn(`[Markers] No target panes for ${series_id}. Assignment found: ${!!strategyAssignment}, legacyPanes: ${plotLayout.strategyMarkerPanes.size}`);
+          continue;
+        }
         
         // Get marker timestamp in seconds (for X-axis)
         const markerXSeconds = t_ms / 1000;
         
-        // Determine y-value: use yvalue series lookup OR payload price
-        let yValue = (payload.price as number) || (payload.value as number) || 0;
+        // Determine y-value: use yvalue series lookup OR payload price as fallback
+        let yValue: number | null = null;
         
         // If yvalue is specified in the layout, lookup y-value from that series
         if (strategyAssignment?.yvalue) {
@@ -5941,7 +5939,6 @@ export function useMultiPaneChart({
           if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
             try {
               const xyData = ySourceEntry.dataSeries as XyDataSeries;
-              // Find the nearest data point at the marker's timestamp
               const index = xyData.findIndex(markerXSeconds, ESearchMode.Nearest);
               if (index >= 0 && index < xyData.count()) {
                 const yValues = xyData.getNativeYValues();
@@ -5950,10 +5947,24 @@ export function useMultiPaneChart({
                 }
               }
             } catch (e) {
-              // Fallback to original y-value if lookup fails
-              console.warn(`[MultiPaneChart] yvalue lookup failed for ${ySourceSeriesId}:`, e);
+              console.warn(`[Markers] yvalue lookup failed for ${ySourceSeriesId}:`, e);
             }
+          } else {
+            if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet (count: ${ySourceEntry?.dataSeries?.count() ?? 'N/A'})`);
           }
+        }
+        
+        // If yvalue lookup didn't produce a result, fall back to payload price
+        if (yValue === null) {
+          yValue = (payload.price as number) || (payload.value as number) || 0;
+        }
+        
+        // Skip markers with no valid y-value (0) unless yvalue lookup is configured
+        if (yValue === 0 && !strategyAssignment?.yvalue) continue;
+        
+        // Log first few markers for debugging
+        if (i < 3) {
+          console.log(`[Markers] ${series_id} t=${t_ms} y=${yValue} panes=${targetPanes.join(',')} yvalueSrc=${strategyAssignment?.yvalue || 'none'}`);
         }
         
         // Parse marker data with the resolved y-value
@@ -5967,9 +5978,7 @@ export function useMultiPaneChart({
           label: payload.label as string,
         }, series_id);
         
-        // Skip markers only if no y-value source at all and payload had no price
-        // If yvalue is configured, allow y=0 (the source series might legitimately be at 0)
-        if (markerData.y === 0 && yValue === 0 && !strategyAssignment?.yvalue) continue;
+        // y=0 skip is handled earlier in the flow
         
         // Determine marker series type
         const markerType = getMarkerSeriesType(markerData);
