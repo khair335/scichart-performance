@@ -164,10 +164,12 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   
   // Connection settings state
   const [wsUrl, setWsUrl] = useState(initialWsUrl);
-  const [cursorPolicy, setCursorPolicy] = useState<CursorPolicy>('auto');
+  // CRITICAL: On page refresh (F5) we must start from seq=1 and fetch full history.
+  // We default to from_start + no localStorage so the *first* autoConnect cannot accidentally resume.
+  const [cursorPolicy, setCursorPolicy] = useState<CursorPolicy>('from_start');
   const [wireFormat, setWireFormat] = useState<WireFormat>('auto');
   const [autoReconnect, setAutoReconnect] = useState(true);
-  const [useLocalStorage, setUseLocalStorage] = useState(true);
+  const [useLocalStorage, setUseLocalStorage] = useState(false);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
