@@ -5952,77 +5952,72 @@ export function useMultiPaneChart({
         // Get marker timestamp in seconds (for X-axis)
         const markerXSeconds = t_ms / 1000;
         
-        // Determine y-value: use yvalue series lookup OR payload price as fallback
-        let yValue: number | null = null;
-        
-        // If yvalue is specified in the layout, lookup y-value from that series
-        if (strategyAssignment?.yvalue) {
-          const ySourceSeriesId = strategyAssignment.yvalue;
-          
-          // CRITICAL: Check dataSeriesStore first, then fall back to sharedDataSeriesPool.
-          // The pool dataSeries was already populated in the second pass (xy append),
-          // but dataSeriesStore may not have an entry yet if forceChartUpdate hasn't run
-          // or ran before data arrived.
-          let ySourceDataSeries: XyDataSeries | null = null;
-          const ySourceEntry = refs.dataSeriesStore.get(ySourceSeriesId);
-          if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
-            ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
-          } else {
-            // Fall back to pool — the pool is ALWAYS populated before the third pass runs
-            const poolEntry = sharedDataSeriesPool.get(ySourceSeriesId);
-            if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
-              ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
-            }
-          }
-          
-          if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
-            try {
-              const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
-              if (index >= 0 && index < ySourceDataSeries.count()) {
-                const yValues = ySourceDataSeries.getNativeYValues();
-                if (yValues && yValues.size() > index) {
-                  yValue = yValues.get(index);
-                }
-              }
-            } catch (e) {
-              console.warn(`[Markers] yvalue lookup failed for ${ySourceSeriesId}:`, e);
-            }
-          } else {
-            if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet`);
-          }
-        }
-        
-        // If yvalue lookup didn't produce a result, fall back to payload price
-        if (yValue === null) {
-          yValue = (payload.price as number) || (payload.value as number) || 0;
-        }
-        
-        // Skip markers with no valid y-value (0) unless yvalue lookup is configured
-        if (yValue === 0 && !strategyAssignment?.yvalue) continue;
-        
-        // Log first few markers for debugging
-        if (i < 3) {
-          console.log(`[Markers] ${series_id} t=${t_ms} y=${yValue} panes=${targetPanes.join(',')} yvalueSrc=${strategyAssignment?.yvalue || 'none'}`);
-        }
-        
-        // Parse marker data with the resolved y-value
-        const markerData = parseMarkerFromSample({
-          t_ms,
-          v: yValue,
-          side: payload.side as string,
-          tag: payload.tag as string,
-          type: payload.type as string,
-          direction: payload.direction as string,
-          label: payload.label as string,
-        }, series_id);
-        
-        // y=0 skip is handled earlier in the flow
-        
-        // Determine marker series type
-        const markerType = getMarkerSeriesType(markerData);
-        
-        // Add to batches for target panes only
+        // Add to batches for target panes - resolve yvalue PER PANE assignment
+        // Each pane assignment may have a different yvalue source series
         for (const paneId of targetPanes) {
+          // Find the specific assignment for THIS pane
+          const paneAssignment = allAssignments.find(sa => sa.pane === paneId) || strategyAssignment;
+          
+          // Determine y-value per-pane: use this pane's yvalue series lookup OR payload price as fallback
+          let yValue: number | null = null;
+          
+          if (paneAssignment?.yvalue) {
+            const ySourceSeriesId = paneAssignment.yvalue;
+            
+            let ySourceDataSeries: XyDataSeries | null = null;
+            const ySourceEntry = refs.dataSeriesStore.get(ySourceSeriesId);
+            if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+              ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
+            } else {
+              const poolEntry = sharedDataSeriesPool.get(ySourceSeriesId);
+              if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
+                ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
+              }
+            }
+            
+            if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
+              try {
+                const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
+                if (index >= 0 && index < ySourceDataSeries.count()) {
+                  const yVals = ySourceDataSeries.getNativeYValues();
+                  if (yVals && yVals.size() > index) {
+                    yValue = yVals.get(index);
+                  }
+                }
+              } catch (e) {
+                console.warn(`[Markers] yvalue lookup failed for ${ySourceSeriesId}:`, e);
+              }
+            } else {
+              if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet`);
+            }
+          }
+          
+          // Fallback to payload price
+          if (yValue === null) {
+            yValue = (payload.price as number) || (payload.value as number) || 0;
+          }
+          
+          // Skip markers with no valid y-value (0) unless yvalue lookup is configured
+          if (yValue === 0 && !paneAssignment?.yvalue) continue;
+          
+          // Log first few markers for debugging
+          if (i < 3) {
+            console.log(`[Markers] ${series_id} t=${t_ms} y=${yValue} pane=${paneId} yvalueSrc=${paneAssignment?.yvalue || 'none'}`);
+          }
+          
+          // Parse marker data with the resolved y-value for THIS pane
+          const markerData = parseMarkerFromSample({
+            t_ms,
+            v: yValue,
+            side: payload.side as string,
+            tag: payload.tag as string,
+            type: payload.type as string,
+            direction: payload.direction as string,
+            label: payload.label as string,
+          }, series_id);
+          
+          const markerType = getMarkerSeriesType(markerData);
+          
           // Initialize batch for this pane if not exists
           if (!paneMarkerBatches.has(paneId)) {
             paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
@@ -8643,45 +8638,47 @@ export function useMultiPaneChart({
         if (targetPanes.length === 0) continue;
         
         const markerXSeconds = t_ms / 1000;
-        let yValue: number | null = null;
         
-        if (strategyAssignment?.yvalue) {
-          // Check dataSeriesStore first, then pool (same pattern as processChunk)
-          let ySourceDataSeries: XyDataSeries | null = null;
-          const ySourceEntry = refs.dataSeriesStore.get(strategyAssignment.yvalue);
-          if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
-            ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
-          } else {
-            const poolEntry = sharedDataSeriesPool.get(strategyAssignment.yvalue);
-            if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
-              ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
+        // Resolve yvalue PER PANE assignment (each pane may have different yvalue source)
+        for (const paneId of targetPanes) {
+          const paneAssignment = allAssignments.find(sa => sa.pane === paneId) || strategyAssignment;
+          
+          let yValue: number | null = null;
+          if (paneAssignment?.yvalue) {
+            let ySourceDataSeries: XyDataSeries | null = null;
+            const ySourceEntry = refs.dataSeriesStore.get(paneAssignment.yvalue);
+            if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+              ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
+            } else {
+              const poolEntry = sharedDataSeriesPool.get(paneAssignment.yvalue);
+              if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
+                ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
+              }
+            }
+            if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
+              try {
+                const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
+                if (index >= 0 && index < ySourceDataSeries.count()) {
+                  const yVals = ySourceDataSeries.getNativeYValues();
+                  if (yVals && yVals.size() > index) yValue = yVals.get(index);
+                }
+              } catch { /* ignore */ }
             }
           }
-          if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
-            try {
-              const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
-              if (index >= 0 && index < ySourceDataSeries.count()) {
-                const yVals = ySourceDataSeries.getNativeYValues();
-                if (yVals && yVals.size() > index) yValue = yVals.get(index);
-              }
-            } catch { /* ignore */ }
+          if (yValue === null) {
+            yValue = (payload.price as number) || (payload.value as number) || 0;
           }
-        }
-        if (yValue === null) {
-          yValue = (payload.price as number) || (payload.value as number) || 0;
-        }
-        if (yValue === 0 && !strategyAssignment?.yvalue) continue;
-        
-        const markerData = parseMarkerFromSample({
-          t_ms, v: yValue,
-          side: payload.side as string, tag: payload.tag as string,
-          type: payload.type as string, direction: payload.direction as string,
-          label: payload.label as string,
-        }, series_id);
-        
-        const markerType = getMarkerSeriesType(markerData);
-        
-        for (const paneId of targetPanes) {
+          if (yValue === 0 && !paneAssignment?.yvalue) continue;
+          
+          const markerData = parseMarkerFromSample({
+            t_ms, v: yValue,
+            side: payload.side as string, tag: payload.tag as string,
+            type: payload.type as string, direction: payload.direction as string,
+            label: payload.label as string,
+          }, series_id);
+          
+          const markerType = getMarkerSeriesType(markerData);
+          
           if (!paneMarkerBatches.has(paneId)) {
             paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
           }
