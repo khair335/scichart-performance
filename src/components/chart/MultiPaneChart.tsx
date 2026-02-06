@@ -628,6 +628,9 @@ interface ChartRefs {
   sharedWasm: TSciChart | null;
   // Strategy marker scatter series per pane (5 series per pane for each marker type)
   markerScatterSeries: Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>;
+  // Persistent buffer of raw marker samples for replay after layout reload
+  // Strategy markers don't go into SharedDataSeriesPool, so we must keep them here
+  markerSampleHistory: Array<{ series_id: string; t_ms: number; payload: Record<string, unknown> }>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
   
@@ -733,9 +736,10 @@ export function useMultiPaneChart({
     verticalGroup: null,
     overview: null,
     sharedWasm: null, // Shared WASM context for all dynamic panes
-    markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(), // Strategy marker scatter series per pane
-    seriesHasData: new Map<string, boolean>(), // Track which series have received data
-    waitingAnnotations: new Map<string, TextAnnotation>(), // Track waiting annotations per pane
+    markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
+    markerSampleHistory: [],
+    seriesHasData: new Map<string, boolean>(),
+    waitingAnnotations: new Map<string, TextAnnotation>(),
   });
 
   // Core state - MUST be declared before functions reference them
@@ -1911,9 +1915,8 @@ export function useMultiPaneChart({
           sharedWasm: null,
           // Strategy marker scatter series per pane (5 series per pane)
           markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
-          // Track which series have received data
+          markerSampleHistory: [],
           seriesHasData: new Map<string, boolean>(),
-          // Track waiting annotations per pane
           waitingAnnotations: new Map<string, TextAnnotation>(),
         };
 
@@ -4560,17 +4563,26 @@ export function useMultiPaneChart({
             refs.paneSurfaces.set(paneConfig.id, paneSurface);
             
             // Create strategy marker scatter series if this pane is eligible
-            // CRITICAL: Create once during pane initialization, NOT during updates
-            if (plotLayout?.strategyMarkerPanes?.has(paneConfig.id)) {
+            // Check BOTH legacy global config AND explicit strategy series assignment
+            const isLegacyMarkerPane = plotLayout?.strategyMarkerPanes?.has(paneConfig.id);
+            const isExplicitMarkerPane = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).some(
+              sa => sa.pane === paneConfig.id && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
+            ) : false;
+            
+            if (isLegacyMarkerPane || isExplicitMarkerPane) {
               const capacity = config.data?.buffers.pointsPerSeries ?? 100000;
-              const scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneConfig.id);
+              // Get markerStyle from the explicit assignment if available
+              const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).find(
+                sa => sa.pane === paneConfig.id && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
+              ) : undefined;
+              const scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneConfig.id, paneStrategyAssignment?.markerStyle);
               refs.markerScatterSeries.set(paneConfig.id, scatterSeriesMap);
               
               // Add all 5 scatter series to the surface
               for (const group of scatterSeriesMap.values()) {
                 paneSurface.surface.renderableSeries.add(group.renderableSeries);
               }
-              console.log(`[MultiPaneChart] Created strategy marker scatter series for pane: ${paneConfig.id}`);
+              console.log(`[MultiPaneChart] Created strategy marker scatter series for pane: ${paneConfig.id} (legacy=${isLegacyMarkerPane}, explicit=${isExplicitMarkerPane})`);
             }
             
             // FPS tracking is now handled by requestAnimationFrame at the top level
@@ -5901,6 +5913,12 @@ export function useMultiPaneChart({
         // Only process strategy markers/signals
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
+        
+        // Store in persistent history for replay after layout reload
+        // Cap at 100K to prevent memory issues
+        if (refs.markerSampleHistory.length < 100000) {
+          refs.markerSampleHistory.push({ series_id, t_ms, payload: payload as Record<string, unknown> });
+        }
         
         // Check if this strategy series is explicitly assigned in the layout
         const strategyAssignment = plotLayout.getStrategySeriesAssignment(series_id);
@@ -8251,7 +8269,9 @@ export function useMultiPaneChart({
     processingQueueRef.current = [];
     isProcessingRef.current = false;
     
-    console.log('[MultiPaneChart] All sample buffers cleared (sampleBuffer, skippedSamples, processingQueue)');
+    // Clear marker sample history on reset
+    refs.markerSampleHistory = [];
+    console.log('[MultiPaneChart] All sample buffers cleared (sampleBuffer, skippedSamples, processingQueue, markerHistory)');
 
     // 1) Clear all DataSeries currently bound to RenderableSeries (dynamic + legacy)
     for (const [, entry] of refs.dataSeriesStore) {
@@ -8578,6 +8598,95 @@ export function useMultiPaneChart({
     // Update anyPaneHasDataRef if any pane has data
     if (panesWithData.size > 0) {
       anyPaneHasDataRef.current = true;
+    }
+    
+    // Step 5: Replay historical strategy markers into scatter series
+    // Scatter series are recreated empty on layout reload, but marker data persists in markerSampleHistory
+    const markerHistory = refs.markerSampleHistory;
+    if (markerHistory.length > 0 && currentLayout && refs.paneSurfaces.size > 0) {
+      console.log(`[MultiPaneChart] 🎯 Replaying ${markerHistory.length} historical strategy markers`);
+      
+      const paneMarkerBatches = new Map<string, Map<MarkerSeriesType, { x: number[], y: number[] }>>();
+      
+      for (const { series_id, t_ms, payload } of markerHistory) {
+        const strategyAssignment = currentLayout.getStrategySeriesAssignment(series_id);
+        let targetPanes: string[] = [];
+        
+        if (strategyAssignment) {
+          if (refs.paneSurfaces.has(strategyAssignment.pane)) {
+            targetPanes = [strategyAssignment.pane];
+          }
+        } else {
+          targetPanes = Array.from(currentLayout.strategyMarkerPanes);
+        }
+        if (targetPanes.length === 0) continue;
+        
+        const markerXSeconds = t_ms / 1000;
+        let yValue: number | null = null;
+        
+        if (strategyAssignment?.yvalue) {
+          const ySourceEntry = refs.dataSeriesStore.get(strategyAssignment.yvalue);
+          if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+            try {
+              const xyData = ySourceEntry.dataSeries as XyDataSeries;
+              const index = xyData.findIndex(markerXSeconds, ESearchMode.Nearest);
+              if (index >= 0 && index < xyData.count()) {
+                const yVals = xyData.getNativeYValues();
+                if (yVals && yVals.size() > index) yValue = yVals.get(index);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+        if (yValue === null) {
+          yValue = (payload.price as number) || (payload.value as number) || 0;
+        }
+        if (yValue === 0 && !strategyAssignment?.yvalue) continue;
+        
+        const markerData = parseMarkerFromSample({
+          t_ms, v: yValue,
+          side: payload.side as string, tag: payload.tag as string,
+          type: payload.type as string, direction: payload.direction as string,
+          label: payload.label as string,
+        }, series_id);
+        
+        const markerType = getMarkerSeriesType(markerData);
+        
+        for (const paneId of targetPanes) {
+          if (!paneMarkerBatches.has(paneId)) {
+            paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
+          }
+          const batch = paneMarkerBatches.get(paneId)!.get(markerType);
+          if (batch) {
+            batch.x.push(markerData.x);
+            batch.y.push(markerData.y);
+          }
+        }
+      }
+      
+      // Flush batches into scatter series
+      let totalReplayed = 0;
+      for (const [paneId, typeBatches] of paneMarkerBatches) {
+        const scatterMap = refs.markerScatterSeries.get(paneId);
+        if (!scatterMap) continue;
+        
+        const paneSurface = refs.paneSurfaces.get(paneId);
+        if (!paneSurface) continue;
+        
+        paneSurface.surface.suspendUpdates();
+        try {
+          for (const [mType, batch] of typeBatches) {
+            if (batch.x.length === 0) continue;
+            const group = scatterMap.get(mType);
+            if (group) {
+              group.dataSeries.appendRange(batch.x, batch.y);
+              totalReplayed += batch.x.length;
+            }
+          }
+        } finally {
+          paneSurface.surface.resumeUpdates();
+        }
+      }
+      console.log(`[MultiPaneChart] ✅ Replayed ${totalReplayed} markers into scatter series`);
     }
     
     // Trigger waiting annotation update for panes that still need data
