@@ -5967,9 +5967,9 @@ export function useMultiPaneChart({
           label: payload.label as string,
         }, series_id);
         
-        // Skip invalid markers (y=0 is now valid if that's what the source series has)
-        // Only skip if both original and lookup returned 0
-        if (markerData.y === 0 && yValue === 0) continue;
+        // Skip markers only if no y-value source at all and payload had no price
+        // If yvalue is configured, allow y=0 (the source series might legitimately be at 0)
+        if (markerData.y === 0 && yValue === 0 && !strategyAssignment?.yvalue) continue;
         
         // Determine marker series type
         const markerType = getMarkerSeriesType(markerData);
@@ -6005,7 +6005,11 @@ export function useMultiPaneChart({
         // doesn't have scatter series pre-created (only legacy global config panes get them)
         if (!scatterSeriesMap && paneSurface.wasm) {
           const capacity = getSeriesCapacity();
-          scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId);
+          // Find the strategy assignment for this pane to get markerStyle
+          const paneStrategyAssignment = plotLayout ? Array.from(plotLayout.strategySeriesMap.values()).find(
+            sa => sa.pane === paneId && (sa.type === 'strategy_markers' || sa.type === 'strategy_signals')
+          ) : undefined;
+          scatterSeriesMap = createAllMarkerScatterSeries(paneSurface.wasm, capacity, paneId, paneStrategyAssignment?.markerStyle);
           refs.markerScatterSeries.set(paneId, scatterSeriesMap);
           
           // Add scatter series to surface
