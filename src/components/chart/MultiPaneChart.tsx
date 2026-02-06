@@ -5529,6 +5529,13 @@ export function useMultiPaneChart({
           batch.c.push(c);
         }
       } else {
+        // CRITICAL: Skip strategy markers and signals from xy batch accumulation.
+        // They are processed separately in the third pass using scatter series
+        // and should NOT consume pool memory as regular xy data.
+        if (series_id.includes(':markers') || series_id.includes(':signals')) {
+          continue;
+        }
+        
         let value: number | undefined;
         
         if (series_id.includes(':ticks')) {
@@ -5952,14 +5959,28 @@ export function useMultiPaneChart({
         // If yvalue is specified in the layout, lookup y-value from that series
         if (strategyAssignment?.yvalue) {
           const ySourceSeriesId = strategyAssignment.yvalue;
-          const ySourceEntry = refs.dataSeriesStore.get(ySourceSeriesId);
           
+          // CRITICAL: Check dataSeriesStore first, then fall back to sharedDataSeriesPool.
+          // The pool dataSeries was already populated in the second pass (xy append),
+          // but dataSeriesStore may not have an entry yet if forceChartUpdate hasn't run
+          // or ran before data arrived.
+          let ySourceDataSeries: XyDataSeries | null = null;
+          const ySourceEntry = refs.dataSeriesStore.get(ySourceSeriesId);
           if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+            ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
+          } else {
+            // Fall back to pool — the pool is ALWAYS populated before the third pass runs
+            const poolEntry = sharedDataSeriesPool.get(ySourceSeriesId);
+            if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
+              ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
+            }
+          }
+          
+          if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
             try {
-              const xyData = ySourceEntry.dataSeries as XyDataSeries;
-              const index = xyData.findIndex(markerXSeconds, ESearchMode.Nearest);
-              if (index >= 0 && index < xyData.count()) {
-                const yValues = xyData.getNativeYValues();
+              const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
+              if (index >= 0 && index < ySourceDataSeries.count()) {
+                const yValues = ySourceDataSeries.getNativeYValues();
                 if (yValues && yValues.size() > index) {
                   yValue = yValues.get(index);
                 }
@@ -5968,7 +5989,7 @@ export function useMultiPaneChart({
               console.warn(`[Markers] yvalue lookup failed for ${ySourceSeriesId}:`, e);
             }
           } else {
-            if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet (count: ${ySourceEntry?.dataSeries?.count() ?? 'N/A'})`);
+            if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet`);
           }
         }
         
@@ -8625,13 +8646,22 @@ export function useMultiPaneChart({
         let yValue: number | null = null;
         
         if (strategyAssignment?.yvalue) {
+          // Check dataSeriesStore first, then pool (same pattern as processChunk)
+          let ySourceDataSeries: XyDataSeries | null = null;
           const ySourceEntry = refs.dataSeriesStore.get(strategyAssignment.yvalue);
           if (ySourceEntry?.dataSeries && ySourceEntry.dataSeries.count() > 0) {
+            ySourceDataSeries = ySourceEntry.dataSeries as XyDataSeries;
+          } else {
+            const poolEntry = sharedDataSeriesPool.get(strategyAssignment.yvalue);
+            if (poolEntry?.dataSeries && poolEntry.dataSeries.count() > 0) {
+              ySourceDataSeries = poolEntry.dataSeries as XyDataSeries;
+            }
+          }
+          if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
             try {
-              const xyData = ySourceEntry.dataSeries as XyDataSeries;
-              const index = xyData.findIndex(markerXSeconds, ESearchMode.Nearest);
-              if (index >= 0 && index < xyData.count()) {
-                const yVals = xyData.getNativeYValues();
+              const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
+              if (index >= 0 && index < ySourceDataSeries.count()) {
+                const yVals = ySourceDataSeries.getNativeYValues();
                 if (yVals && yVals.size() > index) yValue = yVals.get(index);
               }
             } catch { /* ignore */ }
@@ -8664,6 +8694,8 @@ export function useMultiPaneChart({
       }
       
       // Flush batches into scatter series
+      // CRITICAL: Clear existing scatter data first to prevent duplicates
+      // (markers may have been partially processed during processChunk before forceChartUpdate)
       let totalReplayed = 0;
       for (const [paneId, typeBatches] of paneMarkerBatches) {
         const scatterMap = refs.markerScatterSeries.get(paneId);
@@ -8675,11 +8707,14 @@ export function useMultiPaneChart({
         paneSurface.surface.suspendUpdates();
         try {
           for (const [mType, batch] of typeBatches) {
-            if (batch.x.length === 0) continue;
             const group = scatterMap.get(mType);
             if (group) {
-              group.dataSeries.appendRange(batch.x, batch.y);
-              totalReplayed += batch.x.length;
+              // Clear existing data before replay to avoid duplicates
+              group.dataSeries.clear();
+              if (batch.x.length > 0) {
+                group.dataSeries.appendRange(batch.x, batch.y);
+                totalReplayed += batch.x.length;
+              }
             }
           }
         } finally {
