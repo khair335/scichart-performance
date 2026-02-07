@@ -6581,6 +6581,16 @@ export function useMultiPaneChart({
       const MAX_MS_PER_FRAME = 16; // Target 60fps - yield if we exceed this
       
       while (processingQueueRef.current.length > 0 && batchCountRef.current < maxBatches) {
+        // CRITICAL: If tab became hidden mid-processing, stop immediately.
+        // Move remaining data back to sampleBuffer so flushAllSamplesSynchronously
+        // will pick it up when the tab becomes visible again.
+        if (document.hidden) {
+          sampleBufferRef.current = processingQueueRef.current.concat(sampleBufferRef.current);
+          processingQueueRef.current = [];
+          isProcessingRef.current = false;
+          return;
+        }
+        
         batchCountRef.current++;
         
         // Take next chunk (config-driven size)
@@ -6602,7 +6612,8 @@ export function useMultiPaneChart({
       isProcessingRef.current = false;
       
       // If more data remains after hitting batch limit, schedule next frame
-      if (processingQueueRef.current.length > 0) {
+      // But NOT if tab is hidden - let visibility handler handle it
+      if (processingQueueRef.current.length > 0 && !document.hidden) {
         requestAnimationFrame(() => processBatchedSamples());
       }
     };
@@ -7594,6 +7605,15 @@ export function useMultiPaneChart({
     const refs = chartRefs.current;
     const hasSeries = refs.dataSeriesStore.size > 0;
     const hasPanes = plotLayout ? refs.paneSurfaces.size > 0 : (refs.tickSurface && refs.ohlcSurface);
+    
+    // CRITICAL: When tab is hidden, do NOT schedule any processing.
+    // Just buffer samples. The visibilitychange handler will call
+    // flushAllSamplesSynchronously() when the tab becomes visible again,
+    // rendering everything in one shot instead of a slow replay.
+    if (document.hidden) {
+      // Samples are already in sampleBufferRef, nothing else to do
+      return;
+    }
     
     // Only schedule processing if we have series ready to receive data
     // Otherwise, samples will stay in sampleBufferRef until series are created
