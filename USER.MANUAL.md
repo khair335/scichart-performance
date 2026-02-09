@@ -551,9 +551,42 @@ Examples:
   "upFillBrush": "#22C55E",
   "downFillBrush": "#EF4444",
   "upWickColor": "#22C55E",
-  "downWickColor": "#EF4444"
+  "downWickColor": "#EF4444",
+  "pointMarker": true
 }
 ```
+
+#### Point Markers (Line + Markers)
+
+Line and mountain series support optional point markers overlaid on the line. This renders a small dot at each data point.
+
+**Boolean shorthand** — uses default size (7px) and inherits the series stroke color:
+```json
+"style": {
+  "stroke": "#50C7E0",
+  "pointMarker": true
+}
+```
+
+**Object form** — full control over size, fill color, and outline color:
+```json
+"style": {
+  "stroke": "#50C7E0",
+  "pointMarker": {
+    "enabled": true,
+    "size": 10,
+    "color": "#FF0000",
+    "strokeColor": "#FFFFFF"
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable/disable markers |
+| `size` | number | `7` | Marker diameter in pixels |
+| `color` | string | *(series stroke)* | Marker fill color |
+| `strokeColor` | string | *(series stroke)* | Marker outline color |
 
 ### 7.5 Series ID Format
 

@@ -59,7 +59,7 @@ Series styling (line width, colors, etc.) can now be configured in the plot layo
 - `stroke` (string): Line color (e.g., "#50C7E0", "rgb(80, 199, 224)")
 - `strokeThickness` (number): Line width (e.g., 1, 1.5, 2)
 - `fill` (string): Fill color for mountain series (e.g., "#50C7E044")
-- `pointMarker` (boolean): Show point markers (TODO: implementation pending)
+- `pointMarker` (boolean | object): Show point markers on line/mountain series. Boolean `true` uses defaults (size 7, series stroke color). Object form: `{ "enabled": true, "size": 10, "color": "#FF0000", "strokeColor": "#FFFFFF" }`
 
 **Implementation**:
 - Added `style` property to `SeriesAssignment` interface
