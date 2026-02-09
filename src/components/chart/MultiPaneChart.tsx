@@ -4690,6 +4690,10 @@ export function useMultiPaneChart({
                 }
                 
                 try {
+                  // CRITICAL: Reset Y-axis manual stretch flag so auto-scaling resumes after double-click
+                  yAxisManuallyStretchedRef.current = false;
+                  lastYAxisUpdateRef.current = 0;
+                  
                   // CRITICAL: Fit Y-axis FIRST for ALL panes simultaneously
                   // This ensures Y-axis is properly scaled regardless of zoom level or feedStage
                   // Force recalculation by calling zoomExtentsY which works even when zoomed in
@@ -7936,6 +7940,11 @@ export function useMultiPaneChart({
     isLiveRef.current = true;
     userInteractedRef.current = false;
     
+    // CRITICAL: Reset Y-axis manual stretch flag so Y-axis auto-scales to the new window
+    // When user selects a time window, they expect Y-axis to fit the visible data
+    yAxisManuallyStretchedRef.current = false;
+    lastYAxisUpdateRef.current = 0; // Force immediate Y-axis update on next render
+    
     // CRITICAL: Set flag to prevent auto-scroll from overriding during setTimeWindow
     settingTimeWindowRef.current = true;
 
@@ -8127,6 +8136,30 @@ export function useMultiPaneChart({
           // Ignore if resume fails
         }
       }
+      
+      // CRITICAL: Refit Y-axis to visible data after X-axis range change
+      // Without this, Y-axis stays at its old range and data appears squished at top/bottom
+      // Use requestAnimationFrame to ensure X-axis range is fully applied before Y refit
+      requestAnimationFrame(() => {
+        for (const [paneId, paneSurface] of refs.paneSurfaces) {
+          try {
+            zoomExtentsYWithHLines(paneSurface.surface, paneId);
+            paneSurface.surface.invalidateElement();
+            console.log(`[setTimeWindow] Refitted Y-axis for pane ${paneId}`);
+          } catch (e) {
+            console.warn(`[setTimeWindow] Failed to refit Y-axis for pane ${paneId}:`, e);
+          }
+        }
+        // Also refit legacy surfaces
+        try {
+          refs.tickSurface?.zoomExtentsY();
+          refs.tickSurface?.invalidateElement();
+          refs.ohlcSurface?.zoomExtentsY();
+          refs.ohlcSurface?.invalidateElement();
+        } catch (e) {
+          // Ignore
+        }
+      });
     }, 0); // Use setTimeout to ensure all range changes are applied before resuming
     
     // Update minimap range selection (OverviewRangeSelectionModifier)
