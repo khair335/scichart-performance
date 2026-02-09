@@ -62,6 +62,7 @@ import {
 } from '@/lib/strategy-marker-scatter';
 import { sharedDataSeriesPool, type PooledDataSeries } from '@/lib/shared-data-series-pool';
 import { chartLogger, safeChartOperation } from '@/lib/chart-logger';
+import { interpolateYValue } from '@/lib/interpolate-y-value';
 
 import { formatInTimeZone } from 'date-fns-tz';
 
@@ -5976,16 +5977,10 @@ export function useMultiPaneChart({
             }
             
             if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
-              try {
-                const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
-                if (index >= 0 && index < ySourceDataSeries.count()) {
-                  const yVals = ySourceDataSeries.getNativeYValues();
-                  if (yVals && yVals.size() > index) {
-                    yValue = yVals.get(index);
-                  }
-                }
-              } catch (e) {
-                console.warn(`[Markers] yvalue lookup failed for ${ySourceSeriesId}:`, e);
+              // Use linear interpolation to place markers exactly on the line
+              const interpolated = interpolateYValue(ySourceDataSeries, markerXSeconds);
+              if (interpolated !== null) {
+                yValue = interpolated;
               }
             } else {
               if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet`);
@@ -8676,13 +8671,8 @@ export function useMultiPaneChart({
               }
             }
             if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
-              try {
-                const index = ySourceDataSeries.findIndex(markerXSeconds, ESearchMode.Nearest);
-                if (index >= 0 && index < ySourceDataSeries.count()) {
-                  const yVals = ySourceDataSeries.getNativeYValues();
-                  if (yVals && yVals.size() > index) yValue = yVals.get(index);
-                }
-              } catch { /* ignore */ }
+              const interpolated = interpolateYValue(ySourceDataSeries, markerXSeconds);
+              if (interpolated !== null) yValue = interpolated;
             }
           }
           if (yValue === null) {
