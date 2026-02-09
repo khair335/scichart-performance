@@ -1376,7 +1376,23 @@ export function useMultiPaneChart({
         
         const strokeThickness = seriesAssignment?.style?.strokeThickness ?? 1;
         const fill = seriesAssignment?.style?.fill ?? (stroke + '44');
-        const pointMarker = seriesAssignment?.style?.pointMarker ? undefined : undefined;
+        let pointMarker: EllipsePointMarker | undefined;
+        const pmConfig = seriesAssignment?.style?.pointMarker;
+        if (pmConfig) {
+          const pmEnabled = typeof pmConfig === 'boolean' ? pmConfig : (pmConfig.enabled !== false);
+          if (pmEnabled) {
+            const pmSize = (typeof pmConfig === 'object' && pmConfig.size) ? pmConfig.size : 7;
+            const pmFill = (typeof pmConfig === 'object' && pmConfig.color) ? pmConfig.color : stroke;
+            const pmStroke = (typeof pmConfig === 'object' && pmConfig.strokeColor) ? pmConfig.strokeColor : stroke;
+            pointMarker = new EllipsePointMarker(wasm, {
+              width: pmSize,
+              height: pmSize,
+              fill: pmFill,
+              stroke: pmStroke,
+              strokeThickness: 1,
+            });
+          }
+        }
         
         if (renderableSeriesType === 'FastMountainRenderableSeries') {
           renderableSeries = new FastMountainRenderableSeries(wasm, {
