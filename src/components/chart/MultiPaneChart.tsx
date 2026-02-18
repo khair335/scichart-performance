@@ -631,7 +631,7 @@ interface ChartRefs {
   markerScatterSeries: Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>;
   // Persistent buffer of raw marker samples for replay after layout reload
   // Strategy markers don't go into SharedDataSeriesPool, so we must keep them here
-  markerSampleHistory: Array<{ series_id: string; t_ms: number; payload: Record<string, unknown> }>;
+  markerSampleHistory: Array<{ series_id: string; t_ms: number; t_ns?: number; payload: Record<string, unknown> }>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
   
@@ -640,6 +640,14 @@ interface ChartRefs {
   
   // Track waiting annotations per pane (paneId -> TextAnnotation)
   waitingAnnotations: Map<string, TextAnnotation>;
+}
+
+/**
+ * Convert t_ms + optional t_ns to seconds with nanosecond precision.
+ * t_ns is the nanosecond remainder within the millisecond (0–999_999).
+ */
+function toSecondsPrecise(t_ms: number, t_ns?: number): number {
+  return t_ms / 1000 + (t_ns ? t_ns / 1_000_000_000 : 0);
 }
 
 /**
@@ -5468,11 +5476,11 @@ export function useMultiPaneChart({
     // First pass: group samples by series
     for (let i = 0; i < samplesLength; i++) {
       const sample = samples[i];
-      const { series_id, t_ms, payload } = sample;
+      const { series_id, t_ms, t_ns, payload } = sample;
       
-      // CRITICAL: Convert milliseconds to seconds for SciChart DateTimeNumericAxis
+      // CRITICAL: Convert milliseconds + nanoseconds to seconds for SciChart DateTimeNumericAxis
       // SciChart expects Unix timestamps in SECONDS, not milliseconds
-      const t_sec = t_ms / 1000;
+      const t_sec = toSecondsPrecise(t_ms, t_ns);
       
       if (t_ms > latestTime) {
         latestTime = t_ms; // Keep latestTime in ms for internal tracking
@@ -5936,7 +5944,7 @@ export function useMultiPaneChart({
       // Accumulate markers into batches
       for (let i = 0; i < samplesLength; i++) {
         const sample = samples[i];
-        const { series_id, t_ms, payload } = sample;
+        const { series_id, t_ms, t_ns, payload } = sample;
         
         // Only process strategy markers/signals
         if (!series_id.includes(':strategy:')) continue;
@@ -5945,7 +5953,7 @@ export function useMultiPaneChart({
         // Store in persistent history for replay after layout reload
         // Cap at 100K to prevent memory issues
         if (refs.markerSampleHistory.length < 100000) {
-          refs.markerSampleHistory.push({ series_id, t_ms, payload: payload as Record<string, unknown> });
+          refs.markerSampleHistory.push({ series_id, t_ms, t_ns, payload: payload as Record<string, unknown> });
         }
         
         // Check if this strategy series is explicitly assigned in the layout
@@ -5970,8 +5978,8 @@ export function useMultiPaneChart({
           continue;
         }
         
-        // Get marker timestamp in seconds (for X-axis)
-        const markerXSeconds = t_ms / 1000;
+        // Get marker timestamp in seconds with nanosecond precision (for X-axis)
+        const markerXSeconds = toSecondsPrecise(t_ms, t_ns);
         
         // Add to batches for target panes - resolve yvalue PER PANE assignment
         // Each pane assignment may have a different yvalue source series
@@ -8687,7 +8695,7 @@ export function useMultiPaneChart({
       
       const paneMarkerBatches = new Map<string, Map<MarkerSeriesType, { x: number[], y: number[] }>>();
       
-      for (const { series_id, t_ms, payload } of markerHistory) {
+      for (const { series_id, t_ms, t_ns, payload } of markerHistory) {
         const strategyAssignment = currentLayout.getStrategySeriesAssignment(series_id);
         const allAssignments = currentLayout.getAllStrategySeriesAssignments(series_id);
         let targetPanes: string[] = [];
@@ -8701,7 +8709,7 @@ export function useMultiPaneChart({
         }
         if (targetPanes.length === 0) continue;
         
-        const markerXSeconds = t_ms / 1000;
+        const markerXSeconds = toSecondsPrecise(t_ms, t_ns);
         
         // Resolve yvalue PER PANE assignment (each pane may have different yvalue source)
         for (const paneId of targetPanes) {
