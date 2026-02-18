@@ -54,6 +54,7 @@ export interface FeedSample {
   seq: number;
   series_id: string;
   t_ms: number;
+  t_ns?: number; // nanosecond remainder within the millisecond (0–999_999)
   payload: any;
   series_seq?: number;
 }
@@ -820,13 +821,16 @@ export class WsFeedClient {
     const td = this._textDecoder || (this._textDecoder = new TextDecoder("utf-8"));
 
     outer: for (let i = 0; i < count; i++) {
-      if (off + 8 * 3 + 1 > view.byteLength) break;
+      // Header: f64 seq, f64 series_seq, f64 t_ms, u32 t_ns = 28 bytes + 1 for sidLen
+      if (off + 8 * 3 + 4 + 1 > view.byteLength) break;
       const seq = view.getFloat64(off);
       off += 8;
       const seriesSeq = view.getFloat64(off);
       off += 8;
       const t_ms = view.getFloat64(off);
       off += 8;
+      const t_ns = view.getUint32(off);
+      off += 4;
 
       const sidLen = view.getUint8(off);
       off += 1;
@@ -934,6 +938,7 @@ export class WsFeedClient {
         series_seq: seriesSeq,
         series_id: sid,
         t_ms,
+        t_ns: t_ns || undefined,
         payload,
       });
     }
@@ -969,12 +974,14 @@ export class WsFeedClient {
         if (strat) payload.strategy = strat;
       }
       const t_ms = Number(s?.t_ms);
+      const t_ns_raw = Number(s?.t_ns);
       const series_seq = Number(s?.series_seq);
 
       const sample: FeedSample = {
         seq,
         series_id: sid,
         t_ms: Number.isFinite(t_ms) ? t_ms : 0,
+        t_ns: Number.isFinite(t_ns_raw) && t_ns_raw > 0 ? t_ns_raw : undefined,
         series_seq: Number.isFinite(series_seq) ? series_seq : undefined,
         payload,
       };
