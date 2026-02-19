@@ -7721,10 +7721,18 @@ export function useMultiPaneChart({
     // Reset Y-axis manual stretch flag so auto-scaling resumes
     yAxisManuallyStretchedRef.current = false;
     
-    // Zoom all dynamic pane surfaces
+    // Zoom all dynamic pane surfaces with 2% X-axis padding so edge data isn't clipped
     for (const [paneId, paneSurface] of chartRefs.current.paneSurfaces) {
       try {
         paneSurface.surface.zoomExtents();
+        // Add padding to X-axis so leftmost/rightmost points aren't hidden
+        const xAxis = paneSurface.surface.xAxes.get(0);
+        if (xAxis) {
+          const range = xAxis.visibleRange;
+          const span = range.max - range.min;
+          const pad = span * 0.02;
+          xAxis.visibleRange = new NumberRange(range.min - pad, range.max + pad);
+        }
         console.log(`[zoomExtents] Zoomed pane: ${paneId}`);
       } catch (e) {
         console.warn(`[zoomExtents] Failed to zoom pane ${paneId}:`, e);
@@ -7732,8 +7740,30 @@ export function useMultiPaneChart({
     }
     
     // Also zoom legacy surfaces if they exist
-    chartRefs.current.tickSurface?.zoomExtents();
-    chartRefs.current.ohlcSurface?.zoomExtents();
+    if (chartRefs.current.tickSurface) {
+      chartRefs.current.tickSurface.zoomExtents();
+      try {
+        const xAxis = chartRefs.current.tickSurface.xAxes.get(0);
+        if (xAxis) {
+          const range = xAxis.visibleRange;
+          const span = range.max - range.min;
+          const pad = span * 0.02;
+          xAxis.visibleRange = new NumberRange(range.min - pad, range.max + pad);
+        }
+      } catch (e) {}
+    }
+    if (chartRefs.current.ohlcSurface) {
+      chartRefs.current.ohlcSurface.zoomExtents();
+      try {
+        const xAxis = chartRefs.current.ohlcSurface.xAxes.get(0);
+        if (xAxis) {
+          const range = xAxis.visibleRange;
+          const span = range.max - range.min;
+          const pad = span * 0.02;
+          xAxis.visibleRange = new NumberRange(range.min - pad, range.max + pad);
+        }
+      } catch (e) {}
+    }
   }, []);
 
   const jumpToLive = useCallback(() => {
