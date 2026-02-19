@@ -844,6 +844,9 @@ export function useMultiPaneChart({
       refs.waitingAnnotations.clear();
       
       // Initialize session mode based on layout's default X-axis range
+      // NOTE: We only set refs here. The actual range application happens in the
+      // feedStage transition effect (history→live) or in the auto-scroll loop.
+      // Do NOT call zoomExtents here because surfaces may not have data yet.
       const defaultRange = plotLayout.xAxisDefaultRange;
       if (defaultRange?.mode === 'session') {
         // Enable session mode for "entire session" default
@@ -855,32 +858,6 @@ export function useMultiPaneChart({
         userInteractedRef.current = false;
         yAxisManuallyStretchedRef.current = false;
         console.log('[MultiPaneChart] Initialized session mode from layout JSON');
-        
-        // CRITICAL: Defer zoomExtents to apply the range visually after surfaces are ready
-        // Without this, refs are set but no visual update occurs when feedStage is already 'live'
-        setTimeout(() => {
-          const refs = chartRefs.current;
-          const surfaces: any[] = [];
-          for (const [, paneSurface] of refs.paneSurfaces) {
-            if (paneSurface.surface) surfaces.push(paneSurface.surface);
-          }
-          if (refs.tickSurface) surfaces.push(refs.tickSurface);
-          if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
-          
-          for (const surface of surfaces) {
-            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
-          }
-          try {
-            for (const surface of surfaces) {
-              try { surface.zoomExtents(); } catch (e) { /* ignore */ }
-            }
-          } finally {
-            for (const surface of surfaces) {
-              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
-            }
-          }
-          console.log('[MultiPaneChart] Applied zoomExtents after layout load (session mode)');
-        }, 300);
       } else if (defaultRange?.mode === 'lastMinutes' && defaultRange.value) {
         // Set specific time window from layout
         sessionModeRef.current = false;
@@ -892,42 +869,6 @@ export function useMultiPaneChart({
         yAxisManuallyStretchedRef.current = false;
         lastYAxisUpdateRef.current = 0;
         console.log(`[MultiPaneChart] Initialized ${defaultRange.value} minute window from layout JSON`);
-        
-        // CRITICAL: Defer time window application so surfaces pick up the new range
-        setTimeout(() => {
-          const latestMs = lastDataTimeRef.current > 0 ? lastDataTimeRef.current : Date.now();
-          const windowSec = defaultRange.value! * 60;
-          const endSec = latestMs / 1000;
-          const startSec = endSec - windowSec;
-          const paddingSec = windowSec * 0.02;
-          const newRange = new NumberRange(startSec, endSec + paddingSec);
-          
-          const refs = chartRefs.current;
-          const surfaces: any[] = [];
-          for (const [, paneSurface] of refs.paneSurfaces) {
-            if (paneSurface.surface) surfaces.push(paneSurface.surface);
-          }
-          if (refs.tickSurface) surfaces.push(refs.tickSurface);
-          if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
-          
-          for (const surface of surfaces) {
-            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
-          }
-          try {
-            for (const surface of surfaces) {
-              try {
-                const xAxis = surface.xAxes.get(0);
-                if (xAxis) xAxis.visibleRange = newRange;
-                surface.zoomExtentsY();
-              } catch (e) { /* ignore */ }
-            }
-          } finally {
-            for (const surface of surfaces) {
-              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
-            }
-          }
-          console.log(`[MultiPaneChart] Applied ${defaultRange.value} min window after layout load`);
-        }, 300);
       }
     }
   }, [plotLayout]);
@@ -958,15 +899,17 @@ export function useMultiPaneChart({
   };
 
 
+  // Calculate default X-axis range from layout config
+  // IMPORTANT: All inputs and outputs are in SECONDS (matching SciChart DateTimeNumericAxis)
   const calculateDefaultXAxisRange = (
     defaultRange: PlotLayout['xAxis']['defaultRange'],
-    latestTime: number,
-    dataMin?: number,
-    dataMax?: number
+    latestTime: number, // in SECONDS
+    dataMin?: number,   // in SECONDS
+    dataMax?: number    // in SECONDS
   ): NumberRange | null => {
     if (!defaultRange) return null;
 
-    const now = latestTime > 0 ? latestTime : Date.now();
+    const now = latestTime > 0 ? latestTime : Date.now() / 1000; // Convert ms to seconds
     let rangeMin: number;
     let rangeMax: number;
 
@@ -974,8 +917,8 @@ export function useMultiPaneChart({
       case 'lastMinutes':
         if (defaultRange.value && defaultRange.value > 0) {
           const minutes = defaultRange.value;
-          rangeMin = now - (minutes * 60 * 1000);
-          rangeMax = now + (10 * 1000); // 10 seconds padding
+          rangeMin = now - (minutes * 60); // seconds
+          rangeMax = now + 10; // 10 seconds padding
         } else {
           return null;
         }
@@ -984,8 +927,8 @@ export function useMultiPaneChart({
       case 'lastHours':
         if (defaultRange.value && defaultRange.value > 0) {
           const hours = defaultRange.value;
-          rangeMin = now - (hours * 60 * 60 * 1000);
-          rangeMax = now + (10 * 1000); // 10 seconds padding
+          rangeMin = now - (hours * 60 * 60); // seconds
+          rangeMax = now + 10; // 10 seconds padding
         } else {
           return null;
         }
@@ -999,23 +942,22 @@ export function useMultiPaneChart({
           rangeMax = dataMax + padding;
         } else {
           // Fallback: use a large window if data range not available
-          const sessionWindow = 8 * 60 * 60 * 1000; // 8 hours
+          const sessionWindow = 8 * 60 * 60; // 8 hours in seconds
           rangeMin = now - sessionWindow;
-          rangeMax = now + (10 * 1000);
+          rangeMax = now + 10;
         }
         break;
 
       case 'session':
         // ALWAYS show all data from N=1 to latest point in buffer (dynamic in live mode)
-        // This mode continuously expands to show entire data range as new data arrives
         if (dataMin !== undefined && dataMax !== undefined && dataMin < dataMax) {
           const padding = (dataMax - dataMin) * 0.02; // 2% padding for tighter fit
           rangeMin = dataMin - padding;
           rangeMax = dataMax + padding;
         } else {
           // No data yet, use reasonable defaults
-          rangeMin = now - (60 * 1000); // 1 minute back
-          rangeMax = now + (10 * 1000);
+          rangeMin = now - 60; // 1 minute back in seconds
+          rangeMax = now + 10;
         }
         break;
 
@@ -7230,8 +7172,9 @@ export function useMultiPaneChart({
     if (feedStage === 'live' && prevStage !== 'live') {
       historyLoadedRef.current = true;
       
-      // Use setTimeout(0) to defer heavy work and prevent UI freeze
-      setTimeout(() => {
+      // CRITICAL: Use a retry loop to handle the case where data hasn't been
+      // processed yet when the transition fires (async chunked processing)
+      const applyLiveRange = (attempt: number) => {
         const refs = chartRefs.current;
         
         // Collect all surfaces to update
@@ -7242,7 +7185,51 @@ export function useMultiPaneChart({
           if (paneSurface.surface) surfaces.push(paneSurface.surface);
         }
         
-        if (surfaces.length === 0) return;
+        if (surfaces.length === 0) {
+          if (attempt < 5) {
+            setTimeout(() => applyLiveRange(attempt + 1), 200);
+          }
+          return;
+        }
+        
+        // Find data range across all series (quick scan - just get min/max)
+        let dataMin = 0;
+        let dataMax = 0;
+        let hasData = false;
+        
+        for (const [, entry] of refs.dataSeriesStore) {
+          const count = entry.dataSeries.count();
+          if (count > 0) {
+            try {
+              const xRange = entry.dataSeries.getXRange();
+              if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+                if (!hasData) {
+                  dataMin = xRange.min;
+                  dataMax = xRange.max;
+                  hasData = true;
+                } else {
+                  if (xRange.min < dataMin) dataMin = xRange.min;
+                  if (xRange.max > dataMax) dataMax = xRange.max;
+                }
+              }
+            } catch (e) { /* ignore */ }
+          }
+        }
+        
+        if (!hasData || dataMax <= 0) {
+          // No data yet - retry with increasing delay (up to 5 attempts)
+          if (attempt < 5) {
+            console.log(`[MultiPaneChart] No data found on attempt ${attempt + 1}, retrying in ${200 * (attempt + 1)}ms...`);
+            setTimeout(() => applyLiveRange(attempt + 1), 200 * (attempt + 1));
+          } else {
+            console.warn('[MultiPaneChart] No data found after 5 attempts, giving up on initial range set');
+            triggerYAxisScalingOnNextBatchRef.current = true;
+          }
+          return;
+        }
+        
+        // Mark that panes have data (in case processChunk hasn't set this yet)
+        anyPaneHasDataRef.current = true;
         
         // CRITICAL: Suspend ALL surfaces first to prevent multiple redraws
         for (const surface of surfaces) {
@@ -7250,38 +7237,6 @@ export function useMultiPaneChart({
         }
         
         try {
-          // Find data range across all series (quick scan - just get min/max)
-          let dataMin = 0;
-          let dataMax = 0;
-          let hasData = false;
-          
-          for (const [, entry] of refs.dataSeriesStore) {
-            const count = entry.dataSeries.count();
-            if (count > 0) {
-              try {
-                const xRange = entry.dataSeries.getXRange();
-                if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
-                  if (!hasData) {
-                    dataMin = xRange.min;
-                    dataMax = xRange.max;
-                    hasData = true;
-                  } else {
-                    if (xRange.min < dataMin) dataMin = xRange.min;
-                    if (xRange.max > dataMax) dataMax = xRange.max;
-                  }
-                }
-              } catch (e) { /* ignore */ }
-            }
-          }
-          
-          if (!hasData || dataMax <= 0) {
-            // No data yet - schedule retry
-            setTimeout(() => {
-              triggerYAxisScalingOnNextBatchRef.current = true;
-            }, 200);
-            return;
-          }
-          
           // Calculate X-axis range
           let liveRange: NumberRange;
           const defaultRange = plotLayout?.xAxisDefaultRange;
@@ -7292,10 +7247,10 @@ export function useMultiPaneChart({
           if (calculatedRange) {
             liveRange = calculatedRange;
           } else {
-            // Default: 2 minute window focused on latest data
-            const windowMs = 2 * 60 * 1000;
-            const padding = 10 * 1000;
-            liveRange = new NumberRange(dataMax - windowMs, dataMax + padding);
+            // Default: 2 minute window focused on latest data (in SECONDS)
+            const windowSec = 2 * 60;
+            const paddingSec = 10;
+            liveRange = new NumberRange(dataMax - windowSec, dataMax + paddingSec);
           }
           
           // Set X-axis range for all surfaces
@@ -7321,13 +7276,13 @@ export function useMultiPaneChart({
         
         // Schedule Y-axis zoom extents after a short delay (non-blocking)
         setTimeout(() => {
-          const refs = chartRefs.current;
+          const refs2 = chartRefs.current;
           
           // Suspend again for Y-axis updates
           const surfacesToUpdate: SciChartSurface[] = [];
-          if (refs.tickSurface) surfacesToUpdate.push(refs.tickSurface);
-          if (refs.ohlcSurface) surfacesToUpdate.push(refs.ohlcSurface);
-          for (const [, paneSurface] of refs.paneSurfaces) {
+          if (refs2.tickSurface) surfacesToUpdate.push(refs2.tickSurface);
+          if (refs2.ohlcSurface) surfacesToUpdate.push(refs2.ohlcSurface);
+          for (const [, paneSurface] of refs2.paneSurfaces) {
             if (paneSurface.surface) surfacesToUpdate.push(paneSurface.surface);
           }
           
@@ -7346,7 +7301,11 @@ export function useMultiPaneChart({
           }
         }, 100);
         
-      }, 0); // setTimeout(0) defers to next tick, preventing blocking
+        console.log(`[MultiPaneChart] Applied live range (attempt ${attempt + 1}): dataMin=${dataMin}, dataMax=${dataMax}, hasData=${hasData}`);
+      };
+      
+      // Start first attempt after a short delay to allow chunked processing to finish
+      setTimeout(() => applyLiveRange(0), 50);
     }
   }, [feedStage, plotLayout, isReady]); // Added isReady to dependencies for history auto-zoom
   
