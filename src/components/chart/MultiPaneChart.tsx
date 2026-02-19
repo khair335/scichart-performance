@@ -4660,31 +4660,31 @@ export function useMultiPaneChart({
                   e.preventDefault();
                 }
                 
-                // Get the minimap range or time window range for X-axis
+                // Get the X-axis range based on current time window selection
+                // CRITICAL: Use selectedWindowMinutesRef and sessionModeRef as the source of truth,
+                // NOT the minimap's selectedArea, which can be stale from a previous selection.
                 let xRange: NumberRange | null = null;
                 let useZoomExtentsX = false;
                 
-                // Try to get range from minimap selection
-                const rangeSelectionModifier = (chartRefs.current as any).minimapRangeSelectionModifier as OverviewRangeSelectionModifier | null;
-                if (rangeSelectionModifier && rangeSelectionModifier.selectedArea) {
-                  // Use the minimap selected range directly
-                  xRange = rangeSelectionModifier.selectedArea;
+                const selectedMinutes = selectedWindowMinutesRef.current;
+                const isSessionMode = sessionModeRef.current;
+                const latestTime = lastDataTimeRef.current > 0 ? lastDataTimeRef.current : Date.now();
+                
+                console.log(`[MultiPaneChart] Double-click range calc: selectedMinutes=${selectedMinutes}, sessionMode=${isSessionMode}`);
+                
+                if (isSessionMode || (selectedMinutes === null && !isSessionMode)) {
+                  // Entire session mode or no specific window: zoom to full data extents
+                  useZoomExtentsX = true;
+                } else if (selectedMinutes !== null && selectedMinutes > 0) {
+                  // Specific time window: calculate the range
+                  const windowSec = selectedMinutes * 60;
+                  const endSec = latestTime / 1000;
+                  const startSec = endSec - windowSec;
+                  const paddingSec = windowSec * 0.02;
+                  xRange = new NumberRange(startSec, endSec + paddingSec);
                 } else {
-                  // Fallback: Calculate from selected time window
-                  const selectedMinutes = selectedWindowMinutesRef.current;
-                  const latestTime = lastDataTimeRef.current > 0 ? lastDataTimeRef.current : Date.now();
-                  
-                  if (selectedMinutes !== null && selectedMinutes > 0) {
-                    // Specific time window: calculate the range
-                    const windowSec = selectedMinutes * 60;
-                    const endSec = latestTime / 1000;
-                    const startSec = endSec - windowSec;
-                    const paddingSec = windowSec * 0.02;
-                    xRange = new NumberRange(startSec, endSec + paddingSec);
-                  } else {
-                    // Entire session mode: use zoomExtentsX to get the actual data range
-                    useZoomExtentsX = true;
-                  }
+                  // Fallback: zoom to full data extents
+                  useZoomExtentsX = true;
                 }
                 
                 // Suspend updates on all surfaces to batch the operations
