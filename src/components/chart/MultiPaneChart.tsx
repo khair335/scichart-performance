@@ -851,14 +851,83 @@ export function useMultiPaneChart({
         selectedWindowMinutesRef.current = null;
         minimapStickyRef.current = true;
         timeWindowSelectedRef.current = true;
+        isLiveRef.current = true;
+        userInteractedRef.current = false;
+        yAxisManuallyStretchedRef.current = false;
         console.log('[MultiPaneChart] Initialized session mode from layout JSON');
+        
+        // CRITICAL: Defer zoomExtents to apply the range visually after surfaces are ready
+        // Without this, refs are set but no visual update occurs when feedStage is already 'live'
+        setTimeout(() => {
+          const refs = chartRefs.current;
+          const surfaces: any[] = [];
+          for (const [, paneSurface] of refs.paneSurfaces) {
+            if (paneSurface.surface) surfaces.push(paneSurface.surface);
+          }
+          if (refs.tickSurface) surfaces.push(refs.tickSurface);
+          if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
+          
+          for (const surface of surfaces) {
+            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
+          }
+          try {
+            for (const surface of surfaces) {
+              try { surface.zoomExtents(); } catch (e) { /* ignore */ }
+            }
+          } finally {
+            for (const surface of surfaces) {
+              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
+            }
+          }
+          console.log('[MultiPaneChart] Applied zoomExtents after layout load (session mode)');
+        }, 300);
       } else if (defaultRange?.mode === 'lastMinutes' && defaultRange.value) {
         // Set specific time window from layout
         sessionModeRef.current = false;
         selectedWindowMinutesRef.current = defaultRange.value;
         minimapStickyRef.current = true;
         timeWindowSelectedRef.current = true;
+        isLiveRef.current = true;
+        userInteractedRef.current = false;
+        yAxisManuallyStretchedRef.current = false;
+        lastYAxisUpdateRef.current = 0;
         console.log(`[MultiPaneChart] Initialized ${defaultRange.value} minute window from layout JSON`);
+        
+        // CRITICAL: Defer time window application so surfaces pick up the new range
+        setTimeout(() => {
+          const latestMs = lastDataTimeRef.current > 0 ? lastDataTimeRef.current : Date.now();
+          const windowSec = defaultRange.value! * 60;
+          const endSec = latestMs / 1000;
+          const startSec = endSec - windowSec;
+          const paddingSec = windowSec * 0.02;
+          const newRange = new NumberRange(startSec, endSec + paddingSec);
+          
+          const refs = chartRefs.current;
+          const surfaces: any[] = [];
+          for (const [, paneSurface] of refs.paneSurfaces) {
+            if (paneSurface.surface) surfaces.push(paneSurface.surface);
+          }
+          if (refs.tickSurface) surfaces.push(refs.tickSurface);
+          if (refs.ohlcSurface) surfaces.push(refs.ohlcSurface);
+          
+          for (const surface of surfaces) {
+            try { surface.suspendUpdates(); } catch (e) { /* ignore */ }
+          }
+          try {
+            for (const surface of surfaces) {
+              try {
+                const xAxis = surface.xAxes.get(0);
+                if (xAxis) xAxis.visibleRange = newRange;
+                surface.zoomExtentsY();
+              } catch (e) { /* ignore */ }
+            }
+          } finally {
+            for (const surface of surfaces) {
+              try { surface.resumeUpdates(); } catch (e) { /* ignore */ }
+            }
+          }
+          console.log(`[MultiPaneChart] Applied ${defaultRange.value} min window after layout load`);
+        }, 300);
       }
     }
   }, [plotLayout]);
