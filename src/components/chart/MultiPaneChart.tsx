@@ -7984,12 +7984,46 @@ export function useMultiPaneChart({
       // Zero or negative means show all data (entire session mode)
       // Enable session mode to expand with data in live mode
       sessionModeRef.current = true;
-      minimapStickyRef.current = true; // Keep sticky so minimap follows latest data
-      timeWindowSelectedRef.current = true; // Mark as selected to trigger auto-scroll
-      selectedWindowMinutesRef.current = null; // Clear selected window size
-      isLiveRef.current = true; // Enable live mode for auto-scroll
+      minimapStickyRef.current = true;
+      timeWindowSelectedRef.current = true;
+      selectedWindowMinutesRef.current = null;
+      isLiveRef.current = true;
       userInteractedRef.current = false;
-      zoomExtents();
+      
+      // Calculate padded session range inline (same logic as auto-scroll session path)
+      // This avoids zoomExtents() which doesn't add X padding
+      let globalDataMin = Infinity;
+      let globalDataMax = -Infinity;
+      for (const [, entry] of refs.dataSeriesStore) {
+        if (entry.dataSeries && entry.dataSeries.count() > 0) {
+          try {
+            const xRange = entry.dataSeries.getXRange();
+            if (xRange && isFinite(xRange.min) && isFinite(xRange.max)) {
+              globalDataMin = Math.min(globalDataMin, xRange.min);
+              globalDataMax = Math.max(globalDataMax, xRange.max);
+            }
+          } catch (e) {}
+        }
+      }
+      if (isFinite(globalDataMin) && isFinite(globalDataMax) && globalDataMax > globalDataMin) {
+        const span = globalDataMax - globalDataMin;
+        const pad = span * 0.02;
+        const paddedRange = new NumberRange(globalDataMin - pad, globalDataMax + pad);
+        // Apply to all pane surfaces
+        for (const [, paneSurface] of refs.paneSurfaces) {
+          try {
+            if (paneSurface?.xAxis) {
+              paneSurface.xAxis.visibleRange = paddedRange;
+            }
+            paneSurface.surface.zoomExtentsY();
+          } catch (e) {}
+        }
+        // Legacy surfaces
+        try { if (refs.tickSurface) { refs.tickSurface.xAxes.get(0).visibleRange = paddedRange; refs.tickSurface.zoomExtentsY(); } } catch (e) {}
+        try { if (refs.ohlcSurface) { refs.ohlcSurface.xAxes.get(0).visibleRange = paddedRange; refs.ohlcSurface.zoomExtentsY(); } } catch (e) {}
+      } else {
+        zoomExtents();
+      }
       return;
     }
     
