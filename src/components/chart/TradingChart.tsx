@@ -4,7 +4,6 @@ import { useWebSocketFeed } from '@/hooks/useWebSocketFeed';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
 import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
-import { ConnectionControls } from './ConnectionControls';
 
 import { SeriesBrowser } from './SeriesBrowser';
 import { CommandPalette } from './CommandPalette';
@@ -164,9 +163,8 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   
   // Connection settings - wsUrl is read-only from config; policy is always from_start
   const [wsUrl, setWsUrl] = useState(initialWsUrl);
-  const [autoReconnect, setAutoReconnect] = useState(true);
+  const [autoReconnect] = useState(true);
   const [useLocalStorage] = useState(false);
-  const [connectionControlsOpen, setConnectionControlsOpen] = useState(false);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
@@ -248,10 +246,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     state: feedState, 
     registry: wsRegistry, 
     notices: wsNotices,
-    connect: wsConnect,
-    disconnect: wsDisconnect,
     resetCursor: wsResetCursor,
-    setAutoReconnect: wsSetAutoReconnect,
     clearNotices: wsClearNotices,
   } = useWebSocketFeed({
     url: wsUrl,
@@ -1200,7 +1195,6 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         }}
         wsUrl={wsUrl}
         wsStage={feedState.stage}
-        onOpenConnectionControls={() => setConnectionControlsOpen(true)}
         className="shrink-0 border-b border-border"
       />
 
@@ -1366,32 +1360,6 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           historyReceived: feedState.historyReceived,
         }}
         samples={debugSamples}
-      />
-
-      {/* Connection Controls Panel */}
-      <ConnectionControls
-        open={connectionControlsOpen}
-        onOpenChange={setConnectionControlsOpen}
-        wsUrl={wsUrl}
-        stage={feedState.stage}
-        connected={feedState.connected}
-        autoReconnect={autoReconnect}
-        onConnect={() => wsConnect()}
-        onDisconnect={() => wsDisconnect()}
-        onResetCursor={() => {
-          setIsLive(true);
-          setLiveMode(true);
-          resetDataState();
-          sharedDataSeriesPool.clearAllData();
-          wsResetCursor(true);
-        }}
-        onChangeUrl={(newUrl) => {
-          setWsUrl(newUrl);
-        }}
-        onSetAutoReconnect={(enabled) => {
-          setAutoReconnect(enabled);
-          wsSetAutoReconnect(enabled);
-        }}
       />
     </div>
   );
