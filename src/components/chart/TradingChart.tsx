@@ -6,6 +6,7 @@ import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
 
 import { SeriesBrowser } from './SeriesBrowser';
+import { ConnectionControls } from './ConnectionControls';
 import { CommandPalette } from './CommandPalette';
 import { FloatingMinimap } from './FloatingMinimap';
 import { DebugPanel, DebugPanelButton } from './DebugPanel';
@@ -160,6 +161,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [cursorEnabled, setCursorEnabled] = useState(false);
   const [legendsEnabled, setLegendsEnabled] = useState(false);
+  const [connectionControlsVisible, setConnectionControlsVisible] = useState(false);
   
   // Connection settings - wsUrl is read-only from config; policy is always from_start
   const [wsUrl, setWsUrl] = useState(initialWsUrl);
@@ -246,6 +248,8 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     state: feedState, 
     registry: wsRegistry, 
     notices: wsNotices,
+    connect: wsConnect,
+    disconnect: wsDisconnect,
     resetCursor: wsResetCursor,
     clearNotices: wsClearNotices,
   } = useWebSocketFeed({
@@ -1184,6 +1188,8 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         onOpenDebugPanel={() => setDebugPanelOpen(true)}
         hudVisible={hudVisible}
         onToggleHud={() => setHudVisible(!hudVisible)}
+        connectionControlsVisible={connectionControlsVisible}
+        onToggleConnectionControls={() => setConnectionControlsVisible(v => !v)}
         onReset={() => {
           // Reset live/paused state FIRST so the chart auto-scrolls as new data arrives
           // (handleSessionComplete sets isLive=false on test_done; Reset must undo that)
@@ -1197,6 +1203,33 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         wsStage={feedState.stage}
         className="shrink-0 border-b border-border"
       />
+
+      {/* Connection Controls Panel */}
+      {connectionControlsVisible && (
+        <ConnectionControls
+          wsUrl={wsUrl}
+          stage={feedState.stage}
+          rate={feedState.rate}
+          lastSeq={feedState.lastSeq}
+          historyProgress={feedState.historyProgress}
+          historyExpected={feedState.historyExpected}
+          historyReceived={feedState.historyReceived}
+          heartbeatLag={feedState.heartbeatLag}
+          registryCount={feedState.registryCount}
+          gaps={feedState.gaps}
+          wireFormat={feedState.wireFormat}
+          requestedFromSeq={feedState.requestedFromSeq}
+          serverMinSeq={feedState.serverMinSeq}
+          serverWmSeq={feedState.serverWmSeq}
+          ringCapacity={feedState.ringCapacity}
+          resumeTruncated={feedState.resumeTruncated}
+          sessionComplete={feedState.sessionComplete}
+          onConnect={wsConnect}
+          onDisconnect={wsDisconnect}
+          onResetCursor={() => wsResetCursor(false)}
+          onClose={() => setConnectionControlsVisible(false)}
+        />
+      )}
 
       {/* HUD Status Bar - Collapsible */}
       {hudVisible && (
