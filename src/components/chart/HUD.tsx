@@ -37,6 +37,7 @@ interface HUDProps {
   seriesGaps?: SeriesGapInfo[];
   visible?: boolean;
   timezone?: string;
+  wsUrl?: string;
 }
 
 export function HUD({
@@ -57,6 +58,7 @@ export function HUD({
   seriesGaps = [],
   visible = true,
   timezone = 'UTC',
+  wsUrl,
 }: HUDProps) {
   if (!visible) return null;
 
@@ -255,6 +257,20 @@ export function HUD({
       </div>
 
       <div className="flex-1" />
+
+      {/* WS URL indicator */}
+      {wsUrl && (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-muted/20 border border-border/30">
+          <span className={cn(
+            'w-1.5 h-1.5 rounded-full shrink-0',
+            stage === 'live' ? 'bg-success glow-success' :
+            stage === 'history' || stage === 'delta' ? 'bg-warning' :
+            stage === 'connecting' ? 'bg-info animate-pulse' :
+            'bg-destructive'
+          )} />
+          <span className="font-mono text-[10px] text-muted-foreground truncate max-w-40">{wsUrl}</span>
+        </div>
+      )}
 
       {/* Live/Paused indicator */}
       <div className={cn(
