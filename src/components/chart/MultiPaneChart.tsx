@@ -8449,6 +8449,12 @@ export function useMultiPaneChart({
     processingQueueRef.current = [];
     isProcessingRef.current = false;
     
+    // CRITICAL: Clear lastXBySeriesRef so the out-of-order guard doesn't drop
+    // incoming history samples (which have timestamps from the start of the session,
+    // older than the stale last-X values stored from the previous session).
+    // Without this, every new sample after Reset is rejected as "out-of-order".
+    lastXBySeriesRef.current.clear();
+    
     // Clear marker sample history on reset
     refs.markerSampleHistory = [];
     console.log('[MultiPaneChart] All sample buffers cleared (sampleBuffer, skippedSamples, processingQueue, markerHistory)');
