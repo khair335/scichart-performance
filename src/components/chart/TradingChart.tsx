@@ -1185,6 +1185,10 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         hudVisible={hudVisible}
         onToggleHud={() => setHudVisible(!hudVisible)}
         onReset={() => {
+          // Reset live/paused state FIRST so the chart auto-scrolls as new data arrives
+          // (handleSessionComplete sets isLive=false on test_done; Reset must undo that)
+          setIsLive(true);
+          setLiveMode(true);
           resetDataState();
           sharedDataSeriesPool.clearAllData();
           wsResetCursor(true);
