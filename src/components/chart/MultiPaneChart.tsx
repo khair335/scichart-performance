@@ -6793,6 +6793,7 @@ export function useMultiPaneChart({
             crosshairStroke: cursorColor,
             crosshairStrokeThickness: 1,
             showAxisLabels: true,
+            modifierGroup: 'cursor-sync-group',
             showTooltip: true,
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
             hitTestRadius: 20, // Only show series values within 20px of cursor
@@ -6858,8 +6859,8 @@ export function useMultiPaneChart({
             crosshairStroke: cursorColor,
             crosshairStrokeThickness: 1,
             showAxisLabels: true,
+            modifierGroup: 'cursor-sync-group',
             showTooltip: true,
-            tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
           });
           refs.tickSurface.chartModifiers.add(cursorModifier);
           refs.tickSurface.invalidateElement();
@@ -6917,7 +6918,7 @@ export function useMultiPaneChart({
             crosshairStroke: cursorColor,
             crosshairStrokeThickness: 1,
             showAxisLabels: true,
-            showTooltip: true,
+            modifierGroup: 'cursor-sync-group',
             tooltipContainerBackground: theme === 'dark' ? '#1a1a1a' : '#ffffff',
           });
           refs.ohlcSurface.chartModifiers.add(cursorModifier);
