@@ -1208,6 +1208,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
       {connectionControlsVisible && (
         <ConnectionControls
           wsUrl={wsUrl}
+          onWsUrlChange={(url) => setWsUrl(url)}
           stage={feedState.stage}
           rate={feedState.rate}
           lastSeq={feedState.lastSeq}
