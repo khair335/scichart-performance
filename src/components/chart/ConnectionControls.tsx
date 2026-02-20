@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { Wifi, WifiOff, Loader2, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 interface ConnectionControlsProps {
   wsUrl: string;
+  onWsUrlChange?: (url: string) => void;
   stage: string;
   rate: number;
   lastSeq: number;
@@ -29,6 +32,7 @@ interface ConnectionControlsProps {
 
 export function ConnectionControls({
   wsUrl,
+  onWsUrlChange,
   stage,
   rate,
   lastSeq,
@@ -51,100 +55,172 @@ export function ConnectionControls({
   onClose,
   className,
 }: ConnectionControlsProps) {
-  const isConnected = stage === 'live' || stage === 'history' || stage === 'delta';
+  const [urlDraft, setUrlDraft] = useState(wsUrl);
+
+  const isConnected = stage === 'live' || stage === 'history' || stage === 'delta' || stage === 'complete';
   const isConnecting = stage === 'connecting';
 
-  const getStageColor = () => {
+  const getStatusColor = () => {
     switch (stage) {
-      case 'live': return 'text-success';
+      case 'live':
+      case 'complete': return 'text-success';
       case 'history':
       case 'delta': return 'text-warning';
       case 'connecting': return 'text-info';
-      case 'complete': return 'text-primary';
       default: return 'text-destructive';
     }
   };
 
-  const getStageIcon = () => {
-    if (isConnecting) return <Loader2 className="w-3.5 h-3.5 animate-spin" />;
-    if (isConnected || stage === 'complete') return <Wifi className="w-3.5 h-3.5" />;
-    return <WifiOff className="w-3.5 h-3.5" />;
+  const getStatusDotColor = () => {
+    switch (stage) {
+      case 'live':
+      case 'complete': return 'bg-success';
+      case 'history':
+      case 'delta': return 'bg-warning';
+      case 'connecting': return 'bg-info animate-pulse';
+      default: return 'bg-destructive';
+    }
+  };
+
+  const handleUrlKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      onWsUrlChange?.(urlDraft);
+    }
   };
 
   return (
     <div className={cn(
-      'hud-panel px-4 py-3 flex flex-col gap-3 text-xs border-b border-border shrink-0',
+      'hud-panel px-3 py-2 flex items-center gap-3 text-xs border-b border-border shrink-0 flex-wrap',
       className
     )}>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className={cn('flex items-center gap-1.5 font-semibold', getStageColor())}>
-            {getStageIcon()}
-            <span className="uppercase tracking-wider">{stage || 'idle'}</span>
-          </span>
-          <span className="text-muted-foreground font-mono truncate max-w-xs">{wsUrl}</span>
-          {wireFormat && (
-            <span className="px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground text-[10px] uppercase tracking-wider">{wireFormat}</span>
-          )}
+      {/* WS URL */}
+      <div className="flex flex-col gap-0.5 min-w-[200px]">
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">WebSocket URL</span>
+        <Input
+          value={urlDraft}
+          onChange={e => setUrlDraft(e.target.value)}
+          onBlur={() => onWsUrlChange?.(urlDraft)}
+          onKeyDown={handleUrlKeyDown}
+          className="h-7 text-xs font-mono bg-muted/20 border-border/50 rounded px-2 w-52"
+          spellCheck={false}
+        />
+      </div>
+
+      {/* Cursor Policy */}
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">Cursor Policy</span>
+        <div className="h-7 flex items-center px-2 rounded border border-border/40 bg-muted/20 text-xs font-mono text-foreground whitespace-nowrap">
+          from_start (always seq=1)
         </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">Actions</span>
         <div className="flex items-center gap-1.5">
-          {/* Connect / Disconnect */}
-          {isConnected && onDisconnect && (
-            <Button variant="ghost" size="sm" onClick={onDisconnect}
-              className="h-7 px-2.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 rounded-lg">
-              Disconnect
-            </Button>
-          )}
+          {/* Connect */}
           {!isConnected && !isConnecting && onConnect && (
-            <Button variant="ghost" size="sm" onClick={onConnect}
-              className="h-7 px-2.5 text-xs text-success hover:text-success hover:bg-success/10 rounded-lg">
+            <Button
+              size="sm"
+              onClick={onConnect}
+              className="h-7 px-3 text-xs rounded"
+            >
               Connect
             </Button>
           )}
-          {onClose && (
-            <Button variant="ghost" size="sm" onClick={onClose}
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground rounded-lg">
-              <X className="w-3.5 h-3.5" />
+          {isConnecting && (
+            <Button size="sm" disabled className="h-7 px-3 text-xs rounded">
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+              Connecting…
+            </Button>
+          )}
+
+          {/* Disconnect */}
+          {onDisconnect && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDisconnect}
+              className="h-7 px-3 text-xs rounded"
+            >
+              Disconnect
+            </Button>
+          )}
+
+          {/* Reset cursor */}
+          {onResetCursor && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onResetCursor}
+              className="h-7 px-3 text-xs rounded"
+            >
+              Reset cursor
             </Button>
           )}
         </div>
       </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
-        <Stat label="Seq" value={lastSeq.toLocaleString()} />
-        <Stat label="Rate" value={`${rate.toFixed(0)}/s`} />
-        <Stat label="Lag" value={heartbeatLag !== null ? `${heartbeatLag}ms` : '—'} warn={heartbeatLag !== null && heartbeatLag > 1000} />
-        <Stat label="Series" value={registryCount.toLocaleString()} />
-        <Stat label="Gaps" value={gaps.toLocaleString()} warn={gaps > 0} />
-        <Stat label="Format" value={wireFormat || '—'} />
-        <Stat label="Truncated" value={resumeTruncated ? 'Yes' : 'No'} warn={resumeTruncated} />
-        {stage === 'history' || stage === 'delta' ? (
-          <Stat label="History" value={`${historyProgress}% (${historyReceived.toLocaleString()}/${historyExpected.toLocaleString()})`} />
-        ) : (
-          <Stat label="Complete" value={sessionComplete ? 'Yes' : 'No'} />
+      {/* Status badges */}
+      <div className="flex items-end gap-2 ml-auto flex-wrap">
+        {/* Connected status */}
+        <span className={cn(
+          'flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-mono',
+          isConnected ? 'border-success/30 bg-success/10' : isConnecting ? 'border-info/30 bg-info/10' : 'border-destructive/30 bg-destructive/10'
+        )}>
+          {isConnecting ? (
+            <Loader2 className="w-2.5 h-2.5 animate-spin text-info" />
+          ) : (
+            <span className={cn('w-2 h-2 rounded-full inline-block', getStatusDotColor())} />
+          )}
+          <span className={cn('font-semibold', getStatusColor())}>
+            {stage || 'idle'}
+          </span>
+        </span>
+
+        {/* lastSeq */}
+        <span className="px-2 py-1 rounded border border-border/30 bg-muted/20 text-xs font-mono text-foreground">
+          lastSeq: <span className="font-semibold">{lastSeq.toLocaleString()}</span>
+        </span>
+
+        {/* wire format */}
+        {wireFormat && (
+          <span className="px-2 py-1 rounded border border-border/30 bg-muted/20 text-xs font-mono text-foreground">
+            wire: <span className="font-semibold">{wireFormat}</span>
+          </span>
+        )}
+
+        {/* Rate */}
+        <span className="px-2 py-1 rounded border border-border/30 bg-muted/20 text-xs font-mono text-foreground">
+          {rate.toFixed(0)}<span className="text-muted-foreground">/s</span>
+        </span>
+
+        {/* Lag */}
+        {heartbeatLag !== null && (
+          <span className={cn(
+            'px-2 py-1 rounded border text-xs font-mono',
+            heartbeatLag > 1000
+              ? 'border-warning/30 bg-warning/10 text-warning'
+              : 'border-border/30 bg-muted/20 text-foreground'
+          )}>
+            lag: <span className="font-semibold">{heartbeatLag}ms</span>
+          </span>
+        )}
+
+        {/* Gaps */}
+        {gaps > 0 && (
+          <span className="px-2 py-1 rounded border border-warning/30 bg-warning/10 text-warning text-xs font-mono">
+            gaps: <span className="font-semibold">{gaps}</span>
+          </span>
+        )}
+
+        {/* History progress */}
+        {(stage === 'history' || stage === 'delta') && (
+          <span className="px-2 py-1 rounded border border-info/30 bg-info/10 text-info text-xs font-mono">
+            history: <span className="font-semibold">{historyProgress}%</span>
+          </span>
         )}
       </div>
-
-      {/* Protocol details */}
-      <div className="flex items-center gap-4 text-[10px] text-muted-foreground font-mono border-t border-border/40 pt-2">
-        <span><span className="text-muted-foreground/60 uppercase mr-1">Policy</span><span className="text-foreground font-semibold">from_start</span></span>
-        <span><span className="text-muted-foreground/60 uppercase mr-1">ReqSeq</span>{requestedFromSeq}</span>
-        <span><span className="text-muted-foreground/60 uppercase mr-1">MinSeq</span>{serverMinSeq}</span>
-        <span><span className="text-muted-foreground/60 uppercase mr-1">WmSeq</span>{serverWmSeq}</span>
-        {ringCapacity !== null && <span><span className="text-muted-foreground/60 uppercase mr-1">Ring</span>{ringCapacity.toLocaleString()}</span>}
-        <span className="ml-auto text-muted-foreground/40 italic">cursor policy is fixed — always starts from seq 1</span>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div className="flex flex-col gap-0.5 px-2 py-1.5 rounded-lg bg-muted/20 border border-border/30">
-      <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">{label}</span>
-      <span className={cn('font-semibold text-xs truncate', warn ? 'text-warning' : 'text-foreground')}>{value}</span>
     </div>
   );
 }
