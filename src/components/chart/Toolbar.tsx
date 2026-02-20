@@ -23,6 +23,7 @@ import {
   Bug,
   Activity,
   RotateCcw,
+  PlugZap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -92,6 +93,8 @@ interface ToolbarProps {
   // WS URL for display
   wsUrl?: string;
   wsStage?: string;
+  // Connection controls
+  onOpenConnectionControls?: () => void;
 }
 
 export function Toolbar({
@@ -132,6 +135,7 @@ export function Toolbar({
   onReset,
   wsUrl,
   wsStage,
+  onOpenConnectionControls,
 }: ToolbarProps) {
   if (!visible) return null;
   return (
@@ -540,6 +544,19 @@ export function Toolbar({
             title="Reset: clear all data and reconnect from start (same as F5)"
           >
             <RotateCcw className="w-3.5 h-3.5" />
+          </Button>
+        )}
+
+        {/* Connection Controls */}
+        {onOpenConnectionControls && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenConnectionControls}
+            className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 btn-modern transition-all"
+            title="Connection settings"
+          >
+            <PlugZap className="w-3.5 h-3.5" />
           </Button>
         )}
       </div>
