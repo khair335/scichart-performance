@@ -22,7 +22,7 @@ import {
   List,
   Bug,
   Activity,
-  Wifi,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -87,8 +87,11 @@ interface ToolbarProps {
   // Panel toggles
   hudVisible?: boolean;
   onToggleHud?: () => void;
-  connectionControlsVisible?: boolean;
-  onToggleConnectionControls?: () => void;
+  // Reset data + cursor
+  onReset?: () => void;
+  // WS URL for display
+  wsUrl?: string;
+  wsStage?: string;
 }
 
 export function Toolbar({
@@ -126,8 +129,9 @@ export function Toolbar({
   onOpenDebugPanel,
   hudVisible = true,
   onToggleHud,
-  connectionControlsVisible = true,
-  onToggleConnectionControls,
+  onReset,
+  wsUrl,
+  wsStage,
 }: ToolbarProps) {
   if (!visible) return null;
   return (
@@ -526,21 +530,16 @@ export function Toolbar({
           </Button>
         )}
 
-        {/* Connection Controls Toggle */}
-        {onToggleConnectionControls && (
+        {/* Reset Button */}
+        {onReset && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={onToggleConnectionControls}
-            className={cn(
-              "h-8 w-8 p-0 rounded-lg btn-modern transition-all",
-              connectionControlsVisible 
-                ? "text-primary bg-primary/10 hover:bg-primary/20" 
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-            )}
-            title={connectionControlsVisible ? 'Hide Connection Controls' : 'Show Connection Controls'}
+            onClick={onReset}
+            className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-warning hover:bg-warning/10 btn-modern transition-all"
+            title="Reset: clear all data and reconnect from start (same as F5)"
           >
-            <Wifi className="w-3.5 h-3.5" />
+            <RotateCcw className="w-3.5 h-3.5" />
           </Button>
         )}
       </div>

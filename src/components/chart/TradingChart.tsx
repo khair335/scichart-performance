@@ -4,7 +4,7 @@ import { useWebSocketFeed } from '@/hooks/useWebSocketFeed';
 import { useDemoDataGenerator } from '@/hooks/useDemoDataGenerator';
 import { HUD } from './HUD';
 import { Toolbar } from './Toolbar';
-import { ConnectionControls, type CursorPolicy, type WireFormat } from './ConnectionControls';
+
 import { SeriesBrowser } from './SeriesBrowser';
 import { CommandPalette } from './CommandPalette';
 import { FloatingMinimap } from './FloatingMinimap';
@@ -156,20 +156,15 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
   const [autoReloadEnabled, setAutoReloadEnabled] = useState(true);
   const [hudVisible, setHudVisible] = useState(true);
   const [toolbarVisible, setToolbarVisible] = useState(true);
-  const [connectionControlsVisible, setConnectionControlsVisible] = useState(true);
   const [zoomMode, setZoomMode] = useState<'box' | 'x-only' | 'y-only'>('box');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [cursorEnabled, setCursorEnabled] = useState(false);
   const [legendsEnabled, setLegendsEnabled] = useState(false);
   
-  // Connection settings state
+  // Connection settings - wsUrl is read-only from config; policy is always from_start
   const [wsUrl, setWsUrl] = useState(initialWsUrl);
-  // CRITICAL: On page refresh (F5) we must start from seq=1 and fetch full history.
-  // We default to from_start + no localStorage so the *first* autoConnect cannot accidentally resume.
-  const [cursorPolicy, setCursorPolicy] = useState<CursorPolicy>('from_start');
-  const [wireFormat, setWireFormat] = useState<WireFormat>('auto');
-  const [autoReconnect, setAutoReconnect] = useState(true);
-  const [useLocalStorage, setUseLocalStorage] = useState(false);
+  const [autoReconnect] = useState(true);
+  const [useLocalStorage] = useState(false);
   
   // Plot layout state
   const [plotLayout, setPlotLayout] = useState<ParsedLayout | null>(null);
@@ -251,10 +246,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     state: feedState, 
     registry: wsRegistry, 
     notices: wsNotices,
-    connect: wsConnect, 
-    disconnect: wsDisconnect, 
     resetCursor: wsResetCursor,
-    setCursorPolicy: wsSetCursorPolicy,
     clearNotices: wsClearNotices,
   } = useWebSocketFeed({
     url: wsUrl,
@@ -269,16 +261,11 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
     onSessionComplete: handleSessionComplete,
     onInitComplete: handleInitComplete,
     autoConnect: !demoMode,
-    cursorPolicy: cursorPolicy as any,
+    cursorPolicy: 'from_start',
     useLocalStorage,
     autoReconnect,
   });
   
-  // Handler for cursor policy change - updates both local state and client
-  const handleCursorPolicyChange = useCallback((policy: CursorPolicy) => {
-    setCursorPolicy(policy);
-    wsSetCursorPolicy(policy as any);
-  }, [wsSetCursorPolicy]);
 
   // Use appropriate registry based on mode - must be defined before useMultiPaneChart
   const registry = demoMode ? demoRegistry : wsRegistry;
@@ -326,16 +313,7 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           if (config.transport.wsUrl) {
             setWsUrl(config.transport.wsUrl);
           }
-          if (typeof config.transport.autoReconnect === 'boolean') {
-            setAutoReconnect(config.transport.autoReconnect);
-          }
-          if (typeof config.transport.useLocalStorage === 'boolean') {
-            setUseLocalStorage(config.transport.useLocalStorage);
-          }
-          if (config.transport.cursorPolicy && ['auto', 'resume', 'from_start'].includes(config.transport.cursorPolicy)) {
-            setCursorPolicy(config.transport.cursorPolicy as CursorPolicy);
-            wsSetCursorPolicy(config.transport.cursorPolicy as any);
-          }
+          // autoReconnect, useLocalStorage and cursorPolicy are hardcoded; ignore config overrides
         }
 
         // Check for defaultLayoutPath
@@ -1206,8 +1184,13 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
         onOpenDebugPanel={() => setDebugPanelOpen(true)}
         hudVisible={hudVisible}
         onToggleHud={() => setHudVisible(!hudVisible)}
-        connectionControlsVisible={connectionControlsVisible}
-        onToggleConnectionControls={() => setConnectionControlsVisible(!connectionControlsVisible)}
+        onReset={() => {
+          resetDataState();
+          sharedDataSeriesPool.clearAllData();
+          wsResetCursor(true);
+        }}
+        wsUrl={wsUrl}
+        wsStage={feedState.stage}
         className="shrink-0 border-b border-border"
       />
 
@@ -1240,46 +1223,11 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           seriesGaps={gapMetrics.seriesGaps}
           visible={true}
           timezone={loadedUiConfig?.chart?.timezone ?? 'America/Chicago'}
+          wsUrl={wsUrl}
           className="shrink-0 border-b border-border animate-in slide-in-from-top-2 duration-200"
         />
       )}
 
-      {/* Connection Controls Panel - Collapsible */}
-      {connectionControlsVisible && (
-        <ConnectionControls
-          wsUrl={wsUrl}
-          onWsUrlChange={setWsUrl}
-          cursorPolicy={cursorPolicy}
-          onCursorPolicyChange={handleCursorPolicyChange}
-          wireFormat={wireFormat}
-          onWireFormatChange={setWireFormat}
-          autoReconnect={autoReconnect}
-          onAutoReconnectChange={setAutoReconnect}
-          useLocalStorage={useLocalStorage}
-          onUseLocalStorageChange={setUseLocalStorage}
-          onConnect={wsConnect}
-          onDisconnect={wsDisconnect}
-          onResetCursor={() => {
-            // CRITICAL: Reset data state BEFORE clearing data to avoid straight lines
-            // 1. Reset chart's internal data tracking (seriesHasData, waiting annotations)
-            resetDataState();
-            // 2. Clear all data from SharedDataSeriesPool
-            sharedDataSeriesPool.clearAllData();
-            // 3. Reset cursor and reconnect to fetch fresh data from beginning
-            wsResetCursor(true);
-          }}
-          isConnected={feedState.connected}
-          isConnecting={feedState.stage === 'connecting'}
-          stage={feedState.stage}
-          lastSeq={feedState.lastSeq}
-          heartbeatLag={feedState.heartbeatLag}
-          rate={feedState.rate}
-          gaps={feedState.gaps}
-          wireFormatActive={feedState.wireFormat}
-          visible={true}
-          className="shrink-0 border-b border-border animate-in slide-in-from-top-2 duration-200"
-        />
-      )}
 
       {/* Main Chart Area */}
       {/* When hasMinHeight, allow container to grow beyond flex-1 by using min-h-0 auto and removing flex-1 constraint */}

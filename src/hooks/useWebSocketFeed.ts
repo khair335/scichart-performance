@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { WsFeedClient, MemoryStorage, FeedStatus, RegistryRow, Sample, CursorPolicy } from '@/lib/wsfeed-client';
+import { WsFeedClient, FeedStatus, RegistryRow, Sample, CursorPolicy } from '@/lib/wsfeed-client';
 
 export type WireFormat = 'auto' | 'text' | 'binary';
 
@@ -179,10 +179,11 @@ export function useWebSocketFeed({
     // Reset session complete state on new connection
     setState(prev => ({ ...prev, sessionComplete: false, stage: 'connecting' }));
 
-    // Use localStorage or MemoryStorage based on config
-    const storage = useLocalStorageRef.current && typeof window !== 'undefined' && window.localStorage
+    // Use localStorage only when explicitly enabled; otherwise pass null so
+    // _persistCursor is a no-op and no stale cursor can ever be resumed.
+    const storage = (useLocalStorageRef.current && typeof window !== 'undefined' && window.localStorage)
       ? window.localStorage
-      : new MemoryStorage();
+      : null;
 
     const client = new WsFeedClient({
       url,
