@@ -1227,7 +1227,13 @@ export function TradingChart({ wsUrl: initialWsUrl = 'ws://127.0.0.1:8765', clas
           sessionComplete={feedState.sessionComplete}
           onConnect={wsConnect}
           onDisconnect={wsDisconnect}
-          onResetCursor={() => wsResetCursor(false)}
+          onResetCursor={() => {
+            setIsLive(true);
+            setLiveMode(true);
+            resetDataState();
+            sharedDataSeriesPool.clearAllData();
+            wsResetCursor(true);
+          }}
           onClose={() => setConnectionControlsVisible(false)}
         />
       )}
