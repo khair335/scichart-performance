@@ -23,6 +23,7 @@ import {
   Bug,
   Activity,
   RotateCcw,
+  Wifi,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -87,6 +88,8 @@ interface ToolbarProps {
   // Panel toggles
   hudVisible?: boolean;
   onToggleHud?: () => void;
+  connectionControlsVisible?: boolean;
+  onToggleConnectionControls?: () => void;
   // Reset data + cursor
   onReset?: () => void;
   // WS URL for display
@@ -129,6 +132,8 @@ export function Toolbar({
   onOpenDebugPanel,
   hudVisible = true,
   onToggleHud,
+  connectionControlsVisible = false,
+  onToggleConnectionControls,
   onReset,
   wsUrl,
   wsStage,
@@ -527,6 +532,24 @@ export function Toolbar({
             title={hudVisible ? 'Hide Status Bar' : 'Show Status Bar'}
           >
             <Activity className="w-3.5 h-3.5" />
+          </Button>
+        )}
+
+        {/* Connection Controls Toggle */}
+        {onToggleConnectionControls && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleConnectionControls}
+            className={cn(
+              "h-8 w-8 p-0 rounded-lg btn-modern transition-all",
+              connectionControlsVisible
+                ? "text-primary bg-primary/10 hover:bg-primary/20"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            )}
+            title={connectionControlsVisible ? 'Hide Connection Controls' : 'Show Connection Controls'}
+          >
+            <Wifi className="w-3.5 h-3.5" />
           </Button>
         )}
 
