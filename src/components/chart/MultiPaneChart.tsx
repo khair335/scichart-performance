@@ -632,6 +632,8 @@ interface ChartRefs {
   // Persistent buffer of raw marker samples for replay after layout reload
   // Strategy markers don't go into SharedDataSeriesPool, so we must keep them here
   markerSampleHistory: Array<{ series_id: string; t_ms: number; t_ns?: number; payload: Record<string, unknown> }>;
+  // Pending markers whose yvalue source data hasn't arrived yet - retried each batch
+  pendingMarkerSamples: Array<{ series_id: string; t_ms: number; t_ns?: number; payload: Record<string, unknown> }>;
   
   updateFpsCallback?: () => void; // FPS update callback for subscribing to dynamic pane surfaces
   
@@ -746,9 +748,10 @@ export function useMultiPaneChart({
     overview: null,
     sharedWasm: null, // Shared WASM context for all dynamic panes
     markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
-    markerSampleHistory: [],
-    seriesHasData: new Map<string, boolean>(),
-    waitingAnnotations: new Map<string, TextAnnotation>(),
+      markerSampleHistory: [],
+      pendingMarkerSamples: [],
+      seriesHasData: new Map<string, boolean>(),
+      waitingAnnotations: new Map<string, TextAnnotation>(),
   });
 
   // Core state - MUST be declared before functions reference them
@@ -1952,6 +1955,7 @@ export function useMultiPaneChart({
           // Strategy marker scatter series per pane (5 series per pane)
           markerScatterSeries: new Map<string, Map<MarkerSeriesType, MarkerScatterGroup>>(),
           markerSampleHistory: [],
+          pendingMarkerSamples: [],
           seriesHasData: new Map<string, boolean>(),
           waitingAnnotations: new Map<string, TextAnnotation>(),
         };
@@ -5945,6 +5949,7 @@ export function useMultiPaneChart({
     // Third pass: Strategy markers using scatter series with appendRange (efficient batch updates)
     // REQUIREMENT: Strategy markers must appear initially along with other series
     // NEW: Per-strategy series assignment - only plot explicitly assigned strategy series
+    // FIX: Includes retry of previously deferred markers whose yvalue data wasn't available
     if (plotLayout && refs.paneSurfaces.size > 0) {
       // Create empty batches for accumulating markers per pane
       const paneMarkerBatches = new Map<string, Map<MarkerSeriesType, { x: number[], y: number[] }>>();
@@ -5952,19 +5957,31 @@ export function useMultiPaneChart({
       // Initialize batches for panes that will receive markers
       // We'll add panes dynamically as we encounter assigned strategy series
       
-      // Accumulate markers into batches
+      // Combine pending (deferred) markers with new markers for unified processing
+      const pendingToRetry = refs.pendingMarkerSamples.splice(0); // drain pending queue
+      const allMarkerSamples: Array<{ series_id: string; t_ms: number; t_ns?: number; payload: Record<string, unknown>; isNew: boolean }> = [];
+      
+      // Add pending markers first (older, more likely to have data now)
+      for (const pm of pendingToRetry) {
+        allMarkerSamples.push({ ...pm, isNew: false });
+      }
+      
+      // Add new markers from current batch
       for (let i = 0; i < samplesLength; i++) {
         const sample = samples[i];
         const { series_id, t_ms, t_ns, payload } = sample;
-        
-        // Only process strategy markers/signals
         if (!series_id.includes(':strategy:')) continue;
         if (!series_id.includes(':markers') && !series_id.includes(':signals')) continue;
+        allMarkerSamples.push({ series_id, t_ms, t_ns, payload: payload as Record<string, unknown>, isNew: true });
+      }
+      // Accumulate markers into batches (processes both retried pending + new markers)
+      for (let i = 0; i < allMarkerSamples.length; i++) {
+        const { series_id, t_ms, t_ns, payload, isNew } = allMarkerSamples[i];
         
-        // Store in persistent history for replay after layout reload
-        // Cap at 100K to prevent memory issues
-        if (refs.markerSampleHistory.length < 100000) {
-          refs.markerSampleHistory.push({ series_id, t_ms, t_ns, payload: payload as Record<string, unknown> });
+        // Store NEW markers in persistent history for replay after layout reload
+        // (pending retries were already stored when first seen)
+        if (isNew && refs.markerSampleHistory.length < 100000) {
+          refs.markerSampleHistory.push({ series_id, t_ms, t_ns, payload });
         }
         
         // Check if this strategy series is explicitly assigned in the layout
@@ -5974,32 +5991,25 @@ export function useMultiPaneChart({
         let targetPanes: string[] = [];
         
         if (allAssignments.length > 0) {
-          // Explicit assignment(s) - route to ALL assigned panes
           targetPanes = allAssignments
             .map(sa => sa.pane)
             .filter(paneId => refs.paneSurfaces.has(paneId));
         } else {
-          // Legacy fallback
           targetPanes = Array.from(plotLayout.strategyMarkerPanes);
         }
         
-        // Skip if no target panes
-        if (targetPanes.length === 0) {
-          if (i === 0) console.warn(`[Markers] No target panes for ${series_id}. Assignment found: ${!!strategyAssignment}, legacyPanes: ${plotLayout.strategyMarkerPanes.size}`);
-          continue;
-        }
+        if (targetPanes.length === 0) continue;
         
-        // Get marker timestamp in seconds with nanosecond precision (for X-axis)
         const markerXSeconds = toSecondsPrecise(t_ms, t_ns);
         
-        // Add to batches for target panes - resolve yvalue PER PANE assignment
-        // Each pane assignment may have a different yvalue source series
+        // Track whether this marker was successfully placed in ALL target panes
+        let allPanesResolved = true;
+        
         for (const paneId of targetPanes) {
-          // Find the specific assignment for THIS pane
           const paneAssignment = allAssignments.find(sa => sa.pane === paneId) || strategyAssignment;
           
-          // Determine y-value per-pane: use this pane's yvalue series lookup OR payload price as fallback
           let yValue: number | null = null;
+          let deferred = false;
           
           if (paneAssignment?.yvalue) {
             const ySourceSeriesId = paneAssignment.yvalue;
@@ -6016,30 +6026,37 @@ export function useMultiPaneChart({
             }
             
             if (ySourceDataSeries && ySourceDataSeries.count() > 0) {
-              // Use linear interpolation to place markers exactly on the line
-              const interpolated = interpolateYValue(ySourceDataSeries, markerXSeconds);
-              if (interpolated !== null) {
-                yValue = interpolated;
+              // CHECK: Is the marker's X beyond the current data range?
+              // If so, the underlying tick data hasn't arrived yet — defer this marker.
+              const nativeX = ySourceDataSeries.getNativeXValues();
+              const lastDataX = nativeX ? nativeX.get(nativeX.size() - 1) : 0;
+              
+              if (markerXSeconds > lastDataX + 0.001) {
+                // Marker timestamp is ahead of available data — defer for next batch
+                deferred = true;
+                allPanesResolved = false;
+              } else {
+                const interpolated = interpolateYValue(ySourceDataSeries, markerXSeconds);
+                if (interpolated !== null) {
+                  yValue = interpolated;
+                }
               }
             } else {
-              if (i === 0) console.warn(`[Markers] yvalue source "${ySourceSeriesId}" has no data yet`);
+              // No data at all yet — defer
+              deferred = true;
+              allPanesResolved = false;
             }
           }
+          
+          if (deferred) continue;
           
           // Fallback to payload price
           if (yValue === null) {
             yValue = (payload.price as number) || (payload.value as number) || 0;
           }
           
-          // Skip markers with no valid y-value (0) unless yvalue lookup is configured
           if (yValue === 0 && !paneAssignment?.yvalue) continue;
           
-          // Log first few markers for debugging
-          if (i < 3) {
-            console.log(`[Markers] ${series_id} t=${t_ms} y=${yValue} pane=${paneId} yvalueSrc=${paneAssignment?.yvalue || 'none'}`);
-          }
-          
-          // Parse marker data with the resolved y-value for THIS pane
           const markerData = parseMarkerFromSample({
             t_ms,
             v: yValue,
@@ -6052,7 +6069,6 @@ export function useMultiPaneChart({
           
           const markerType = getMarkerSeriesType(markerData);
           
-          // Initialize batch for this pane if not exists
           if (!paneMarkerBatches.has(paneId)) {
             paneMarkerBatches.set(paneId, createEmptyMarkerBatches());
           }
@@ -6065,6 +6081,11 @@ export function useMultiPaneChart({
               batch.y.push(markerData.y);
             }
           }
+        }
+        
+        // If marker couldn't be resolved for all panes, re-queue it (cap at 500 to prevent leak)
+        if (!allPanesResolved && refs.pendingMarkerSamples.length < 500) {
+          refs.pendingMarkerSamples.push({ series_id, t_ms, t_ns, payload });
         }
       }
       
